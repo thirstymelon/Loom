@@ -1,4 +1,4 @@
-# Loom
+# ⌬ Loom
 
 *A lightweight cooperative task scheduler for Ada.*
 
