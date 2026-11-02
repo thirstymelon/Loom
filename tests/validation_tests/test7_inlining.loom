@@ -1,0 +1,24 @@
+Module Test7Inlining
+
+Block InlineLeaf
+    Takes A : Signed_32
+    Produces Signed_32
+    Implements
+    Give A * 3 + 7
+End InlineLeaf
+
+Block Compute
+    Takes X : Signed_32
+    Produces Signed_32
+    Implements
+    Give InlineLeaf(X) + InlineLeaf(X + 1)
+End Compute
+
+Block Main
+    Declares
+        Res : Signed_32
+    Implements
+        Res = Compute(10)
+        Write(Res)
+End Main
+

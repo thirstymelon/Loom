@@ -1,0 +1,61 @@
+Module Test13EmptyAndShortSlices
+
+Block SumSlice
+    Takes
+        P : Signed_32 Pointer
+        Len : Unsigned_64
+    Produces Signed_32
+    Declares
+        Slc : Signed_32 Slice
+        Acc : Signed_32 = 0
+        I : Unsigned_64 = 1
+    Implements
+    Slc = Slice(P, Len)
+    Loop Until I > Slc.Length
+        Acc = Acc + Slc[I]
+        I = I + 1
+    End Loop
+    Give Acc
+End SumSlice
+
+Block Main
+    Declares
+        Arr : Signed_32 Array[35]
+        Empty : Signed_32
+        One : Signed_32
+        Three : Signed_32
+        Four : Signed_32
+        Five : Signed_32
+        Seven : Signed_32
+        Eight : Signed_32
+        Nine : Signed_32
+        Thirty_Three : Signed_32
+        Thirty_Five : Signed_32
+        I : Unsigned_64 = 1
+    Implements
+    Loop Until I > 35
+        Arr[I] = 1
+        I = I + 1
+    End Loop
+    Empty = SumSlice(Address(Arr[1]), 0)
+    One = SumSlice(Address(Arr[1]), 1)
+    Three = SumSlice(Address(Arr[1]), 3)
+    Four = SumSlice(Address(Arr[1]), 4)
+    Five = SumSlice(Address(Arr[1]), 5)
+    Seven = SumSlice(Address(Arr[1]), 7)
+    Eight = SumSlice(Address(Arr[1]), 8)
+    Nine = SumSlice(Address(Arr[1]), 9)
+    Thirty_Three = SumSlice(Address(Arr[1]), 33)
+    Thirty_Five = SumSlice(Address(Arr[1]), 35)
+    Write(Empty)
+    Write(One)
+    Write(Three)
+    Write(Four)
+    Write(Five)
+    Write(Seven)
+    Write(Eight)
+    Write(Nine)
+    Write(Thirty_Three)
+    Write(Thirty_Five)
+End Main
+

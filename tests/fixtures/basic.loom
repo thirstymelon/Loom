@@ -1,0 +1,299 @@
+# ==============================================================================
+# Loom Language Feature Tour & Canonical Reference
+# ==============================================================================
+# Demonstrates core syntax, data types, control flow structures,
+# low-level systems operators, pointers, records, and enums in Loom 1.0.0.
+# ==============================================================================
+
+Module Feature_Tour
+
+# ------------------------------------------------------------------------------
+# 1. Enumerations
+# ------------------------------------------------------------------------------
+Enum Flight_Mode : Unsigned_8
+    Idle = 0
+    Calibrating = 1
+    Flying = 2
+    Landing = 3
+End Flight_Mode
+
+Enum Severity : Signed_8
+    Debug = -1
+    Notice = 0
+    Warning = 1
+    Critical = 2
+End Severity
+
+# ------------------------------------------------------------------------------
+# 2. Records (Structured Data)
+# ------------------------------------------------------------------------------
+Record Vector3
+    X : Float_64
+    Y : Float_64
+    Z : Float_64
+End Vector3
+
+Record Telemetry
+    Reading_Id : Signed_32
+    Mode : Flight_Mode
+    Position : Vector3
+    Speed : Float_64
+    Active : Boolean
+    Tag : String
+End Telemetry
+
+# ------------------------------------------------------------------------------
+# 3. Module Globals and Constants
+# ------------------------------------------------------------------------------
+Block Global
+    Declares
+        Default_Mode : Constant Flight_Mode = Flight_Mode.Idle
+        Max_Speed : Constant Float_64 = 750.5
+        Version_Code : Constant Unsigned_16 = 2026
+        Global_Counter : Signed_32 = 0
+End Global
+
+# ------------------------------------------------------------------------------
+# 4. Procedure and Function Blocks
+# ------------------------------------------------------------------------------
+
+# Function returning a Signed_32 (uses Takes, Produces, Implements, Give)
+Block Add Takes
+    A : Signed_32
+    B : Signed_32
+Produces Signed_32
+Implements
+    Give A + B
+End Add
+
+# Block producing and returning a Record
+Block Create_Vector Takes
+    X : Float_64
+    Y : Float_64
+    Z : Float_64
+Produces Vector3
+Declares
+    Result : Vector3
+Implements
+    Result.X = X
+    Result.Y = Y
+    Result.Z = Z
+    Give Result
+End Create_Vector
+
+# Procedure using Pointers (T Pointer syntax) to mutate target data in place
+Block Scale_Speed Takes
+    Target : Float_64 Pointer
+    Factor : Float_64
+Implements
+    Deref(Target) = Deref(Target) * Factor
+End Scale_Speed
+
+# Recursive function demonstrating arithmetic, calls, and branching
+Block Factorial Takes
+    N : Signed_64
+Produces Signed_64
+Implements
+    If N <= 1
+        Give 1
+    Else
+        Give N * Factorial(N - 1)
+    End If
+End Factorial
+
+# Control flow with Else If ladder
+Block Classify_Altitude Takes
+    Altitude : Float_64
+Produces String
+Implements
+    If Altitude > 10000.0
+        Give "Stratospheric"
+    Else If Altitude > 3000.0
+        Give "Cruising Altitude"
+    Else If Altitude > 0.0
+        Give "Low Altitude"
+    Else
+        Give "Sub-surface / Grounded"
+    End If
+End Classify_Altitude
+
+# Low-level systems bitwise packing using &, |, ^, LSL, LSR, and Mod
+Block Pack_Header Takes
+    Device_Id : Unsigned_32
+    Channel : Unsigned_32
+Produces Unsigned_32
+Declares
+    Shifted_Id : Unsigned_32
+    Masked_Chan : Unsigned_32
+Implements
+    Shifted_Id = (Device_Id & 65535) LSL 16
+    Masked_Chan = Channel & 65535
+    Give Shifted_Id | Masked_Chan
+End Pack_Header
+
+# Procedure with no return value (omits Produces)
+Block Log_Message Takes
+    Prefix : String
+    Detail : String
+Implements
+    Write(Prefix)
+    Write(Detail)
+End Log_Message
+
+# ------------------------------------------------------------------------------
+# 5. Main Entrypoint Block
+# ------------------------------------------------------------------------------
+Block Main
+    Declares
+        # Signed integer scalar widths
+        S8 : Signed_8
+        S16 : Signed_16
+        S32 : Signed_32
+        S64 : Signed_64
+
+        # Unsigned integer scalar widths
+        U8 : Unsigned_8
+        U16 : Unsigned_16
+        U32 : Unsigned_32
+        U64 : Unsigned_64
+
+        # Floating-point numbers (Float_32 and Float_64)
+        F32_Val : Float_32
+        F64_Val : Float_64
+
+        # Boolean and Characters
+        Flag : Boolean
+        Symbol : Character
+
+        # Strings, Enums, Records, and Pointers
+        Message : String
+        Status : Flight_Mode
+        Report : Telemetry
+        Pos : Vector3
+        Loop_Count : Signed_32
+        Packed_Tag : Unsigned_32
+        Bit_Mask : Signed_32
+        Remainder : Signed_32
+        Factorial_Res : Signed_64
+        Altitude_Label : String
+        Speed_Ptr : Float_64 Pointer
+    Implements
+        # ----------------------------------------------------------------------
+        # A. Console Output and Types
+        # ----------------------------------------------------------------------
+        Write("==========================================")
+        Write("       Loom Language Feature Showcase     ")
+        Write("==========================================")
+        Write("")
+
+        # Scalar numeric assignments
+        S8 = -8
+        S16 = 160
+        S32 = 42
+        S64 = 1000000
+        U8 = 255
+        U16 = 65530
+        U32 = 131072
+        U64 = 1844674407370955161
+
+        F32_Val = 3.14
+        F64_Val = 2.718281828459045
+        Flag = True
+        Symbol = '⚡'
+        Message = "Loom: Native Block-Oriented Systems Language"
+
+        # ----------------------------------------------------------------------
+        # B. Function Calls with 'Call', Recursion & Globals
+        # ----------------------------------------------------------------------
+        S32 = Add(20, 22)
+        Factorial_Res = Factorial(5)
+        Global_Counter = Global_Counter + 1
+
+        Write("1. Scalars, Explicit 'Call' Keyword & Recursion:")
+        Write(Message)
+        Write(Symbol)
+        Write(S32)
+        Write(Factorial_Res)
+        Write("")
+
+        # ----------------------------------------------------------------------
+        # C. Value-Producing Blocks Giving Records & Pointers (Address / Deref)
+        # ----------------------------------------------------------------------
+        Status = Flight_Mode.Flying
+        Report.Reading_Id = 101
+        Report.Mode = Status
+
+        # function that returns a Record
+        Pos = Create_Vector(12.5, 48.2, 3500.0)
+        Report.Position = Pos
+        Report.Speed = 200.0
+        Report.Active = True
+        Report.Tag = "Telemetry: Nominal"
+
+        # Mutate speed through a Pointer using Address and Deref
+        Speed_Ptr = Address(Report.Speed)
+        Scale_Speed(Speed_Ptr, 1.2)
+
+        Write("2. Structured Records, Record Returns & Pointers:")
+        Write(Report)
+        Write(Status)
+        Write(Report.Speed)
+        Write("")
+
+        # ----------------------------------------------------------------------
+        # D. Else If Ladder & Conditionals
+        # ----------------------------------------------------------------------
+        Altitude_Label = Classify_Altitude(Report.Position.Z)
+        Write("3. Multi-branch Conditionals (Else If):")
+        Write(Altitude_Label)
+
+        If S32 >= 42 And Flag And Not False
+            Write("Condition branch: Verified (>=, And, Not)")
+        Else
+            Write("Condition branch: Failed")
+        End If
+        Write("")
+
+        # ----------------------------------------------------------------------
+        # E. Low-Level Systems Operators: & | ^ ~ LSL LSR Mod %
+        # ----------------------------------------------------------------------
+        Write("4. Low-Level Systems Operations:")
+        Packed_Tag = Pack_Header(101, 4)
+        Write(Packed_Tag)
+
+        # Bitwise NOT (~), AND (&), XOR (^)
+        Bit_Mask = (~S32 & 255) ^ 15
+        Write(Bit_Mask)
+
+        # Shift Left (LSL), Shift Right (LSR), Modulo (Mod and %)
+        S32 = (S32 LSL 2) Mod 50
+        Remainder = 125 % 10
+        Write(S32)
+        Write(Remainder)
+        Write("")
+
+        # ----------------------------------------------------------------------
+        # F. Loops: Loop Until, Infinite Loop, Skip & Exit
+        # ----------------------------------------------------------------------
+        Write("5. Loops and Flow Control:")
+        Loop_Count = 0
+        Loop Until Loop_Count >= 3
+            Loop_Count = Loop_Count + 1
+        End Loop
+        Write(Loop_Count)
+
+        # Infinite loop controlled by Skip and Exit
+        Loop
+            Loop_Count = Loop_Count - 1
+            If Loop_Count > 0
+                Skip
+            End If
+            Exit
+        End Loop
+        Write("Loop finished successfully with Exit")
+        Write("")
+
+        Write("==========================================")
+        Write("Selected Loom language features demonstrated!")
+        Write("==========================================")
+End Main

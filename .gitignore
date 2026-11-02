@@ -1,0 +1,43 @@
+# Build artifacts
+.build/
+build/
+bin/
+dist/
+target/
+compiler/build/
+*.o
+*.dSYM
+/loomc
+/loom_demo
+*.out
+*.bin
+*.elf
+*.uf2
+*.ll
+*.tmp
+
+# Release installers & archives
+*.dmg
+*.pkg
+*.zip
+*.tar.gz
+
+# Python cache
+__pycache__/
+*.pyc
+
+# VS Code extension build output
+vscode-loom/node_modules/
+vscode-loom/out/
+vscode-loom/*.vsix
+!vscode-loom/Loom-1.0.0.vsix
+
+# OS and Editor
+.DS_Store
+*/.DS_Store
+*/*/.DS_Store
+.vscode/
+
+# System logs and caches
+.system_generated/
+

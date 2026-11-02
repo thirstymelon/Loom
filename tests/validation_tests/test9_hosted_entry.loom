@@ -1,0 +1,16 @@
+Module Test9HostedEntry
+
+Block WorkloadMath
+    Takes A : Signed_64
+    Produces Signed_64
+    Implements
+    Give (A * A) + 1
+End WorkloadMath
+
+Block Main
+    Declares
+        Out : Signed_64
+    Implements
+        Out = WorkloadMath(12)
+End Main
+

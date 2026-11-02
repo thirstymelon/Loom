@@ -1,0 +1,10 @@
+Module StringByteIndex
+
+Block Main
+    Declares
+        Text : String = "é"
+        First : Unsigned_8
+    Implements
+    First = Text[1]
+    Write(First)
+End Main

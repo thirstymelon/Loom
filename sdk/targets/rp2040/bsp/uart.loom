@@ -1,0 +1,66 @@
+Module UART
+
+Import System
+use System
+
+Block Global
+Declares
+    BAUD_115200 : Constant Signed_64 = 115200
+    BAUD_9600   : Constant Signed_64 = 9600
+End Global
+
+Block UART_Init Takes
+    Baud_Rate : Signed_64
+Declares
+    Done : Unsigned_32
+    Divisor : Signed_64
+    Int_Part : Signed_64
+    Frac_Part : Signed_64
+Implements
+    # 1. Unreset UART0 (bit 22 = 4194304)
+    Unreset_Peripherals(Cast[Unsigned_32](4194304))
+
+    # 2. Configure GPIO 0 (TX) and GPIO 1 (RX) for UART function (FUNCSEL 2)
+    Vol_Write_32(0x40014004, 2)
+    Vol_Write_32(0x4001400C, 2)
+
+    # 3. Calculate baud rate divisor for 12 MHz clock
+    # Divisor = (12000000 * 4) / Baud_Rate
+    Divisor = 48000000 / Baud_Rate
+    Int_Part = Divisor / 64
+    Frac_Part = Divisor Mod 64
+    Vol_Write_32(0x40034024, Int_Part)
+    Vol_Write_32(0x40034028, Frac_Part)
+
+    # 4. Configure Line Control (UART_LCR_H: 0x4003402C)
+    # 8 data bits, no parity, 1 stop bit, FIFOs enabled (0x70)
+    Vol_Write_32(0x4003402C, 0x70)
+
+    # 5. Enable UART, Transmit, and Receive (UART_CR: 0x40034030)
+    # UARTEN (bit 0) | TXE (bit 8) | RXE (bit 9) = 0x301
+    Vol_Write_32(0x40034030, 0x301)
+End UART_Init
+
+Block Read_UART_Char
+Produces Character
+Declares
+    Fr : Unsigned_32
+    Data : Unsigned_32
+Implements
+    Fr = Vol_Read_32(0x40034018)
+    Loop Until ((Fr & 0x10) == 0)
+        Fr = Vol_Read_32(0x40034018)
+    End Loop
+    Data = Vol_Read_32(0x40034000)
+    Give Cast[Character](Cast[Signed_32](Data & 0xFF))
+End Read_UART_Char
+
+Block UART_Available
+Produces Boolean
+Declares
+    Fr : Unsigned_32
+Implements
+    Fr = Vol_Read_32(0x40034018)
+    Give ((Fr & 0x10) == 0)
+End UART_Available
+

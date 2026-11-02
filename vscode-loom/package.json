@@ -1,0 +1,137 @@
+{
+  "name": "loom-language-support",
+  "displayName": "Loom Language Support",
+  "description": "Syntax highlighting, formatting, snippets, completion and compiler-backed diagnostics for Loom.",
+  "version": "1.0.0",
+  "publisher": "loom-language",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "keywords": [
+    "loom",
+    "llvm",
+    "language"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "loom",
+        "aliases": [
+          "Loom",
+          "loom"
+        ],
+        "extensions": [
+          ".loom"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/Loom_Logo.png",
+          "dark": "./icons/Loom_Logo.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "loom",
+        "scopeName": "source.loom",
+        "path": "./syntaxes/loom.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "loom",
+        "path": "./snippets/loom.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "loom.checkFile",
+        "title": "Loom: Check Current File"
+      },
+      {
+        "command": "loom.setCompilerPath",
+        "title": "Loom: Select loomc Compiler"
+      },
+      {
+        "command": "loom.formatDocument",
+        "title": "Loom: Format Document"
+      },
+      {
+        "command": "loom.build",
+        "title": "Loom: Build Workspace"
+      },
+      {
+        "command": "loom.clean",
+        "title": "Loom: Clean Workspace"
+      },
+      {
+        "command": "loom.run",
+        "title": "Loom: Build and Run Workspace"
+      },
+      {
+        "command": "loom.showDependencyGraph",
+        "title": "Loom: Show Semantic Dependency Graph"
+      }
+    ],
+    "configuration": {
+      "title": "Loom",
+      "properties": {
+        "loom.compilerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Explicit path to loomc. If blank, checks /usr/bin/loomc first, then the workspace bin/ directory and PATH."
+        },
+        "loom.lint.run": {
+          "type": "string",
+          "enum": [
+            "onType",
+            "onSave"
+          ],
+          "default": "onType",
+          "description": "When to run compiler-backed diagnostics."
+        },
+        "loom.lint.delay": {
+          "type": "number",
+          "default": 500,
+          "minimum": 100,
+          "maximum": 5000,
+          "description": "Debounce delay in milliseconds for on-type checking."
+        },
+        "loom.format.indentSize": {
+          "type": "integer",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Spaces per indentation level."
+        },
+        "loom.toolPath": {
+          "type": "string",
+          "default": "",
+          "description": "Explicit path to the Loom workspace tool. If blank, checks /usr/bin/loom, the workspace bin/ directory, then PATH."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[loom]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.formatOnType": false
+      }
+    }
+  },
+  "scripts": {
+    "test": "node ./test/smoke.js",
+    "package": "vsce package -o Loom-1.0.0.vsix"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^2.26.1"
+  },
+  "icon": "./icons/Loom_Logo.png"
+}

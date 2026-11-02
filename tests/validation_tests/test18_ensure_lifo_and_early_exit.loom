@@ -1,0 +1,16 @@
+Module Test18EnsureLifoAndEarlyExit
+
+Block Produce
+    Produces Signed_32
+    Implements
+        Ensure { Write(4) }
+        Give 8
+End Produce
+
+Block Main
+    Implements
+        Ensure { Write(1) }
+        Ensure { Write(2) }
+        Write(3)
+        Write(Produce())
+End Main

@@ -1,0 +1,20 @@
+Module Test4PointerMadd
+
+Block Transform
+    Takes
+        Base : Signed_64
+        Index : Signed_64
+        Stride : Signed_64
+    Produces Signed_64
+    Implements
+    Give Base + (Index * Stride)
+End Transform
+
+Block Main
+    Declares
+        Addr : Signed_64
+    Implements
+        Addr = Transform(1000, 5, 8)
+        Write(Addr)
+End Main
+

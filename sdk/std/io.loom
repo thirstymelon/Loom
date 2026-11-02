@@ -1,0 +1,14 @@
+Module IO
+
+Block Print_Line Takes
+    Msg : String
+Implements
+    Write(Msg)
+End Print_Line
+
+Block Print_Int Takes
+    Val : Signed_64
+Implements
+    Write(Val)
+End Print_Int
+

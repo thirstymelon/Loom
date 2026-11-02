@@ -1,0 +1,162 @@
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Developer overview · Loom 1.0.0</title><link rel=stylesheet href="styles.css"><link rel="icon" type="image/png" href="assets/logo.png"></head><body data-r=""><header><div class=w><a class=brand href="index.html"><img src="assets/logo.png" alt="Loom"><span>Loom<i>.</i><sup>1.0.0</sup></span></a><nav><a href="getting-started.html">Start</a><a href="tutorials/index.html">Tutorials</a><a href="developer-overview.html" class=on>Developer</a><a href="embedded-rp2040.html">Embedded</a><a href="reference.html">Reference</a></nav><button class=sb id=sk>Search <kbd>Ctrl K</kbd></button><button class=mb id=mb aria-label=Menu>≡</button></div></header><div class="w doc"><article>
+<p class=eb>Systems Architecture & Internals</p><h1>Developer overview</h1>
+<p class=lead>A technical guide for systems engineers: memory layout, safety guarantees, deterministic cleanup, LLVM lowering, volatile hardware I/O, C FFI interop, and semantic graph generation.</p>
+
+<h2 id="memory-model">Memory model & representation</h2>
+<p>Loom operates with an explicit, unabstracted memory model. There is no garbage collector, no reference counting, and no hidden heap allocator. Memory allocation is strictly under programmer control:</p>
+<table>
+<tr><th>Construct<th>Physical Memory Layout & Semantics</tr>
+<tr><td><b>Scalars</b><td>Scalar types (<code>Signed_32</code>, <code>Float_64</code>, etc.) map directly to native machine registers or stack slots aligned to their natural width.</tr>
+<tr><td><b>Fixed Arrays (<code>T Array[N]</code>)</b><td>Contiguous, flat memory block allocated on the stack (for local declarations) or in the static data segment (for global declarations). No heap header or hidden metadata overhead.</tr>
+<tr><td><b>Slices (<code>T Slice</code>)</b><td>A 16-byte fat pointer struct containing a 64-bit pointer to element 1 and an unsigned 64-bit integer element count. Slices are non-owning views and do not allocate or free memory.</tr>
+<tr><td><b>Pointers (<code>T Pointer</code>)</b><td>Direct 64-bit (or 32-bit on ARM Cortex-M) raw memory address. Uninitialized pointers default to <code>Null</code> (zero).</tr>
+<tr><td><b>Records</b><td>Contiguous struct layout matching target ABI alignment rules. Field order is preserved. Pass-by-value and return-by-value copy entire struct bytes.</tr>
+</table>
+
+<h2 id="safety-rules">Safety guarantees & undefined behavior</h2>
+<p>Loom balances bare-metal hardware access with deterministic runtime safety bounds:</p>
+<ul>
+<li><b>Bounds Safety:</b> Array, slice, and string indexing are strictly bounds-checked at runtime. Accesses outside <code>[1, Length]</code> trigger an explicit processor trap instruction (e.g. <code>brk #1</code> on ARM64 or <code>ud2</code> on x86_64), preventing memory corruption or arbitrary code execution. When index ranges can be proven safe at compile time, the optimizer eliminates bounds checks entirely.</li>
+<li><b>Pointer Validity:</b> Raw pointers are unmanaged. The compiler proves type compatibility but cannot verify arbitrary runtime lifetime or alignment. Always verify <code>Ptr != Null</code> prior to calling <code>Deref(Ptr)</code>.</li>
+<li><b>Integer Arithmetic:</b> Fixed-width integer operations wrap on overflow using two's complement rules. Division or remainder by zero, or shifting by counts greater than or equal to the operand width, are diagnosed by the compiler when constants are known.</li>
+<li><b>Floating-Point Strictness:</b> Floating-point calculations conform strictly to IEEE 754 without aggressive fast-math contractions, guaranteeing reproducible rounding behavior across builds.</li>
+</ul>
+
+<h2 id="deterministic-cleanup">Deterministic cleanup with <code>Ensure</code></h2>
+<p>The <code>Ensure { &lt;statement&gt; }</code> construct guarantees that cleanup logic executes when exiting a scope or procedure. Statements execute in strict <b>Last-In, First-Out (LIFO)</b> reverse order of registration:</p>
+<pre><code>Block Open_Device
+Implements
+    Ensure { Release_Hardware() }
+    Ensure { Flush_Buffers() }
+    If (Fault_Detected())
+        Exit              # Flush_Buffers() runs first, then Release_Hardware()
+    End If
+    Write("Device ready for operations...")
+End Open_Device</code></pre>
+<p><b>Compiler Lowering:</b> The <code>loomc</code> frontend lowers <code>Ensure</code> statements into a unified landing pad in LLVM IR. Whether a block returns normally via reaching the end, returns early via <code>Give &lt;Expr&gt;</code>, or breaks via <code>Exit</code>, the control flow graph branches through the cleanup chain in reverse sequence before the final return instruction.</p>
+
+<h2 id="why-one-based-indexing">Why one-based indexing</h2>
+<p>Loom uses 1-based indexing for all arrays, slices, and strings. This design decision serves several systems engineering goals:</p>
+<ul>
+<li><b>Elimination of Off-by-One Errors:</b> In 1-based indexing, the index of the last element is always identical to the collection's <code>Length</code>. Loop headers write naturally as <code>Loop while (I &lt;= Arr.Length)</code> without requiring manual <code>Length - 1</code> subtractions.</li>
+<li><b>Direct Mathematical Mapping:</b> Matrix algorithms, DSP transforms, Fourier analysis, and algorithmic specifications (such as discrete mathematics and signal processing textbooks) naturally index vectors and matrices from 1 to $N$.</li>
+<li><b>Byte Strings:</b> String indexing selects the $k$-th UTF-8 byte as an <code>Unsigned_8</code> value, where <code>Str[1]</code> is the leading byte.</li>
+</ul>
+
+<h2 id="compiler-pipeline">Compiler architecture & LLVM lowering</h2>
+<p>The Loom toolchain builds native binaries through a high-performance C++17 frontend and LLVM backend:</p>
+<div class=fl><span>Source (.loom)</span><span>Lexer & Parser</span><span>Semantic Type Checker</span><span>LLVM IR Generator</span><span>Optimization Passes (-O3)</span><span>Native Object (.o)</span><span>Clang Linker</span><span>Native Binary / ELF</span></div>
+
+<h3>LLVM Optimization Passes</h3>
+<p>When compiling with <code>loom build --release</code>, the compiler runs an aggressive LLVM optimization pipeline:</p>
+<table>
+<tr><th>Optimization Pass<th>Technical Mechanism & Benefit</tr>
+<tr><td><b>Function Inlining</b><td>Eliminates function call overhead for small blocks and concise routines (<code>Produces (A + B)</code>), allowing inter-procedural constant propagation.</tr>
+<tr><td><b>Loop Vectorization</b><td>Detects contiguous array and slice loops, generating SIMD instructions (NEON on Apple Silicon ARM64, AVX/SSE on x86_64).</tr>
+<tr><td><b>Bounds-Check Elimination</b><td>Statically proves loop indices remain within <code>[1, Length]</code>, stripping redundant bounds-checking branches from loop bodies.</tr>
+<tr><td><b>Dead-Code Stripping</b><td>Removes unused block definitions, unreferenced variables, and dead branches across modules.</tr>
+</table>
+
+<h3>Inspecting the Optimization Report</h3>
+<p>Run the optimization report flag to see exactly which loops were vectorized and which bounds checks were removed:</p>
+<pre class=sh><code>loom build --release --opt-report</code></pre>
+
+<h2 id="volatile-i-o">Volatile hardware I/O & memory barriers</h2>
+<p>Device drivers and bare-metal systems require reading and writing hardware peripheral registers that are mapped into memory addresses. Standard memory reads and writes could be reordered or eliminated by an optimizing compiler. Loom provides explicit volatile intrinsics:</p>
+<pre><code># Volatile reads: cannot be cached or hoisted
+Status = Vol_Read_32(0x4000C008)
+
+# Volatile writes: cannot be eliminated or reordered
+Vol_Write_32(0x40014004, 5)</code></pre>
+<p><b>LLVM Representation:</b> These intrinsics emit LLVM instructions marked with the <code>volatile</code> attribute (e.g. <code>load volatile i32, ptr %addr</code>), creating strict compiler memory barriers that force memory operations to occur exactly where specified.</p>
+
+<h2 id="c-ffi">C Foreign Function Interface (FFI)</h2>
+<p>Loom interfaces directly with C code and operating system system libraries using the <code>Extern Block</code> declaration:</p>
+<pre><code>Extern Block puts
+    Takes
+        S : String
+    Produces Signed_32
+End puts
+
+Block Main
+Declares
+    Status : Signed_32
+Implements
+    Status = puts("Calling C standard library puts directly from Loom!")
+End Main</code></pre>
+<p>When building, the Clang linker links external C object files or libraries automatically against your Loom executable.</p>
+
+<h2 id="module-graphs">Architectural dependency graphs</h2>
+<p>The Loom toolchain can inspect and visualize project architecture from compiler semantics without compiling native code:</p>
+<pre class=sh><code># Generate Mermaid call dependency graph
+loom graph --view calls --format mermaid
+
+# Generate JSON architectural model
+loom graph --view data --format json</code></pre>
+<p>Mermaid diagrams are written to <code>loom-deps.mmd</code>. You can preview these graphs directly in VS Code or render them in GitHub Flavored Markdown.</p>
+
+<div class=pn><a href="tutorials/beginner-guide.html"><small>← Previous</small>Beginner guide</a><a href="embedded-rp2040.html"><small>Next →</small>Embedded RP2040</a></div></article><aside id=toc></aside></div><footer><div class=w><span>Loom 1.0.0</span><span>loomc 1.0.0 (LLVM 23.1.4)</span></div></footer><div id=pal><div><input id=pi placeholder="Search the docs…"><div id=pl></div></div></div><script>const IDX=[["Overview", "index.html", "Page"], ["Getting started", "getting-started.html", "Page"], ["Tutorials", "tutorials/index.html", "Page"], ["Beginner guide", "tutorials/beginner-guide.html", "Page"], ["Developer overview", "developer-overview.html", "Page"], ["Embedded RP2040", "embedded-rp2040.html", "Page"], ["Reference", "reference.html", "Page"], ["Pillars", "index.html#pillars", "Overview"], ["Features", "index.html#features", "Overview"], ["Quick start", "index.html#quick-start", "Overview"], ["Explore", "index.html#explore", "Overview"], ["Install", "getting-started.html#install", "Getting started"], ["Toolchain", "getting-started.html#toolchain", "Getting started"], ["Editor setup", "getting-started.html#editor-setup", "Getting started"], ["Project anatomy", "getting-started.html#project-anatomy", "Getting started"], ["Your first project", "getting-started.html#your-first-project", "Getting started"], ["1. Hello, World", "tutorials/beginner-guide.html#l1", "Beginner guide"], ["2. Variables, types and literals", "tutorials/beginner-guide.html#l2", "Beginner guide"], ["3. Operators", "tutorials/beginner-guide.html#l3", "Beginner guide"], ["4. Decisions", "tutorials/beginner-guide.html#l4", "Beginner guide"], ["5. Loops", "tutorials/beginner-guide.html#l5", "Beginner guide"], ["6. Procedures", "tutorials/beginner-guide.html#l6", "Beginner guide"], ["7. Records, enums and Match", "tutorials/beginner-guide.html#l7", "Beginner guide"], ["8. Arrays and slices", "tutorials/beginner-guide.html#l8", "Beginner guide"], ["9. Pointers, Cast and Ensure", "tutorials/beginner-guide.html#l9", "Beginner guide"], ["10. Modules", "tutorials/beginner-guide.html#l10", "Beginner guide"], ["Memory model", "developer-overview.html#memory-model", "Developer overview"], ["Safety rules", "developer-overview.html#safety-rules", "Developer overview"], ["Deterministic cleanup", "developer-overview.html#deterministic-cleanup", "Developer overview"], ["Why one-based indexing", "developer-overview.html#why-one-based-indexing", "Developer overview"], ["Compiler pipeline", "developer-overview.html#compiler-pipeline", "Developer overview"], ["Volatile I/O", "developer-overview.html#volatile-i-o", "Developer overview"], ["C FFI", "developer-overview.html#c-ffi", "Developer overview"], ["Module graphs", "developer-overview.html#module-graphs", "Developer overview"], ["The chip", "embedded-rp2040.html#the-chip", "Embedded RP2040"], ["Create a project", "embedded-rp2040.html#create-a-project", "Embedded RP2040"], ["The SDK", "embedded-rp2040.html#the-sdk", "Embedded RP2040"], ["Hardware abstraction layer", "embedded-rp2040.html#hardware-abstraction-layer", "Embedded RP2040"], ["Blink firmware", "embedded-rp2040.html#blink-firmware", "Embedded RP2040"], ["Direct register access", "embedded-rp2040.html#direct-register-access", "Embedded RP2040"], ["Build and flash", "embedded-rp2040.html#build-and-flash", "Embedded RP2040"], ["Simulate with Wokwi", "embedded-rp2040.html#simulate-with-wokwi", "Embedded RP2040"], ["Types", "reference.html#types", "Reference"], ["Literals", "reference.html#literals", "Reference"], ["Keywords", "reference.html#keywords", "Reference"], ["Operators", "reference.html#operators", "Reference"], ["Volatile intrinsics", "reference.html#volatile-intrinsics", "Reference"], ["CLI", "reference.html#cli", "Reference"], ["Grammar", "reference.html#grammar", "Reference"]];
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],R=document.body.dataset.r;
+const RE=/(#[^\n]*)|("(?:[^"\\]|\\.)*"|'[^'\n]*')|\b(0x[0-9a-fA-F_]+|0b[01_]+|\d[\d_]*(?:\.\d+)?)\b|\b(Module|Block|Global|Takes|Produces|Declares|Implements|End|Give|If|Else|Loop|While|Until|For|In|Exit|Skip|Ensure|Match|With|When|Import|Use|Constant|Record|Enum|Extern)\b|\b(Address|Deref|Cast|Slice|Null|True|False|And|Or|Not|Mod|LSL|LSR|ASR)\b|\b(Signed_\d+|Unsigned_\d+|Float_\d+|Boolean|Character|String|Pointer|Array|Int\d*|Uint\d*|Float\d*|Bool|Char|Byte|Word|Usize|Isize)\b|([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()|(\+=|-=|\*=|\/=|%=|:=|==|!=|<=|>=|->|=>|::|@|\^)/g;
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+$$('pre').forEach(p=>{
+  const c=p.querySelector('code');
+  if(!c)return;
+  const raw=c.textContent;
+  const isSh=p.classList.contains('sh');
+  const isRaw=p.classList.contains('raw');
+  let title='main.loom';
+  const m=raw.match(/\bModule\s+([A-Za-z0-9_]+)/);
+  if(m)title=m[1]+'.loom';
+  else if(isSh)title='Terminal — zsh';
+  else if(isRaw)title='grammar.ebnf';
+  else if(raw.includes('[project]')||raw.includes('config.toml'))title='config.toml';
+  else if(raw.includes('Block '))title='routine.loom';
+  else if(raw.includes('Record '))title='types.loom';
+
+  if(!isSh&&!isRaw){
+    const hl=esc(raw).replace(RE,(match,cm,st,nu,kw,bl,ty,fn,op)=>
+      cm?`<span class="c">${cm}</span>`:
+      st?`<span class="s">${st}</span>`:
+      nu?`<span class="n">${nu}</span>`:
+      kw?`<span class="k">${kw}</span>`:
+      bl?`<span class="b">${bl}</span>`:
+      ty?`<span class="t">${ty}</span>`:
+      fn?`<span class="f">${fn}</span>`:
+      op?`<span class="o">${op}</span>`:match
+    );
+    const lines=hl.split('\n');
+    c.innerHTML=lines.map(l=>`<span class="line">${l||' '}</span>`).join('');
+  }else if(isSh){
+    c.innerHTML=esc(raw).replace(/(#[^\n]*)|("(?:[^"\\]|\\.)*")|(--?[a-zA-Z0-9_-]+)|\b(loom|cd|sudo|cp|mkdir|curl|code|python3|ctest)\b|\b(new|build|run|clean|test|install)\b/g,(match,cm,st,fl,cmd,sc)=>
+      cm?`<span class="c">${cm}</span>`:
+      st?`<span class="s">${st}</span>`:
+      fl?`<span class="flg">${fl}</span>`:
+      cmd?`<span class="cmd">${cmd}</span>`:
+      sc?`<span class="sc">${sc}</span>`:match
+    );
+  }
+
+  const bar=document.createElement('div');
+  bar.className='mac-bar';
+  bar.innerHTML=`<div class="mac-dots"><span class="mac-dot r"></span><span class="mac-dot y"></span><span class="mac-dot g"></span></div><div class="mac-title">${title}</div><button class="cb" type="button">Copy</button>`;
+  const btn=bar.querySelector('.cb');
+  btn.onclick=()=>navigator.clipboard.writeText(raw).then(()=>{
+    btn.textContent='Copied';
+    setTimeout(()=>btn.textContent='Copy',1200);
+  });
+  p.prepend(bar);
+});
+
+const hs=$$('article h2');if(hs.length>1){$('#toc').innerHTML='<b>ON THIS PAGE</b>'+hs.map(h=>`<a href="#${h.id}">${h.textContent}</a>`).join('');const o=new IntersectionObserver(e=>e.forEach(x=>x.isIntersecting&&$$('#toc a').forEach(a=>a.classList.toggle('on',a.hash=='#'+x.target.id))),{rootMargin:'-20% 0px -70% 0px'});hs.forEach(h=>o.observe(h))}
+$('#mb').onclick=()=>document.body.classList.toggle('open');
+const P=$('#pal'),pi=$('#pi'),pl=$('#pl');let cur=[],sel=0;
+const pr=()=>{const q=pi.value.toLowerCase();cur=IDX.filter(i=>(i[0]+' '+i[2]).toLowerCase().includes(q)).slice(0,9);sel=Math.min(sel,Math.max(cur.length-1,0));pl.innerHTML=cur.map((c,i)=>`<a href="${R+c[1]}" class="${i==sel?'on':''}">${c[0]}<small>${c[2]}</small></a>`).join('')};
+const op=v=>{P.classList.toggle('on',v);if(v){pi.value='';sel=0;pr();pi.focus()}};
+$('#sk').onclick=()=>op(1);P.onclick=e=>e.target==P&&op(0);pi.oninput=()=>{sel=0;pr()};
+addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key=='k'){e.preventDefault();op(1)}else if(e.key=='Escape')op(0);else if(P.classList.contains('on')){if(e.key=='ArrowDown'){sel=Math.min(sel+1,cur.length-1);pr()}else if(e.key=='ArrowUp'){sel=Math.max(sel-1,0);pr()}else if(e.key=='Enter'&&cur[sel])location.href=R+cur[sel][1]}});
+const ds=$$('.done');if(ds.length){let S={};try{S=JSON.parse(localStorage.loomDone||'{}')}catch(e){}
+const up=()=>{const n=ds.filter(d=>d.classList.contains('on')).length;$('#pc').textContent=n+' / '+ds.length+' lessons complete';$('#pb').style.width=n/ds.length*100+'%';try{localStorage.loomDone=JSON.stringify(S)}catch(e){}};
+ds.forEach((d,i)=>{d.classList.toggle('on',!!S[i]);d.textContent=S[i]?'✓ Completed':'Mark complete';d.onclick=()=>{S[i]=!S[i];d.classList.toggle('on',S[i]);d.textContent=S[i]?'✓ Completed':'Mark complete';up()}});up()}
+</script></body></html>

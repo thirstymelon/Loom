@@ -1,0 +1,32 @@
+Module Test5SliceVectorize
+
+Block SumSlice
+    Takes Slc : Signed_32 Slice
+    Produces Signed_32
+    Declares
+        Acc : Signed_32 = 0
+        I : Unsigned_64 = 1
+    Implements
+    Loop Until I > Slc.Length
+        Acc = Acc + Slc[I]
+        I = I + 1
+    End Loop
+    Give Acc
+End SumSlice
+
+Block Main
+    Declares
+        Arr : Signed_32 Array[16]
+        Slc : Signed_32 Slice
+        Sum : Signed_32
+        I : Unsigned_64 = 1
+    Implements
+    Loop Until I > 16
+        Arr[I] = 1
+        I = I + 1
+    End Loop
+    Slc = Slice(Arr)
+    Sum = SumSlice(Slc)
+    Write(Sum)
+End Main
+

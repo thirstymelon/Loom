@@ -1,0 +1,89 @@
+{
+  "comments": {
+    "lineComment": "#",
+    "additionalLineComment": "//"
+  },
+  "brackets": [
+    [
+      "(",
+      ")"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "{",
+      "}"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "[",
+      "close": "]"
+    },
+    {
+      "open": "{",
+      "close": "}"
+    },
+    {
+      "open": "\"",
+      "close": "\""
+    },
+    {
+      "open": "'",
+      "close": "'"
+    }
+  ],
+  "surroundingPairs": [
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "[",
+      "close": "]"
+    },
+    {
+      "open": "{",
+      "close": "}"
+    },
+    {
+      "open": "\"",
+      "close": "\""
+    },
+    {
+      "open": "'",
+      "close": "'"
+    }
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*(?:Block\\b.*|Takes\\s*$|Declares\\s*$|Implements\\s*$|If\\b.*|Else\\b.*|Loop\\b.*|Match\\b.*|When\\b.*:\\s*$|Else:\\s*$)(?:\\s*(?:#|//).*)?$",
+    "decreaseIndentPattern": "^\\s*(?:End\\b.*|Else\\b.*|When\\b.*:\\s*$|Else:\\s*)$"
+  },
+  "onEnterRules": [
+    {
+      "beforeText": "^\\s*(?:Block\\b.*|Takes\\s*$|Declares\\s*$|Implements\\s*$|If\\b.*|Else\\b.*|Loop\\b.*|Match\\b.*|When\\b.*:\\s*$|Else:\\s*$)(?:\\s*(?:#|//).*)?$",
+      "action": {
+        "indent": "indent"
+      }
+    },
+    {
+      "beforeText": "^\\s*End\\s+(?:If|Loop|Match|[A-Za-z_][A-Za-z0-9_]*)\\s*$",
+      "action": {
+        "indent": "outdent"
+      }
+    }
+  ],
+  "folding": {
+    "offSide": true,
+    "markers": {
+      "start": "^\\s*#region\\b",
+      "end": "^\\s*#endregion\\b"
+    }
+  }
+}

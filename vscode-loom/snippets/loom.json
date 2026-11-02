@@ -1,0 +1,200 @@
+{
+  "Module declaration": {
+    "prefix": "module",
+    "body": [
+      "Module ${1:ModuleName}",
+      "",
+      "$0"
+    ],
+    "description": "Required module header declaration at the top of every Loom file"
+  },
+  "Block with result": {
+    "prefix": "block",
+    "body": [
+      "Block ${1:Name}",
+      "    Takes",
+      "        ${2:Value} : ${3:Signed_32}",
+      "    Produces ${4:Signed_32}",
+      "    Implements",
+      "        Give ${2:Value}",
+      "End ${1:Name}"
+    ],
+    "description": "Function with a parameter and result"
+  },
+  "Procedure": {
+    "prefix": "procedure",
+    "body": [
+      "Block ${1:Name}",
+      "    Implements",
+      "        $0",
+      "End ${1:Name}"
+    ],
+    "description": "Parameterless procedure"
+  },
+  "Call function": {
+    "prefix": "call",
+    "body": [
+      "${1:FunctionName}($0)"
+    ],
+    "description": "Direct function or procedure invocation"
+  },
+  "If": {
+    "prefix": "if",
+    "body": [
+      "If ${1:condition}",
+      "    $0",
+      "End If"
+    ],
+    "description": "Conditional block"
+  },
+  "Else If": {
+    "prefix": "elseif",
+    "body": [
+      "Else If ${1:condition}",
+      "    $0"
+    ],
+    "description": "Chained conditional branch"
+  },
+  "Loop": {
+    "prefix": "loop",
+    "body": [
+      "Loop",
+      "    $0",
+      "End Loop"
+    ],
+    "description": "Infinite loop"
+  },
+  "Loop Until": {
+    "prefix": "loopuntil",
+    "body": [
+      "Loop Until ${1:condition}",
+      "    $0",
+      "End Loop"
+    ],
+    "description": "Conditional loop"
+  },
+  "Record declaration": {
+    "prefix": "record",
+    "body": [
+      "Record ${1:RecordName}",
+      "    ${2:Field} : ${3:Signed_32}",
+      "End ${1:RecordName}"
+    ],
+    "description": "Structured data record"
+  },
+  "Enum declaration": {
+    "prefix": "enum",
+    "body": [
+      "Enum ${1:EnumName} : ${2:Unsigned_8}",
+      "    ${3:Variant} = ${4:0}",
+      "End ${1:EnumName}"
+    ],
+    "description": "Enumeration with backing integer type"
+  },
+  "Write text": {
+    "prefix": "write",
+    "body": [
+      "Write(${1:Value})$0"
+    ],
+    "description": "Print a value or string literal"
+  },
+  "Local declaration": {
+    "prefix": "declares",
+    "body": [
+      "Declares",
+      "    ${1:Name} : ${2:Signed_32}"
+    ],
+    "description": "Declare local variables"
+  },
+  "Ensure statement": {
+    "prefix": "ensure",
+    "body": [
+      "Ensure { ${1:Write(\"Clean up resources\")} }"
+    ],
+    "description": "Deterministic LIFO cleanup statement executed on scope exit"
+  },
+  "Pointer declaration": {
+    "prefix": "pointer",
+    "body": [
+      "${1:Ptr} : ${2:Signed_32} Pointer = Address(${3:Value})"
+    ],
+    "description": "Explicit pointer declaration with Address of variable"
+  },
+  "Array declaration": {
+    "prefix": "array",
+    "body": [
+      "${1:Buffer} : ${2:Signed_32} Array[${3:4}]"
+    ],
+    "description": "Fixed-size contiguous stack array"
+  },
+  "Slice declaration": {
+    "prefix": "slice",
+    "body": [
+      "${1:View} : ${2:Signed_32} Slice = Slice(${3:Buffer})"
+    ],
+    "description": "Fat pointer slice view over memory or array"
+  },
+  "Cast expression": {
+    "prefix": "cast",
+    "body": [
+      "Cast[${1:Target_Type}](${2:Expression})"
+    ],
+    "description": "Explicit type conversion with compile-time safety checks"
+  },
+  "Extern Block": {
+    "prefix": "extern",
+    "body": [
+      "Extern Block ${1:SymbolName}",
+      "    Takes",
+      "        ${2:Arg} : ${3:String}",
+      "    Produces ${4:Signed_32}",
+      "End ${1:SymbolName}"
+    ],
+    "description": "C Foreign Function Interface declaration"
+  },
+  "Concise routine": {
+    "prefix": "concise",
+    "body": [
+      "Block ${1:Name} Takes",
+      "    ${2:A} : ${3:Signed_32}",
+      "Produces (${4:$2 + 1})",
+      "End ${1:Name}"
+    ],
+    "description": "Single-line concise routine with inferred return type"
+  },
+  "Loop While": {
+    "prefix": "loopwhile",
+    "body": [
+      "Loop while ${1:condition}",
+      "    $0",
+      "End Loop"
+    ],
+    "description": "Conditional while loop"
+  },
+  "Match statement": {
+    "prefix": "match",
+    "body": [
+      "Match ${1:Expression}",
+      "    When ${2:Pattern}:",
+      "        $0",
+      "    Else:",
+      "        ",
+      "End Match"
+    ],
+    "description": "Pattern matching block"
+  },
+  "Record literal": {
+    "prefix": "reclit",
+    "body": [
+      "${1:RecordName}{ ${2:Field}: ${3:value} }"
+    ],
+    "description": "Inline record initialization literal"
+  },
+  "Use module": {
+    "prefix": "use",
+    "body": [
+      "use ${1:ModuleName}"
+    ],
+    "description": "Unqualified module import directive"
+  }
+}

@@ -1,0 +1,9 @@
+Module Test15DynamicStringBoundsTrap
+
+Block Main
+    Declares
+        Text : String = "x"
+        Index : Signed_64 = 2
+    Implements
+        Write(Text[Index])
+End Main

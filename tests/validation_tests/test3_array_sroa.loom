@@ -1,0 +1,22 @@
+Module Test3ArraySroa
+
+Block SumElements
+    Produces Signed_32
+    Declares
+        Arr : Signed_32 Array[4]
+    Implements
+        Arr[1] = 10
+        Arr[2] = 20
+        Arr[3] = 30
+        Arr[4] = 40
+        Give Arr[1] + Arr[2] + Arr[3] + Arr[4]
+End SumElements
+
+Block Main
+    Declares
+        Total : Signed_32
+    Implements
+        Total = SumElements()
+        Write(Total)
+End Main
+

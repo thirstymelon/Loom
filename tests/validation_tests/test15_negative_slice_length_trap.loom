@@ -1,0 +1,10 @@
+Module Test15NegativeSliceLengthTrap
+
+Block Main
+    Declares
+        Values : Signed_32 Array[1]
+        View : Signed_32 Slice
+    Implements
+        View = Slice(Address(Values[1]), -1)
+        Write(View.Length)
+End Main

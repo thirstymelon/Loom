@@ -1,0 +1,33 @@
+Module Test8ZeroAlloc
+
+Record Vec3
+    X : Float_64
+    Y : Float_64
+    Z : Float_64
+End Vec3
+
+Block Dot
+    Takes
+        A : Vec3
+        B : Vec3
+    Produces Float_64
+    Implements
+    Give (A.X * B.X) + (A.Y * B.Y) + (A.Z * B.Z)
+End Dot
+
+Block Main
+    Declares
+        V1 : Vec3
+        V2 : Vec3
+        D : Float_64
+    Implements
+        V1.X = 1.0
+        V1.Y = 2.0
+        V1.Z = 3.0
+        V2.X = 4.0
+        V2.Y = 5.0
+        V2.Z = 6.0
+        D = Dot(V1, V2)
+        Write(D)
+End Main
+

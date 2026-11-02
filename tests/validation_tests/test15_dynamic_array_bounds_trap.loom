@@ -1,0 +1,9 @@
+Module Test15DynamicArrayBoundsTrap
+
+Block Main
+    Declares
+        Values : Signed_32 Array[1]
+        Index : Signed_64 = 2
+    Implements
+        Write(Values[Index])
+End Main

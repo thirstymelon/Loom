@@ -1,0 +1,36 @@
+Module Test16ConstIntegerEdges
+
+Block Wrap8
+    Takes
+        Left : Signed_8
+        Right : Signed_8
+    Produces Signed_8
+    Implements
+        Give Left + Right
+End Wrap8
+
+Block ShiftLeft8
+    Produces Signed_8
+    Implements
+        Give 1 LSL 7
+End ShiftLeft8
+
+Block ShiftRight8
+    Produces Signed_8
+    Implements
+        Give -2 LSR 1
+End ShiftRight8
+
+Block Main
+    Declares
+        A : Signed_8
+        B : Signed_8
+        C : Signed_8
+    Implements
+        A = Wrap8(127, 1)
+        B = ShiftLeft8()
+        C = ShiftRight8()
+        Write(A)
+        Write(B)
+        Write(C)
+End Main

@@ -1,0 +1,20 @@
+Module Test10TargetCodegen
+
+Block FastMultiplyAccumulate
+    Takes
+        Accum : Signed_32
+        A : Signed_32
+        B : Signed_32
+    Produces Signed_32
+    Implements
+    Give Accum + (A * B)
+End FastMultiplyAccumulate
+
+Block Main
+    Declares
+        R : Signed_32
+    Implements
+        R = FastMultiplyAccumulate(10, 20, 30)
+        Write(R)
+End Main
+

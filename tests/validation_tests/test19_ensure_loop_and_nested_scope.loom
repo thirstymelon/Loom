@@ -1,0 +1,18 @@
+Module Test19EnsureLoopAndNestedScope
+
+Block Main
+    Declares
+        I : Signed_32 = 0
+    Implements
+        Loop
+            Ensure { Write(I) }
+            I = I + 1
+            If I == 1
+                Skip
+            End If
+            Exit
+        End Loop
+        If True
+            Ensure { Write(7) }
+        End If
+End Main

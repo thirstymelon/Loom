@@ -1,0 +1,23 @@
+Module Test12ModuloAndOverflowBoundaries
+
+Block TestMath
+    Takes
+        A : Signed_64
+        B : Signed_64
+    Produces Signed_64
+    Declares
+        ModVal : Signed_64
+        ShiftVal : Signed_64
+    Implements
+    ModVal = A Mod B
+    ShiftVal = (A LSR 2) + (B LSL 1)
+    Give ModVal + ShiftVal
+End TestMath
+
+Block Main
+    Declares
+        R : Signed_64
+    Implements
+    R = TestMath(105, 10)
+    Write(R)
+End Main

@@ -1,0 +1,10 @@
+Module Test15NullNonemptySliceTrap
+
+Block Main
+    Declares
+        Ptr : Signed_32 Pointer
+        View : Signed_32 Slice
+    Implements
+        View = Slice(Ptr, 1)
+        Write(View.Length)
+End Main

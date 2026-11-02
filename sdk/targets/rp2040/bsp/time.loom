@@ -1,0 +1,49 @@
+Module Time
+
+Import System
+use System
+
+Block Get_Time_Microseconds
+Produces Signed_64
+Declares
+    Micros : Unsigned_32
+Implements
+    # Read RP2040 1 MHz hardware timer (TIMER_TIMELR: 0x4005400C)
+    Micros = Vol_Read_32(0x4005400C)
+    Give Cast[Signed_64](Micros)
+End Get_Time_Microseconds
+
+Block Get_Time
+Produces Signed_64
+Declares
+    Micros : Signed_64
+Implements
+    Micros = Get_Time_Microseconds()
+    Give Micros / 1000
+End Get_Time
+
+Block Delay_Microseconds Takes
+    Microseconds : Signed_64
+Declares
+    Start : Signed_64
+    Current : Signed_64
+    Elapsed : Signed_64
+Implements
+    Start = Get_Time_Microseconds()
+    Current = Start
+    Elapsed = 0
+    Loop Until (Elapsed >= Microseconds)
+        Current = Get_Time_Microseconds()
+        Elapsed = Current - Start
+        If (Elapsed < 0)
+            Elapsed = Elapsed + 4294967296
+        End If
+    End Loop
+End Delay_Microseconds
+
+Block Delay Takes
+    Milliseconds : Signed_64
+Implements
+    Delay_Microseconds(Milliseconds * 1000)
+End Delay
+

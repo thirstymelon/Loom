@@ -1,0 +1,20 @@
+Module Test1RecursiveEval
+
+Block Factorial
+    Takes N : Signed_32
+    Produces Signed_32
+    Implements
+    If N <= 1
+        Give 1
+    End If
+    Give N * Factorial(N - 1)
+End Factorial
+
+Block Main
+    Declares
+        Result : Signed_32
+    Implements
+        Result = Factorial(5)
+        Write(Result)
+End Main
+

@@ -1,0 +1,22 @@
+Module Test17ConstEvalPreservesGlobalWrite
+
+Block Global
+    Declares
+        State : Signed_32 = 0
+End Global
+
+Block SetState
+    Produces Signed_32
+    Implements
+        State = 1
+        Give 7
+End SetState
+
+Block Main
+    Declares
+        Result : Signed_32
+    Implements
+        Result = SetState()
+        Write(Result)
+        Write(State)
+End Main

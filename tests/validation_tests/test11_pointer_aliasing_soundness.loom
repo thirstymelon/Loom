@@ -1,0 +1,26 @@
+Module Test11PointerAliasingSoundness
+
+Block MutateAliased
+    Takes
+        P1 : Signed_32 Pointer
+        P2 : Signed_32 Pointer
+    Produces Signed_32
+    Declares
+        V1 : Signed_32
+        V2 : Signed_32
+    Implements
+    V1 = Deref(P2)
+    Deref(P1) = 99
+    V2 = Deref(P2)
+    Give V1 + V2
+End MutateAliased
+
+Block Main
+    Declares
+        X : Signed_32 = 10
+        Res : Signed_32
+    Implements
+    Res = MutateAliased(Address(X), Address(X))
+    Write(Res)
+End Main
+

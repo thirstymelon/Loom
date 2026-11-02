@@ -1,0 +1,39 @@
+Module Test14FmaAndFloatPrecision
+
+Block ComputeFloat
+    Takes
+        X : Float_64
+        Y : Float_64
+        Z : Float_64
+    Produces Float_64
+    Implements
+    Give (X * Y) + Z
+End ComputeFloat
+
+Block FmaProbe
+    Takes
+        X : Float_64
+        Y : Float_64
+        Z : Float_64
+    Produces Float_64
+    Implements
+        Give (X * Y) + Z
+End FmaProbe
+
+Block Main
+    Declares
+        A : Float_64 = 2.5
+        B : Float_64 = 4.0
+        C : Float_64 = 1.25
+        Res : Float_64
+        Probe : Float_64
+        X : Float_64 = 1.000000007450580596923828125
+        Y : Float_64 = 0.999999992549419403076171875
+        Z : Float_64 = 0.0 - 1.0
+    Implements
+    Res = ComputeFloat(A, B, C)
+    Write(Res)
+    Probe = FmaProbe(X, Y, Z)
+    Write(Probe)
+End Main
+

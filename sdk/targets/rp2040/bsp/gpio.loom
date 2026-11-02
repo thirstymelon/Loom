@@ -1,0 +1,108 @@
+Module GPIO
+
+Import System
+use System
+
+Block Global
+Declares
+    PIN_INPUT  : Constant Signed_64 = 0
+    PIN_OUTPUT : Constant Signed_64 = 1
+
+    PULL_NONE  : Constant Signed_64 = 0
+    PULL_UP    : Constant Signed_64 = 1
+    PULL_DOWN  : Constant Signed_64 = 2
+End Global
+
+Block Init_Pin Takes
+    Pin : Signed_64
+Declares
+    Ctrl_Addr : Signed_64
+Implements
+    # Configure Pin Function to SIO (Software Control = 5)
+    # Register address: IO_BANK0_BASE (0x40014000) + 4 + (Pin * 8)
+    Ctrl_Addr = 0x40014004 + (Pin * 8)
+    Vol_Write_32(Ctrl_Addr, 5)
+End Init_Pin
+
+Block Set_Direction Takes
+    Pin : Signed_64
+    Direction : Signed_64
+Declares
+    Pin_Mask : Signed_64
+Implements
+    Pin_Mask = 1 LSL Pin
+    If (Direction == 1)
+        # SIO_GPIO_OE_SET: 0xD0000024
+        Vol_Write_32(0xD0000024, Pin_Mask)
+    Else
+        # SIO_GPIO_OE_CLR: 0xD0000028
+        Vol_Write_32(0xD0000028, Pin_Mask)
+    End If
+End Set_Direction
+
+Block Set_High Takes
+    Pin : Signed_64
+Declares
+    Pin_Mask : Signed_64
+Implements
+    Pin_Mask = 1 LSL Pin
+    # SIO_GPIO_OUT_SET (0xD0000014)
+    Vol_Write_32(0xD0000014, Pin_Mask)
+End Set_High
+
+Block Set_Low Takes
+    Pin : Signed_64
+Declares
+    Pin_Mask : Signed_64
+Implements
+    Pin_Mask = 1 LSL Pin
+    # SIO_GPIO_OUT_CLR (0xD0000018)
+    Vol_Write_32(0xD0000018, Pin_Mask)
+End Set_Low
+
+Block Toggle Takes
+    Pin : Signed_64
+Declares
+    Pin_Mask : Signed_64
+Implements
+    Pin_Mask = 1 LSL Pin
+    # SIO_GPIO_OUT_XOR (0xD000001C)
+    Vol_Write_32(0xD000001C, Pin_Mask)
+End Toggle
+
+Block Read_Pin Takes
+    Pin : Signed_64
+Produces Signed_64
+Declares
+    Pin_Mask : Signed_64
+    Values : Unsigned_32
+Implements
+    Pin_Mask = 1 LSL Pin
+    Values = Vol_Read_32(0xD0000004)
+    If ((Cast[Signed_64](Values) & Pin_Mask) != 0)
+        Give 1
+    Else
+        Give 0
+    End If
+End Read_Pin
+
+Block Set_Pull Takes
+    Pin : Signed_64
+    Pull : Signed_64
+Declares
+    Pad_Addr : Signed_64
+    Val : Unsigned_32
+Implements
+    # PADS_BANK0_BASE = 0x4001C000, GPIO0 offset = 0x04
+    Pad_Addr = 0x4001C004 + (Pin * 4)
+    Val = Vol_Read_32(Pad_Addr)
+    # Clear PUE (bit 3 = 8) and PDE (bit 2 = 4): 0xC = 12
+    Val = Val & 0xFFFFFFF3
+    If (Pull == 1)
+        Val = Val | 8     # PULL_UP
+    Else If (Pull == 2)
+        Val = Val | 4     # PULL_DOWN
+    End If
+    Vol_Write_32(Pad_Addr, Val)
+End Set_Pull
+

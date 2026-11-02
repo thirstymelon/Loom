@@ -1,0 +1,79 @@
+Module ADC
+
+Import System
+use System
+
+Block Global
+Declares
+    ADC_GPIO_26     : Constant Signed_64 = 0
+    ADC_GPIO_27     : Constant Signed_64 = 1
+    ADC_GPIO_28     : Constant Signed_64 = 2
+    ADC_GPIO_29     : Constant Signed_64 = 3
+    ADC_TEMP_SENSOR : Constant Signed_64 = 4
+End Global
+
+Block ADC_Init
+Implements
+    # 1. Unreset ADC (bit 0 = 1)
+    Unreset_Peripherals(Cast[Unsigned_32](1))
+
+    # 2. Enable ADC power (bit 0) and Temperature Sensor (bit 1) -> 3
+    Vol_Write_32(0x4004C000, 3)
+End ADC_Init
+
+Block Read_ADC_Raw Takes
+    Channel : Signed_64
+Produces Signed_64
+Declares
+    Cs_Val : Signed_64
+    Status : Unsigned_32
+    Raw : Unsigned_32
+Implements
+    # CS layout: [14:12] = AINSEL, [2] = START_ONCE, [1] = TS_EN, [0] = EN
+    Cs_Val = (Channel LSL 12) | 7
+    Vol_Write_32(0x4004C000, Cs_Val)
+
+    # Wait for READY bit (bit 8 = 256)
+    Status = Vol_Read_32(0x4004C000)
+    Loop Until ((Status & 256) != 0)
+        Status = Vol_Read_32(0x4004C000)
+    End Loop
+
+    Raw = Vol_Read_32(0x4004C004)
+    Give Cast[Signed_64](Raw & 0xFFF)
+End Read_ADC_Raw
+
+Block Read_ADC_Millivolts Takes
+    Channel : Signed_64
+Produces Signed_64
+Declares
+    Raw : Signed_64
+Implements
+    Raw = Read_ADC_Raw(Channel)
+    # (Raw * 3300) / 4095
+    Give (Raw * 3300) / 4095
+End Read_ADC_Millivolts
+
+Block Read_Temperature_Celsius
+Produces Signed_64
+Declares
+    Mv : Signed_64
+    Diff : Signed_64
+Implements
+    Mv = Read_ADC_Millivolts(4)
+    Diff = Mv - 706
+    # RP2040 datasheet formula: T = 27 - (V - 0.706) / 0.001721
+    # Scaled by 1000: 27 - (Diff * 1000) / 1721
+    Give 27 - ((Diff * 1000) / 1721)
+End Read_Temperature_Celsius
+
+Block Read_Temperature_Millicelsius
+Produces Signed_64
+Declares
+    Mv : Signed_64
+    Diff : Signed_64
+Implements
+    Mv = Read_ADC_Millivolts(4)
+    Diff = Mv - 706
+    Give 27000 - ((Diff * 1000000) / 1721)
+End Read_Temperature_Millicelsius

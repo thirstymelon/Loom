@@ -1,0 +1,319 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Loom",
+  "scopeName": "source.loom",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#functionDefinitions"
+    },
+    {
+      "include": "#typeDefinitions"
+    },
+    {
+      "include": "#controlKeywords"
+    },
+    {
+      "include": "#storageKeywords"
+    },
+    {
+      "include": "#builtinFunctions"
+    },
+    {
+      "include": "#functionCalls"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#wordOperators"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#memberAccess"
+    },
+    {
+      "include": "#variables"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.loom",
+          "match": "#.*$"
+        },
+        {
+          "name": "comment.line.double-slash.loom",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.loom",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "meta.interpolation.loom",
+              "begin": "<(?=[A-Za-z_])",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.definition.template-expression.begin.loom"
+                }
+              },
+              "end": ">",
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.definition.template-expression.end.loom"
+                }
+              },
+              "patterns": [
+                {
+                  "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b",
+                  "name": "variable.other.interpolation.loom"
+                },
+                {
+                  "match": "\\.",
+                  "name": "punctuation.accessor.dot.loom"
+                },
+                {
+                  "match": "\\[([0-9]+)\\]",
+                  "captures": {
+                    "1": {
+                      "name": "constant.numeric.integer.decimal.loom"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "name": "constant.character.escape.loom",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.character.loom",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.loom",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "functionDefinitions": {
+      "patterns": [
+        {
+          "match": "\\b(Block)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.loom"
+            },
+            "2": {
+              "name": "entity.name.function.loom"
+            }
+          }
+        },
+        {
+          "match": "\\b(End)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.loom"
+            },
+            "2": {
+              "name": "entity.name.function.loom"
+            }
+          }
+        }
+      ]
+    },
+    "functionCalls": {
+      "patterns": [
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.loom"
+            }
+          }
+        }
+      ]
+    },
+    "typeDefinitions": {
+      "patterns": [
+        {
+          "match": "\\b(Record)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.record.loom"
+            },
+            "2": {
+              "name": "entity.name.type.record.loom"
+            }
+          }
+        },
+        {
+          "match": "\\b(Enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.enum.loom"
+            },
+            "2": {
+              "name": "entity.name.type.enum.loom"
+            }
+          }
+        },
+        {
+          "match": "\\b(Module)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.module.loom"
+            },
+            "2": {
+              "name": "entity.name.namespace.loom"
+            }
+          }
+        },
+        {
+          "match": "\\b(Import)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.loom"
+            },
+            "2": {
+              "name": "entity.name.namespace.loom"
+            }
+          }
+        }
+      ]
+    },
+    "controlKeywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.loom",
+          "match": "\\b(If|Else|Until|until|While|while|Loop|Exit|Skip|Give|Ensure|Match|match|When|when|Use|use)\\b"
+        }
+      ]
+    },
+    "storageKeywords": {
+      "patterns": [
+        {
+          "name": "storage.type.loom",
+          "match": "\\b(Block|End|Record|Enum|Module)\\b"
+        },
+        {
+          "name": "storage.modifier.loom",
+          "match": "\\b(Takes|Produces|Declares|Implements|Constant|Extern|Import)\\b"
+        },
+        {
+          "name": "invalid.illegal.unsupported.loom",
+          "match": "\\b(Return|Collection|Call)\\b"
+        }
+      ]
+    },
+    "builtinFunctions": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.loom",
+          "match": "\\b(Write|Address|Deref|Cast|Slice|Vol_Read_(8|16|32|64)|Vol_Write_(8|16|32|64)|Nop|WaitForInterrupt|MemoryBarrier)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.loom",
+          "match": "\\b(Boolean|Signed_(8|16|32|64)|Unsigned_(8|16|32|64)|Float_(32|64)|String|Character|Integer|Int)\\b"
+        },
+        {
+          "name": "support.type.constructor.loom",
+          "match": "\\b(Pointer|Slice|Array)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.loom",
+          "match": "\\b(True|False|Null)\\b"
+        }
+      ]
+    },
+    "wordOperators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.word.loom",
+          "match": "\\b(And|Or|Not|LSL|LSR|Mod)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.loom",
+          "match": "\\+=|-=|\\*=|/=|&=|\\|=|\\^=|==|!=|<=|>=|[=+*/<>&|^~%]"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.loom",
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.loom",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.loom",
+          "match": "\\b[0-9_]+\\.[0-9_]+([eE][+-]?[0-9_]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.loom",
+          "match": "\\b[0-9_]+\\b"
+        }
+      ]
+    },
+    "memberAccess": {
+      "patterns": [
+        {
+          "match": "\\.([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "variable.other.property.loom"
+            }
+          }
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.other.loom",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}

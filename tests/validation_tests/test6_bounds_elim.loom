@@ -1,0 +1,30 @@
+Module Test6BoundsElim
+
+Block ScaleArray
+    Takes
+        ArrPtr : Signed_32 Pointer
+        Length : Unsigned_64
+    Declares
+        Slc : Signed_32 Slice
+        I : Unsigned_64 = 1
+    Implements
+    Slc = Slice(ArrPtr, Length)
+    Loop Until I > Slc.Length
+        Slc[I] = Slc[I] * 2
+        I = I + 1
+    End Loop
+End ScaleArray
+
+Block Main
+    Declares
+        Arr : Signed_32 Array[8]
+        I : Unsigned_64 = 1
+    Implements
+    Loop Until I > 8
+        Arr[I] = 5
+        I = I + 1
+    End Loop
+    ScaleArray(Address(Arr[1]), 8)
+    Write(Arr[1])
+End Main
+

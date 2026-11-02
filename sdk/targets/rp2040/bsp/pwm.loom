@@ -1,0 +1,75 @@
+Module PWM
+
+Import System
+use System
+
+Block Global
+Declares
+    PWM_MAX_LEVEL : Constant Signed_64 = 65535
+End Global
+
+Block PWM_Init Takes
+    Pin : Signed_64
+Declares
+    Ctrl_Addr : Signed_64
+    Pwm_Slice : Signed_64
+    Slice_Offset : Signed_64
+Implements
+    # 1. Unreset PWM block (bit 14 = 16384)
+    Unreset_Peripherals(Cast[Unsigned_32](16384))
+
+    # 2. Configure Pin Function to PWM (FUNCSEL = 4)
+    Ctrl_Addr = 0x40014004 + (Pin * 8)
+    Vol_Write_32(Ctrl_Addr, 4)
+
+    # 3. Setup PWM slice (Pwm_Slice = (Pin / 2) & 7)
+    Pwm_Slice = (Pin / 2) & 7
+    Slice_Offset = 0x40050000 + (Pwm_Slice * 20)
+
+    # Set TOP to 65535 (Offset 0x10)
+    Vol_Write_32(Slice_Offset + 16, 65535)
+
+    # Enable slice: CSR bit 0 = 1 (Offset 0x00)
+    Vol_Write_32(Slice_Offset, 1)
+End PWM_Init
+
+Block Set_PWM_Raw Takes
+    Pin : Signed_64
+    Level : Signed_64
+Declares
+    Pwm_Slice : Signed_64
+    Chan : Signed_64
+    Cc_Addr : Signed_64
+    Current_Cc : Unsigned_32
+    New_Cc : Signed_64
+Implements
+    Pwm_Slice = (Pin / 2) & 7
+    Chan = Pin & 1
+    Cc_Addr = 0x40050000 + (Pwm_Slice * 20) + 12
+
+    Current_Cc = Vol_Read_32(Cc_Addr)
+    If (Chan == 0)
+        # Channel A: bits 15:0
+        New_Cc = (Cast[Signed_64](Current_Cc) & 0xFFFF0000) | (Level & 0xFFFF)
+    Else
+        # Channel B: bits 31:16
+        New_Cc = (Cast[Signed_64](Current_Cc) & 0x0000FFFF) | ((Level & 0xFFFF) LSL 16)
+    End If
+    Vol_Write_32(Cc_Addr, New_Cc)
+End Set_PWM_Raw
+
+Block Set_PWM_Duty Takes
+    Pin : Signed_64
+    Duty_Percent : Signed_64
+Declares
+    Level : Signed_64
+Implements
+    If (Duty_Percent <= 0)
+        Level = 0
+    Else If (Duty_Percent >= 100)
+        Level = 65535
+    Else
+        Level = (Duty_Percent * 65535) / 100
+    End If
+    Set_PWM_Raw(Pin, Level)
+End Set_PWM_Duty
