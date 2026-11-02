@@ -26,49 +26,6 @@ Featuring a platform-independent C++17 frontend and an optimizing LLVM native-co
 
 ---
 
-## Project Structure
-
-```text
-Loom/
-├── CMakeLists.txt        # Top-level CMake build system definition
-├── LICENSE               # Apache License 2.0 terms
-├── README.md             # Project introduction and repository overview
-├── logo/                 # Official Loom branding assets and icons
-│   └── Loom_Logo.png
-├── docs/                 # Complete standalone offline documentation suite
-│   ├── index.html        # Documentation hub & search
-│   ├── getting-started.html # Installation, CLI reference, and toolchain setup
-│   ├── developer-overview.html # Compiler pipeline, AST, and lowering architecture
-│   ├── embedded-rp2040.html # Bare-metal RP2040 hardware and HAL guide
-│   ├── reference.html    # Formal lexical grammar and language specification
-│   ├── styles.css        # Documentation styling and theme configuration
-│   └── tutorials/
-│       ├── index.html    # Tutorial track roadmap
-│       └── beginner-guide.html # Comprehensive 10-lesson beginner course
-├── scripts/              # Distribution, packaging, and DMG creation scripts
-│   └── build_dmg.sh
-├── sdk/                  # Loom Standard Development Kit
-│   ├── std/              # Core standard library modules (I/O, Math)
-│   └── targets/          # Embedded target support
-│       └── rp2040/       # RP2040 BSP (System, GPIO, Time, UART, ADC, PWM)
-├── src/                  # Native C++ compiler and workspace driver source
-│   ├── main.cpp          # Compiler frontend and LLVM IR generator (loomc)
-│   └── driver.cpp        # Unified workspace driver and CLI tool (loom)
-├── tests/                # Test suites, benchmarks, and validation tests
-│   ├── benchmarks.py     # Comparative benchmarks (Loom vs C vs Rust)
-│   ├── docs_tests.py     # Documentation verification test harness
-│   ├── driver_tests.py   # Workspace CLI integration test suite
-│   └── modern_features_tests.py # Modern language features verification
-└── vscode-loom/          # Official Visual Studio Code extension
-    ├── Loom-1.0.0.vsix   # Prepackaged ready-to-install VS Code extension
-    ├── package.json      # Extension manifest and contributions
-    ├── language-configuration.json # Bracket matching and indentation rules
-    ├── syntaxes/         # TextMate grammar for semantic syntax highlighting
-    └── snippets/         # IDE code completion snippets
-```
-
----
-
 ## Core Capabilities
 
 - **Direct LLVM Backend**: Generates target-native object code with comprehensive LLVM optimization passes (-O3), inlining, and target vectorization.
