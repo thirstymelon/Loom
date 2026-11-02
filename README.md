@@ -8,11 +8,12 @@
 
 [![Version](https://img.shields.io/badge/version-1.0.0-92a9e1.svg)](https://github.com/thirstymelon/Loom/releases)
 [![Backend](https://img.shields.io/badge/backend-LLVM%20Native-blue.svg)](https://llvm.org/)
-[![Embedded](https://img.shields.io/badge/target-RP2040%20Bare--Metal-brightgreen.svg)](docs/embedded-rp2040.html)
-[![VS Code](https://img.shields.io/badge/vscode-extension%20available-informational.svg)](vscode-loom/)
+[![Embedded](https://img.shields.io/badge/target-RP2040%20Bare--Metal-brightgreen.svg)](https://thirstymelon.github.io/Loom/embedded-rp2040.html)
+[![VS Code](https://img.shields.io/badge/vscode-extension%20in%20repo-informational.svg)](vscode-loom/)
+[![macOS DMG](https://img.shields.io/badge/macos-dmg%20in%20releases-lightgrey.svg)](https://github.com/thirstymelon/Loom/releases)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-[Documentation Hub](docs/index.html) • [Getting Started](docs/getting-started.html) • [Beginner's Guide](docs/tutorials/beginner-guide.html) • [RP2040 Bare-Metal](docs/embedded-rp2040.html) • [Language Reference](docs/reference.html)
+[Documentation Hub](https://thirstymelon.github.io/Loom/) • [Getting Started](https://thirstymelon.github.io/Loom/getting-started.html) • [Beginner's Guide](https://thirstymelon.github.io/Loom/tutorials/beginner-guide.html) • [RP2040 Bare-Metal](https://thirstymelon.github.io/Loom/embedded-rp2040.html) • [Language Reference](https://thirstymelon.github.io/Loom/reference.html)
 
 </div>
 
@@ -39,26 +40,27 @@ Featuring a platform-independent C++17 frontend and an optimizing LLVM native-co
 
 ---
 
-## VS Code Extension for Loom
+## Downloads & VS Code Extension
 
-An official VS Code extension is available for full Loom language support:
-- **Syntax Highlighting**: Complete TextMate grammar covering blocks, keywords, built-in types, operators, and string interpolation.
-- **Editor Productivity**: Automated code snippets, bracket autocompletion, intelligent indentation rules, and file icon associations.
-- **Compiler-Backed Diagnostics**: Inline error reporting and diagnostic squiggles directly inside the editor.
-- **Direct Installation**: The repository includes the prepackaged extension file (`vscode-loom/Loom-1.0.0.vsix`), which can be installed in VS Code via the Extensions view or command line.
+- **macOS Installer (.dmg)**: A prebuilt Apple Silicon disk image (`.dmg`) is attached to every [GitHub Release](https://github.com/thirstymelon/Loom/releases), providing an installer for the compiler (`loomc`), build driver (`loom`), language server (`loom-lsp`), and RP2040 SDK.
+- **VS Code Extension**: The official VS Code extension for Loom language support is bundled directly within this repository as a prepackaged `.vsix` file ([`vscode-loom/Loom-1.0.0.vsix`](vscode-loom/Loom-1.0.0.vsix)):
+  - **Syntax Highlighting**: Complete TextMate grammar covering blocks, keywords, built-in types, operators, and string interpolation.
+  - **Editor Productivity**: Automated code snippets, bracket autocompletion, intelligent indentation rules, and file icon associations.
+  - **Compiler-Backed Diagnostics**: Real-time error reporting and inline diagnostic squiggles.
+  - **Direct Installation**: Install the prepackaged `.vsix` directly in VS Code via the Extensions view (`Install from VSIX...`) or command line.
 
 ---
 
 ## Comprehensive Documentation
 
-For in-depth explanations, installation steps, step-by-step tutorials, code examples, compiler internals, and complete API references, explore the included documentation:
+For in-depth explanations, installation steps, step-by-step tutorials, code examples, compiler internals, and complete API references, explore the online documentation at [thirstymelon.github.io/Loom](https://thirstymelon.github.io/Loom/) or the offline suite in `docs/`:
 
-- [**Documentation Hub**](docs/index.html): Central gateway, search, and feature roadmap.
-- [**Getting Started Guide**](docs/getting-started.html): Installation, toolchain setup, workspace management, and building your first program.
-- [**Beginner's Course (10 Lessons)**](docs/tutorials/beginner-guide.html): A complete tutorial series taking newcomers from basic syntax to advanced systems programming.
-- [**RP2040 Bare-Metal Guide**](docs/embedded-rp2040.html): Pinouts, hardware architecture, register maps, SDK HAL, and flashing instructions.
-- [**Language Reference Manual**](docs/reference.html): Formal syntax specifications, keyword catalog, types, operator precedence, and memory model.
-- [**Developer & Compiler Overview**](docs/developer-overview.html): Architecture of the frontend parser, AST lowering, LLVM code generator, and optimization pipeline.
+- [**Documentation Hub**](https://thirstymelon.github.io/Loom/): Central gateway, search, and feature roadmap.
+- [**Getting Started Guide**](https://thirstymelon.github.io/Loom/getting-started.html): Installation, toolchain setup, workspace management, and building your first program.
+- [**Beginner's Course (10 Lessons)**](https://thirstymelon.github.io/Loom/tutorials/beginner-guide.html): A complete tutorial series taking newcomers from basic syntax to advanced systems programming.
+- [**RP2040 Bare-Metal Guide**](https://thirstymelon.github.io/Loom/embedded-rp2040.html): Pinouts, hardware architecture, register maps, SDK HAL, and flashing instructions.
+- [**Language Reference Manual**](https://thirstymelon.github.io/Loom/reference.html): Formal syntax specifications, keyword catalog, types, operator precedence, and memory model.
+- [**Developer & Compiler Overview**](https://thirstymelon.github.io/Loom/developer-overview.html): Architecture of the frontend parser, AST lowering, LLVM code generator, and optimization pipeline.
 
 *The entire documentation suite is standalone and fully functional offline. Simply open `docs/index.html` in any web browser.*
 
