@@ -9,13 +9,13 @@ The Loom ecosystem cleanly separates into two specialized streams:
 1. **Native Desktop / Hosted Systems Stream (`sdk/std/`)**:
    - Designed for operating system environments (macOS Apple Silicon/Intel, Linux, Windows).
    - Links against standard host environments, providing general computational math (`math.loom`).
-   - Packaged and distributed via `Loom-1.1.0-macos-arm64-native.dmg`.
+   - Packaged and distributed via `Loom-1.1.0-macos-arm64-native.pkg`.
 
 2. **Embedded Bare-Metal Stream (`sdk/targets/rp2040/`)**:
    - Designed for freestanding microcontrollers without an operating system (`no_std`).
    - Includes custom Cortex-M0+ vector table and boot stages (`boot.s`), hardware SRAM/Flash linker maps (`linker.ld`), and direct MMIO peripheral drivers (`bsp/`).
    - Provides deterministic hardware timing, zero-allocation runtime, and direct UF2 generation for drag-and-drop flashing.
-   - Packaged and distributed via `Loom-1.1.0-macos-arm64-rp2040.dmg`.
+   - Packaged and distributed via `Loom-1.1.0-macos-arm64-rp2040.pkg`.
 
 ## SDK Directory Structure
 

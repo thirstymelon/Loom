@@ -6,17 +6,21 @@
 <p>Loom is distributed as a self-contained toolchain containing the workspace manager (<code>loom</code>), the native compiler (<code>loomc</code>), the Loom Software Development Kit (SDK), and the official VS Code extension.</p>
 
 <h3>macOS (Apple Silicon M1/M2/M3/M4)</h3>
-<p>Loom provides two specialized Apple Silicon disk images depending on your development workflow:</p>
+<p>Loom provides two specialized Apple Silicon installer packages (<code>.pkg</code>) depending on your development workflow:</p>
 <ul>
-<li><b>Desktop Native Toolchain (<code>Loom-1.1.0-macos_aarch64_native.dmg</code>)</b>: For general-purpose macOS desktop applications, high-performance systems utilities, and command-line tools. Includes the native compiler, build driver, standard library (<code>sdk/std/</code>), and VS Code extension.</li>
-<li><b>RP2040 Embedded Toolchain (<code>Loom-1.1.0-macos_aarch64_armcortex-m0.dmg</code>)</b>: For bare-metal Raspberry Pi Pico (RP2040) firmware development. Includes the ARM Cortex-M0+ compiler, build driver with automatic UF2 packager, full 16-peripheral RP2040 HAL/BSP (<code>sdk/targets/rp2040/</code>), Boot2 loader, linker scripts, and VS Code extension.</li>
+<li><b>Desktop Native Toolchain (<code>Loom-1.1.0-macos-arm64-native.pkg</code>)</b>: For general-purpose macOS desktop applications, high-performance systems utilities, and command-line tools. Installs the universal build driver (<code>loom</code>), native desktop compiler (<code>/usr/local/share/loom/toolchains/native/bin/loomc</code>), standard library (<code>sdk/std/</code>), and VS Code extension.</li>
+<li><b>RP2040 Embedded Toolchain (<code>Loom-1.1.0-macos-arm64-rp2040.pkg</code>)</b>: For bare-metal Raspberry Pi Pico (RP2040) firmware development. Installs the universal build driver (<code>loom</code>), ARM Cortex-M0+ compiler (<code>/usr/local/share/loom/toolchains/rp2040/bin/loomc</code>), automatic UF2 packager, full 16-peripheral RP2040 HAL/BSP (<code>sdk/targets/rp2040/</code>), Boot2 loader, linker scripts, and VS Code extension.</li>
 </ul>
-<ol>
-<li><b>GUI Installer</b>: Double-click either disk image, open the included <b>.pkg</b> installer, and follow the on-screen instructions.</li>
-<li><b>Terminal Installation</b>: Open the mounted volume in your terminal and execute:
-<pre class=sh><code>sudo ./install.sh</code></pre>
-This automatically places <code>loom</code> and <code>loomc</code> into <code>/usr/local/bin</code>, installs the appropriate SDK libraries into <code>/usr/local/share/loom/sdk</code>, and provides the VS Code extension.</li>
-</ol>
+<p>Both packages install side-by-side into <code>/usr/local/share/loom/toolchains/</code> without overwriting one another. You can switch the active toolchain anytime:</p>
+<pre class=sh><code># View installed toolchains and active default
+loom toolchains
+
+# Switch default toolchain
+loom use rp2040
+loom use native
+
+# Per-build override
+loom build --toolchain rp2040</code></pre>
 
 <h3>Linux & Unix Environments</h3>
 <p>On Linux systems, extract the Loom release bundle to your system root:</p>

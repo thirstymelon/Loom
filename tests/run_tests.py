@@ -70,6 +70,7 @@ positive["null_pointer_and_short_circuit"] = ("Block Main Declares\n Ptr : Signe
 positive["extern_block_puts"] = ("Extern Block puts Takes\n S : String\nProduces Signed_32\nEnd puts\nBlock Main Declares\n Res : Signed_32\nImplements\n Res = puts(\"Hello\")\nEnd Main\n", ["declare i32 @puts(ptr)", "call i32 @puts"])
 positive["array_literal_initializer"] = ("Block Main Declares\n Arr : Signed_32 Array[3] = {10, 20, 30}\nImplements\n Write(Arr[1])\n Write(Arr[2])\n Write(Arr[3])\nEnd Main\n", ["alloca [3 x i32]"])
 positive["write_string_interpolation"] = ("Record Vec\n X : Signed_32\n Y : Signed_32\nEnd Vec\nBlock Main Declares\n A : Signed_32 = 42\n V : Vec\nImplements\n V.X = 10\n V.Y = 20\n Write(\"Val: <A> | Vec: <V.X>, <V.Y>\")\nEnd Main\n", ["printf"])
+positive["string_null_escape"] = ("Block Main Declares\n S : String = \"abc\\0def\"\nImplements\n Write(S)\nEnd Main\n", ["@.loom.string"])
 
 negative = {
     "retired_defer_keyword": ("Block Main Implements\n Defer Write(1)\nEnd Main\n", "expected '=' in assignment"),
@@ -133,6 +134,7 @@ negative = {
     "string_index_assignment_rejected": ("Block Main Declares\n S : String = \"hi\"\nImplements\n S[1] = 'H'\nEnd Main\n", "String characters are read-only"),
     "null_is_not_a_declarable_type": ("Block Main Declares\n N : Null\nImplements\nEnd Main\n", "'Null' is a pointer literal, not a declarable type"),
     "array_literal_size_mismatch": ("Block Main Declares\n Arr : Signed_32 Array[3] = {1, 2}\nImplements\nEnd Main\n", "array literal has 2 elements, but expected 3"),
+    "array_size_zero_rejected": ("Block Main Declares\n Arr : Signed_32 Array[0]\nImplements\nEnd Main\n", "array size must be greater than zero, found 0"),
     "character_cast_rejects_surrogate": ("Block Main Declares\n C : Character = Cast[Character](55296)\nImplements\nEnd Main\n", "not a valid Unicode scalar value"),
 }
 

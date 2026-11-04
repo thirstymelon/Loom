@@ -4,6 +4,9 @@ project(Loom VERSION 1.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  add_compile_options(-Wall -Wextra)
+endif()
 find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION} from ${LLVM_DIR}")
 
@@ -14,6 +17,17 @@ target_include_directories(loomc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(LLVM_LIBS Core Support Target CodeGen MC native armcodegen armasmparser armdesc arminfo Passes)
 target_link_libraries(loomc PRIVATE ${LLVM_LIBS})
+
+# Toolchain-specific compiler targets
+add_executable(loomc-native src/main.cpp)
+target_compile_definitions(loomc-native PRIVATE LOOM_TOOLCHAIN_NATIVE_ONLY)
+target_include_directories(loomc-native SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_link_libraries(loomc-native PRIVATE ${LLVM_LIBS})
+
+add_executable(loomc-rp2040 src/main.cpp)
+target_compile_definitions(loomc-rp2040 PRIVATE LOOM_TOOLCHAIN_RP2040_ONLY)
+target_include_directories(loomc-rp2040 SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_link_libraries(loomc-rp2040 PRIVATE ${LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)

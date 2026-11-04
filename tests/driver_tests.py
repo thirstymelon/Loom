@@ -212,6 +212,26 @@ End Add
     assert (rp_project / "src/main.loom").exists()
     assert not (rp_project / "src/hardware.loom").exists()
     assert "Block Main" in (rp_project / "src/main.loom").read_text()
+    # Verify that native toolchain initially rejects RP2040 project
+    rp_default_fail = run(["build"], rp_project, check=False)
+    assert rp_default_fail.returncode != 0
+    assert "not supported by the Loom native desktop toolchain" in (rp_default_fail.stderr + rp_default_fail.stdout)
+
+    # Verify toolchain CLI commands: loom toolchains, loom use <tc>
+    tc_list = run(["toolchains"], parent)
+    assert "Installed Loom toolchains:" in tc_list.stdout
+    assert "native" in tc_list.stdout
+    assert "rp2040" in tc_list.stdout
+
+    # Switch default to rp2040 with 'loom use rp2040' -> RP2040 project builds successfully
+    use_rp = run(["use", "rp2040"], parent)
+    assert "Using toolchain 'rp2040'" in use_rp.stdout
+    use_show = run(["use"], parent)
+    assert "Active toolchain: rp2040" in use_show.stdout
+
+    tc_list_rp = run(["toolchains"], parent)
+    assert "rp2040" in tc_list_rp.stdout and "(default)" in tc_list_rp.stdout
+
     rp_build = run(["build"], rp_project)
     assert (rp_project / "target/rp_blink.elf").is_file()
     assert (rp_project / "target/rp_blink.bin").is_file()
@@ -220,5 +240,35 @@ End Add
     assert not (rp_project / "target/obj/project.o").exists()
     assert not (rp_project / "loom-deps.mmd").exists()
     assert "UF2 image:" in rp_build.stdout
+
+    # When default is rp2040, desktop project must be rejected
+    nat_rp_fail = run(["build"], feature_project, check=False)
+    assert nat_rp_fail.returncode != 0
+    assert "desktop host target is not supported by the Loom 'rp2040' embedded toolchain" in (nat_rp_fail.stderr + nat_rp_fail.stdout)
+
+    # Switch default back to native with 'loom use native' -> desktop project builds, RP2040 project rejected
+    use_nat = run(["use", "native"], parent)
+    assert "Using toolchain 'native'" in use_nat.stdout
+
+    tc_list_nat = run(["toolchains"], parent)
+    assert "native" in tc_list_nat.stdout and "(default)" in tc_list_nat.stdout
+
+    nat_build = run(["build"], feature_project)
+    assert "Build succeeded" in nat_build.stdout
+
+    rp_fail_again = run(["build"], rp_project, check=False)
+    assert rp_fail_again.returncode != 0
+    assert "not supported by the Loom native desktop toolchain" in (rp_fail_again.stderr + rp_fail_again.stdout)
+
+    # Backward compatibility: verify 'loom set default rp2040' and 'loom set default native'
+    run(["set", "default", "rp2040"], parent)
+    assert "rp2040" in run(["toolchains"], parent).stdout
+    run(["set", "default", "native"], parent)
+    assert "native" in run(["toolchains"], parent).stdout
+
+    # Explicit toolchain selection succeeds when matching
+    rp_build_explicit = run(["build", "--toolchain", "rp2040"], rp_project)
+    assert "Toolchain:   rp2040" in rp_build_explicit.stdout
+    assert "Build succeeded" in rp_build_explicit.stdout
 
 print("loom workspace CLI tests passed")

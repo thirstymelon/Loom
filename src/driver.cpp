@@ -83,6 +83,31 @@ std::string toLower(std::string_view s) {
     for (char c : s) out += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return out;
 }
+inline fs::path getExecutablePath(const char* argv0 = nullptr) {
+    fs::path exePath;
+#if defined(__APPLE__)
+    char buf[1024];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) == 0) {
+        std::error_code ec;
+        exePath = fs::canonical(buf, ec);
+    }
+#elif defined(__linux__)
+    std::error_code ec;
+    exePath = fs::canonical("/proc/self/exe", ec);
+#elif defined(_WIN32)
+    char buf[MAX_PATH];
+    if (GetModuleFileNameA(NULL, buf, MAX_PATH) != 0) {
+        std::error_code ec;
+        exePath = fs::canonical(buf, ec);
+    }
+#endif
+    if (exePath.empty() && argv0 && argv0[0] != '\0') {
+        std::error_code ec;
+        exePath = fs::absolute(argv0, ec);
+    }
+    return exePath;
+}
 std::string unquote(const std::string& value, std::size_t line) {
     if (value.size() < 2 || value.front() != '"' || value.back() != '"')
         throw Error("config.toml line " + std::to_string(line) + ": expected a quoted string");
@@ -130,7 +155,8 @@ std::string stripComment(const std::string& s) {
     bool quoted = false, escaped = false;
     for (std::size_t i = 0; i < s.size(); ++i) {
         if (!escaped && s[i] == '"') quoted = !quoted;
-        if (!quoted && s[i] == '#') return s.substr(0, i);
+        if (!quoted && (s[i] == '#' || (s[i] == '/' && i + 1 < s.size() && s[i + 1] == '/')))
+            return s.substr(0, i);
         if (!escaped && s[i] == '\\') escaped = true; else escaped = false;
     }
     return s;
@@ -187,7 +213,7 @@ fs::path findObjcopy() {
     if (const char* envObjcopy = std::getenv("LLVM_OBJCOPY")) {
         if (*envObjcopy) return envObjcopy;
     }
-    for (const fs::path candidate : {
+    for (const auto& candidate : {
         fs::path("/opt/homebrew/opt/llvm/bin/llvm-objcopy"),
         fs::path("/usr/local/opt/llvm/bin/llvm-objcopy"),
         fs::path("/opt/homebrew/bin/llvm-objcopy"),
@@ -205,6 +231,7 @@ struct Config {
     std::string targetDir = "target";
     std::string executable;
     std::string clang = "clang";
+    std::string toolchain;
     std::string target;
     std::string cpu;
     bool baremetal = false;
@@ -240,6 +267,7 @@ Config readConfig(const fs::path& file) {
         else if (section == "build" && (key == "linker_script" || key == "linker")) c.linkerScript = unquote(value, lineNo);
         else if (section == "build" && (key == "assembly_sources" || key == "assembly")) c.assemblySources = parseStringArray(value, lineNo);
         else if (section == "build" && (key == "uf2_output" || key == "uf2")) c.uf2Output = (value == "true");
+        else if (section == "toolchain" && (key == "name" || key == "toolchain")) c.toolchain = unquote(value, lineNo);
         else if (section == "toolchain" && key == "clang") c.clang = unquote(value, lineNo);
         else throw Error("config.toml line " + std::to_string(lineNo) + ": unknown key '" + key + "' in [" + section + "]");
     }
@@ -269,18 +297,27 @@ fs::path workspacePath(const fs::path& root, const std::string& value, const std
     if (!isWithin(result, root)) throw Error(label + " must stay inside the workspace");
     return result;
 }
-bool wildcardMatch(const std::string& pattern, const std::string& value, std::size_t p = 0, std::size_t v = 0) {
-    while (p < pattern.size()) {
-        if (pattern[p] == '*') {
-            while (p < pattern.size() && pattern[p] == '*') ++p;
-            if (p == pattern.size()) return true;
-            for (std::size_t j = v; j <= value.size(); ++j) if (wildcardMatch(pattern, value, p, j)) return true;
+inline bool wildcardMatch(std::string_view pattern, std::string_view value) {
+    std::size_t p = 0, v = 0;
+    std::size_t starP = std::string_view::npos;
+    std::size_t starV = 0;
+    while (v < value.size()) {
+        if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == value[v])) {
+            ++p; ++v;
+        } else if (p < pattern.size() && pattern[p] == '*') {
+            starP = p;
+            starV = v;
+            ++p;
+        } else if (starP != std::string_view::npos) {
+            p = starP + 1;
+            ++starV;
+            v = starV;
+        } else {
             return false;
         }
-        if (v >= value.size() || (pattern[p] != '?' && pattern[p] != value[v])) return false;
-        ++p; ++v;
     }
-    return v == value.size();
+    while (p < pattern.size() && pattern[p] == '*') ++p;
+    return p == pattern.size();
 }
 std::vector<fs::path> getSdkIncludeDirs(const char* argv0 = nullptr, const std::string& explicitSdk = "") {
     std::vector<fs::path> sdkRoots;
@@ -298,19 +335,7 @@ std::vector<fs::path> getSdkIncludeDirs(const char* argv0 = nullptr, const std::
             }
         }
     }
-    fs::path exePath;
-#if defined(__APPLE__)
-    char buf[1024];
-    uint32_t size = sizeof(buf);
-    if (_NSGetExecutablePath(buf, &size) == 0) {
-        std::error_code ec;
-        exePath = fs::canonical(buf, ec);
-    }
-#endif
-    if (exePath.empty() && argv0 && argv0[0] != '\0') {
-        std::error_code ec;
-        exePath = fs::absolute(argv0, ec);
-    }
+    fs::path exePath = getExecutablePath(argv0);
     if (!exePath.empty()) {
         fs::path exeDir = exePath.parent_path();
         for (const auto& rel : {
@@ -718,10 +743,345 @@ fs::path loomcPath(const char* argv0) {
         if (fs::is_regular_file(exeSibling)) return exeSibling;
 #endif
     }
-    for (const fs::path candidate : {fs::current_path() / "bin" / "loomc", fs::current_path() / "loomc"})
+    for (const auto& candidate : {fs::current_path() / "bin" / "loomc", fs::current_path() / "loomc"})
         if (fs::is_regular_file(candidate)) return candidate;
     return "loomc";
 }
+
+inline void setEnvVar(const std::string& name, const std::string& value) {
+#ifdef _WIN32
+    _putenv_s(name.c_str(), value.c_str());
+#else
+    setenv(name.c_str(), value.c_str(), 1);
+#endif
+}
+
+struct ToolchainInfo {
+    std::string name;
+    std::string kind;
+    std::string version = "1.1.0";
+    std::string description;
+    fs::path rootDir;
+    fs::path loomcPath;
+    fs::path sdkPath;
+    bool isDefault = false;
+};
+
+inline std::string getDefaultToolchainName() {
+    if (const char* home = std::getenv("HOME")) {
+        fs::path p = fs::path(home) / ".loom" / "default_toolchain";
+        std::error_code ec;
+        if (fs::is_regular_file(p, ec)) {
+            std::ifstream in(p);
+            std::string line;
+            if (std::getline(in, line)) {
+                line = trim(line);
+                if (!line.empty()) return line;
+            }
+        }
+    }
+    for (const auto& cand : {
+        fs::path("/usr/local/share/loom/default_toolchain"),
+        fs::path("/usr/share/loom/default_toolchain"),
+        fs::path("/opt/loom/default_toolchain")
+    }) {
+        std::error_code ec;
+        if (fs::is_regular_file(cand, ec)) {
+            std::ifstream in(cand);
+            std::string line;
+            if (std::getline(in, line)) {
+                line = trim(line);
+                if (!line.empty()) return line;
+            }
+        }
+    }
+    return "native";
+}
+
+inline void setDefaultToolchain(const std::string& rawName) {
+    std::string name = trim(rawName);
+    if (name.empty()) throw Error("toolchain name cannot be empty");
+    for (char c : name) {
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-') {
+            throw Error("invalid toolchain name '" + name + "': must contain alphanumeric characters, hyphens, or underscores");
+        }
+    }
+
+    bool wroteUser = false;
+    if (const char* home = std::getenv("HOME")) {
+        fs::path dir = fs::path(home) / ".loom";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        fs::path file = dir / "default_toolchain";
+        std::ofstream out(file);
+        if (out) {
+            out << name << "\n";
+            wroteUser = true;
+        }
+    }
+
+    fs::path sysFile = "/usr/local/share/loom/default_toolchain";
+    std::error_code ec;
+    if (fs::exists(sysFile.parent_path(), ec)) {
+        std::ofstream out(sysFile);
+        if (out) {
+            out << name << "\n";
+        }
+    }
+
+    if (!wroteUser) {
+        throw Error("failed to save default toolchain to ~/.loom/default_toolchain");
+    }
+}
+
+inline std::vector<ToolchainInfo> listInstalledToolchains(const char* argv0 = nullptr) {
+    std::vector<ToolchainInfo> results;
+    std::set<std::string> seenNames;
+    std::string defaultName = getDefaultToolchainName();
+
+    std::vector<fs::path> candidateRoots;
+    if (const char* home = std::getenv("HOME")) {
+        candidateRoots.push_back(fs::path(home) / ".loom" / "toolchains");
+    }
+    for (const auto& sys : {
+        fs::path("/usr/local/share/loom/toolchains"),
+        fs::path("/usr/share/loom/toolchains"),
+        fs::path("/opt/loom/toolchains")
+    }) {
+        candidateRoots.push_back(sys);
+    }
+
+    fs::path exePath = getExecutablePath(argv0);
+    if (!exePath.empty()) {
+        fs::path exeDir = exePath.parent_path();
+        candidateRoots.push_back(exeDir.parent_path() / "share" / "loom" / "toolchains");
+        candidateRoots.push_back(exeDir.parent_path() / "toolchains");
+        candidateRoots.push_back(exeDir / "toolchains");
+    }
+
+    for (const auto& root : candidateRoots) {
+        std::error_code ec;
+        if (!fs::is_directory(root, ec)) continue;
+        for (const auto& entry : fs::directory_iterator(root, ec)) {
+            if (!entry.is_directory(ec)) continue;
+            fs::path tcDir = entry.path();
+            std::string dirName = tcDir.filename().string();
+            if (dirName.empty() || dirName.front() == '.') continue;
+            if (seenNames.count(dirName)) continue;
+
+            ToolchainInfo tc;
+            tc.name = dirName;
+            tc.rootDir = tcDir;
+            tc.kind = (dirName == "rp2040" || dirName.find("cortex") != std::string::npos) ? "rp2040" : "native";
+
+            fs::path tomlPath = tcDir / "toolchain.toml";
+            if (fs::is_regular_file(tomlPath, ec)) {
+                std::ifstream f(tomlPath);
+                std::string line;
+                while (std::getline(f, line)) {
+                    line = trim(stripComment(line));
+                    auto eq = line.find('=');
+                    if (eq == std::string::npos) continue;
+                    std::string k = trim(line.substr(0, eq));
+                    std::string v = trim(line.substr(eq + 1));
+                    if (v.size() >= 2 && v.front() == '"' && v.back() == '"') v = v.substr(1, v.size() - 2);
+                    if (k == "name") tc.name = v;
+                    else if (k == "kind") tc.kind = v;
+                    else if (k == "version") tc.version = v;
+                    else if (k == "description") tc.description = v;
+                }
+            }
+
+            if (tc.description.empty()) {
+                if (tc.kind == "rp2040") tc.description = "Loom RP2040 Embedded Bare-Metal Toolchain (ARM Cortex-M0+)";
+                else tc.description = "Loom Native Desktop Toolchain (macOS Apple Silicon arm64)";
+            }
+
+            for (const auto& c : {tcDir / "bin" / "loomc", tcDir / "loomc"}) {
+                if (fs::is_regular_file(c, ec)) {
+                    tc.loomcPath = c;
+                    break;
+                }
+            }
+
+            if (fs::is_directory(tcDir / "sdk", ec)) {
+                tc.sdkPath = tcDir / "sdk";
+            } else {
+                tc.sdkPath = tcDir;
+            }
+
+            tc.isDefault = (tc.name == defaultName);
+            seenNames.insert(tc.name);
+            results.push_back(tc);
+        }
+    }
+
+    if (results.empty()) {
+        fs::path localLoomc = loomcPath(argv0);
+        std::error_code ec;
+        if (fs::is_regular_file(localLoomc, ec)) {
+            ToolchainInfo nat;
+            nat.name = "native";
+            nat.kind = "native";
+            nat.version = "1.1.0";
+            nat.description = "Loom Native Desktop Toolchain (workspace development)";
+            nat.rootDir = fs::current_path();
+            nat.loomcPath = localLoomc;
+            nat.sdkPath = fs::current_path() / "sdk";
+            nat.isDefault = (defaultName == "native");
+            results.push_back(nat);
+
+            ToolchainInfo rp;
+            rp.name = "rp2040";
+            rp.kind = "rp2040";
+            rp.version = "1.1.0";
+            rp.description = "Loom RP2040 Embedded Bare-Metal Toolchain (workspace development)";
+            rp.rootDir = fs::current_path();
+            rp.loomcPath = localLoomc;
+            rp.sdkPath = fs::current_path() / "sdk";
+            rp.isDefault = (defaultName == "rp2040");
+            results.push_back(rp);
+        }
+    }
+
+    return results;
+}
+
+inline void printInstalledToolchains(const char* argv0 = nullptr, bool verbose = false) {
+    const Colors col = Colors::detect(false);
+    auto tcs = listInstalledToolchains(argv0);
+    std::string def = getDefaultToolchainName();
+
+    std::cout << col.bold << "Installed Loom toolchains:" << col.reset << "\n";
+    if (tcs.empty()) {
+        std::cout << col.dim << "  (no toolchains installed)\n\n"
+                  << "Install a toolchain package (.pkg) from Loom releases.\n" << col.reset;
+        return;
+    }
+
+    for (const auto& tc : tcs) {
+        bool isDef = (tc.name == def);
+        std::string prefix = isDef ? (col.bold + col.green + "  * ") : "    ";
+        std::string nameColor = isDef ? (col.bold + col.green) : col.bold;
+        std::string label = tc.name;
+        if (isDef) label += " (default)";
+
+        std::string desc;
+        if (tc.name == "rp2040" || tc.kind == "rp2040") {
+            desc = "ARM Cortex-M0+ bare-metal";
+        } else if (tc.name == "native" || tc.kind == "native") {
+            desc = "macOS Apple Silicon native";
+        } else {
+            desc = tc.description;
+        }
+
+        std::cout << prefix << nameColor << std::left << std::setw(20) << label << col.reset
+                  << col.dim << desc << col.reset;
+        if (verbose && !tc.rootDir.empty()) {
+            std::cout << col.dim << "  [" << tc.rootDir.generic_string() << "]" << col.reset;
+        }
+        std::cout << "\n";
+    }
+}
+
+inline ToolchainInfo resolveActiveToolchain(
+    const std::string& cliOverride,
+    const std::string& configToolchain,
+    const Config& config,
+    const char* argv0 = nullptr
+) {
+    std::string requested = cliOverride;
+    if (requested.empty()) {
+        if (const char* env = std::getenv("LOOM_TOOLCHAIN")) {
+            if (*env) requested = env;
+        }
+    }
+    if (requested.empty()) {
+        requested = getDefaultToolchainName();
+    }
+    if (requested.empty()) {
+        requested = "native";
+    }
+
+    auto tcs = listInstalledToolchains(argv0);
+    ToolchainInfo activeTc;
+    bool found = false;
+    for (const auto& tc : tcs) {
+        if (tc.name == requested) {
+            activeTc = tc;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        fs::path fallbackLoomc = loomcPath(argv0);
+        std::error_code ec;
+        if (fs::is_regular_file(fallbackLoomc, ec)) {
+            activeTc.name = requested;
+            activeTc.kind = (requested == "rp2040" || requested.find("cortex") != std::string::npos) ? "rp2040" : "native";
+            activeTc.version = "1.1.0";
+            activeTc.rootDir = fs::current_path();
+            activeTc.loomcPath = fallbackLoomc;
+            activeTc.sdkPath = fs::current_path() / "sdk";
+            found = true;
+        }
+    }
+
+    if (!found) {
+        std::string avail;
+        for (const auto& t : tcs) {
+            if (!avail.empty()) avail += ", ";
+            avail += "'" + t.name + "'";
+        }
+        throw Error("toolchain '" + requested + "' is not installed.\n"
+                    "  Run 'loom toolchains' to view available toolchains.\n" +
+                    (avail.empty() ? "" : ("  Installed: " + avail + "\n")));
+    }
+
+    bool isRp2040Project = config.baremetal ||
+                           config.target.find("thumb") != std::string::npos ||
+                           config.target.find("none-eabi") != std::string::npos ||
+                           config.cpu == "cortex-m0plus";
+
+    // If config.toml explicitly configured a toolchain name and it conflicts with active toolchain:
+    if (!configToolchain.empty() && configToolchain != activeTc.name && configToolchain != activeTc.kind && cliOverride.empty()) {
+        if (configToolchain == "native" && activeTc.kind == "rp2040") {
+            throw Error("project '" + config.name + "' is configured for the 'native' toolchain, but active toolchain is 'rp2040'.\n"
+                        "  Please switch to the 'native' desktop toolchain:\n"
+                        "    loom use native\n"
+                        "  or specify the toolchain for this build:\n"
+                        "    loom build --toolchain native");
+        }
+        if (configToolchain == "rp2040" && activeTc.kind == "native") {
+            throw Error("project '" + config.name + "' is configured for the 'rp2040' toolchain, but active toolchain is 'native'.\n"
+                        "  Please switch to the 'rp2040' embedded toolchain:\n"
+                        "    loom use rp2040\n"
+                        "  or specify the toolchain for this build:\n"
+                        "    loom build --toolchain rp2040");
+        }
+    }
+
+    if (activeTc.kind == "native" && isRp2040Project) {
+        throw Error("target '" + (config.target.empty() ? "thumbv6m-none-eabi" : config.target) +
+                    "' is not supported by the Loom native desktop toolchain.\n"
+                    "  Please install and switch to the 'rp2040' embedded toolchain:\n"
+                    "    loom use rp2040\n"
+                    "  or specify the toolchain for this build:\n"
+                    "    loom build --toolchain rp2040");
+    }
+
+    if (activeTc.kind == "rp2040" && !isRp2040Project) {
+        throw Error("desktop host target is not supported by the Loom 'rp2040' embedded toolchain.\n"
+                    "  Please switch to the 'native' desktop toolchain:\n"
+                    "    loom use native\n"
+                    "  or specify the toolchain for this build:\n"
+                    "    loom build --toolchain native");
+    }
+
+    return activeTc;
+}
+
 void createProject(const std::string& name, bool rp2040 = false) {
     fs::path namePath(name);
     if (name.empty() || namePath.has_parent_path() || name == "." || name == ".." ||
@@ -855,13 +1215,15 @@ std::string graphForWorkspace(const fs::path& root, const std::vector<fs::path>&
     return format == "json" ? jsonGraph(root, sources, model, view) : mermaidGraph(model, view);
 }
 void graphProject(const fs::path& configFile, const char* argv0, const std::optional<fs::path>& output,
-                  bool checkOnly, const std::string& view, const std::string& format) {
+                  bool checkOnly, const std::string& view, const std::string& format, const std::string& cliToolchain = "") {
     const fs::path configPath = weakCanonical(configFile);
     const fs::path root = weakCanonical(configPath.parent_path());
     const Config config = readConfig(configPath);
-    const auto sdkDirs = getSdkIncludeDirs(argv0);
+    const ToolchainInfo activeTc = resolveActiveToolchain(cliToolchain, config.toolchain, config, argv0);
+    setEnvVar("LOOM_TOOLCHAIN_KIND", activeTc.kind);
+    const auto sdkDirs = getSdkIncludeDirs(argv0, activeTc.sdkPath.string());
     const auto sources = sourceFiles(root, config, sdkDirs);
-    const auto compiler = loomcPath(argv0);
+    const auto compiler = activeTc.loomcPath.empty() ? loomcPath(argv0) : activeTc.loomcPath;
     const auto graph = graphForWorkspace(root, sources, compiler, view, format);
     if (checkOnly) {
         std::cout << "Dependency graph validated for " << config.name << " (" << sources.size()
@@ -874,15 +1236,17 @@ void graphProject(const fs::path& configFile, const char* argv0, const std::opti
     std::cout << format << " " << view << " graph written to " << destination.lexically_relative(root).generic_string()
               << " (" << sources.size() << " sources, " << graph.size() << " bytes).\n";
 }
-void buildProject(const fs::path& configFile, const char* argv0, bool release, bool verbose = false, bool quiet = false, bool optReport = false) {
+void buildProject(const fs::path& configFile, const char* argv0, bool release, bool verbose = false, bool quiet = false, bool optReport = false, const std::string& cliToolchain = "") {
     const fs::path configPath = weakCanonical(configFile);
     const fs::path root = weakCanonical(configPath.parent_path());
     const Config config = readConfig(configPath);
-    const auto sdkDirs = getSdkIncludeDirs(argv0);
+    const ToolchainInfo activeTc = resolveActiveToolchain(cliToolchain, config.toolchain, config, argv0);
+    setEnvVar("LOOM_TOOLCHAIN_KIND", activeTc.kind);
+    const auto sdkDirs = getSdkIncludeDirs(argv0, activeTc.sdkPath.string());
     const auto sources = sourceFiles(root, config, sdkDirs);
     const auto target = workspacePath(root, config.targetDir, "build.target-dir");
     if (target == root) throw Error("build.target-dir cannot be the workspace root");
-    const auto compiler = loomcPath(argv0);
+    const auto compiler = activeTc.loomcPath.empty() ? loomcPath(argv0) : activeTc.loomcPath;
     const Colors col = Colors::detect(false);
     if (!quiet) {
         std::cout << col.bold << col.cyan << "Loom 1.1.0" << col.reset
@@ -893,6 +1257,7 @@ void buildProject(const fs::path& configFile, const char* argv0, bool release, b
                   << col.dim << "  Main source: " << col.reset << config.main << "\n"
                   << col.dim << "  Sources:     " << col.reset << sources.size() << " files\n"
                   << col.dim << "  Output:      " << col.reset << config.targetDir << "/" << config.executable << "\n"
+                  << col.dim << "  Toolchain:   " << col.reset << activeTc.name << " (" << activeTc.kind << ")\n"
                   << col.dim << "  Mode:        " << col.reset
                   << (release ? (col.bold + col.green + "Release") : (col.bold + col.yellow + "Debug")) << col.reset << "\n";
         if (!config.target.empty()) {
@@ -904,7 +1269,12 @@ void buildProject(const fs::path& configFile, const char* argv0, bool release, b
         if (config.baremetal) {
             std::cout << col.dim << "  Bare-metal:  " << col.reset << "true\n";
         }
-        if (verbose) std::cout << col.dim << "  Compiler:    " << col.reset << compiler.string() << "\n";
+        if (verbose) {
+            std::cout << col.dim << "  Compiler:    " << col.reset << compiler.string() << "\n";
+            if (!activeTc.rootDir.empty()) {
+                std::cout << col.dim << "  Root:        " << col.reset << activeTc.rootDir.string() << "\n";
+            }
+        }
     }
     std::error_code ecMmd;
     fs::remove(root / "loom-deps.mmd", ecMmd);
@@ -1140,8 +1510,8 @@ void buildProject(const fs::path& configFile, const char* argv0, bool release, b
                   << col.bold << output.lexically_relative(root).generic_string() << col.reset << "\n" << std::flush;
     }
 }
-void runProject(const fs::path& configFile, const char* argv0, bool release, bool verbose = false, bool optReport = false) {
-    buildProject(configFile, argv0, release, verbose, /*quiet=*/!verbose, optReport);
+void runProject(const fs::path& configFile, const char* argv0, bool release, bool verbose = false, bool optReport = false, const std::string& cliToolchain = "") {
+    buildProject(configFile, argv0, release, verbose, /*quiet=*/!verbose, optReport, cliToolchain);
     const fs::path configPath = weakCanonical(configFile);
     const fs::path root = weakCanonical(configPath.parent_path());
     const Config config = readConfig(configPath);
@@ -1225,21 +1595,26 @@ void cleanProject(const fs::path& configFile) {
 void usage() {
     std::cout << "Loom workspace tool 1.1.0\n\nUsage:\n"
                  "  loom new <name> [--rp2040]\n"
-                 "  loom build [--release] [--opt-report] [--verbose] [--config <path>]\n"
-                 "  loom run [--release] [--verbose] [--config <path>]\n"
+                 "  loom toolchains\n"
+                 "  loom use <toolchain>\n"
+                 "  loom build [--release] [--opt-report] [--verbose] [--config <path>] [--toolchain <name>]\n"
+                 "  loom run [--release] [--verbose] [--config <path>] [--toolchain <name>]\n"
                  "  loom clean [--config <path>]\n"
-                 "  loom graph [--config <path>] [--view calls|data] [--format mermaid|json] [--output <path>] [--check]\n"
+                 "  loom graph [--config <path>] [--view calls|data] [--format mermaid|json] [--output <path>] [--check] [--toolchain <name>]\n"
                  "  loom --help | --version\n\n"
                  "Commands:\n"
-                 "  new      Create a workspace (use --rp2040 for Raspberry Pi Pico bare-metal)\n"
-                 "  build    Analyze, compile Loom sources, and link a native or bare-metal binary\n"
-                 "  run      Build the workspace and run its executable (or show Pico flashing steps)\n"
-                 "  clean    Remove only the configured target directory\n"
-                 "  graph    Generate a call or variable-access graph from compiler semantics\n\n"
+                 "  new         Create a workspace (use --rp2040 for Raspberry Pi Pico bare-metal)\n"
+                 "  toolchains  List all installed toolchains and show the active default\n"
+                 "  use         Switch the active default toolchain (e.g. 'loom use rp2040', 'loom use native')\n"
+                 "  build       Analyze, compile Loom sources, and link a native or bare-metal binary\n"
+                 "  run         Build the workspace and run its executable (or show Pico flashing steps)\n"
+                 "  clean       Remove only the configured target directory\n"
+                 "  graph       Generate a call or variable-access graph from compiler semantics\n\n"
                  "Flags:\n"
-                 "  --release       Aggressive optimizations (-O3, native host CPU features, dead strip)\n"
-                 "  --opt-report    Print comprehensive optimization report (folding, vectorization, bounds)\n"
-                 "  --verbose       Print verbose build and execution information\n\n"
+                 "  --toolchain <name>  Override toolchain for this build (e.g. 'native', 'rp2040')\n"
+                 "  --release           Aggressive optimizations (-O3, native host CPU features, dead strip)\n"
+                 "  --opt-report        Print comprehensive optimization report (folding, vectorization, bounds)\n"
+                 "  --verbose           Print verbose build and execution information\n\n"
                  "Call Mermaid defaults to loom-deps.mmd; data Mermaid to loom-data.mmd; JSON to loom-graph.json.\n"
                  "Output emits ANSI colors when connected to a terminal (respects NO_COLOR).\n";
 }
@@ -1249,6 +1624,50 @@ int main(int argc, char** argv) {
         if (argc == 1 || std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h") { usage(); return 0; }
         const std::string command = argv[1];
         if (command == "--version" || command == "-V") { std::cout << "loom 1.1.0\n"; return 0; }
+        if (command == "toolchains" || command == "toolchain") {
+            bool verbose = false;
+            for (int i = 2; i < argc; ++i) {
+                if (std::string(argv[i]) == "--verbose" || std::string(argv[i]) == "-v") verbose = true;
+            }
+            printInstalledToolchains(argv[0], verbose);
+            return 0;
+        }
+        if (command == "use") {
+            if (argc < 3) {
+                const std::string current = getDefaultToolchainName();
+                std::cout << "Active toolchain: " << current << "\n"
+                          << "Usage: loom use <toolchain>\n";
+                return 0;
+            }
+            const std::string tcName = argv[2];
+            setDefaultToolchain(tcName);
+            const Colors col = Colors::detect(false);
+            std::cout << col.bold << col.green << "Using toolchain '" << tcName << "'." << col.reset << "\n";
+            return 0;
+        }
+        if (command == "set") {
+            if (argc < 4 || std::string(argv[2]) != "default") {
+                throw Error("usage: loom use <toolchain> (or loom set default <toolchain>)");
+            }
+            const std::string tcName = argv[3];
+            setDefaultToolchain(tcName);
+            const Colors col = Colors::detect(false);
+            std::cout << col.bold << col.green << "Using toolchain '" << tcName << "'." << col.reset << "\n";
+            return 0;
+        }
+        if (command == "default") {
+            if (argc >= 3) {
+                const std::string tcName = argv[2];
+                setDefaultToolchain(tcName);
+                const Colors col = Colors::detect(false);
+                std::cout << col.bold << col.green << "Using toolchain '" << tcName << "'." << col.reset << "\n";
+                return 0;
+            } else {
+                std::string current = getDefaultToolchainName();
+                std::cout << "Active toolchain: " << current << "\n";
+                return 0;
+            }
+        }
         if (command == "new") {
             if (argc < 3 || argc > 4) throw Error("usage: loom new <name> [--rp2040]");
             std::string name;
@@ -1266,6 +1685,7 @@ int main(int argc, char** argv) {
             fs::path config = "config.toml";
             bool release = false, verbose = false, check = false;
             bool optReport = false;
+            std::string cliToolchain;
             std::optional<fs::path> graphOutput;
             std::string graphFormat = "mermaid";
             std::string graphView = "calls";
@@ -1276,6 +1696,7 @@ int main(int argc, char** argv) {
                 else if (arg == "--verbose" && (command == "build" || command == "run")) verbose = true;
                 else if (arg == "--check" && command == "graph") check = true;
                 else if (arg == "--config" && i + 1 < argc) config = argv[++i];
+                else if (arg == "--toolchain" && i + 1 < argc) cliToolchain = argv[++i];
                 else if (arg == "--output" && i + 1 < argc && command == "graph") graphOutput = fs::path(argv[++i]);
                 else if (arg == "--format" && i + 1 < argc && command == "graph") graphFormat = argv[++i];
                 else if (arg == "--view" && i + 1 < argc && command == "graph") graphView = argv[++i];
@@ -1283,9 +1704,9 @@ int main(int argc, char** argv) {
             }
             if (command == "graph" && graphFormat != "mermaid" && graphFormat != "json") throw Error("unsupported graph format '" + graphFormat + "' (supported: mermaid, json)");
             if (command == "graph" && graphView != "calls" && graphView != "data") throw Error("unsupported graph view '" + graphView + "' (supported: calls, data)");
-            if (command == "build") buildProject(config, argv[0], release, verbose, /*quiet=*/false, optReport);
-            else if (command == "run") runProject(config, argv[0], release, verbose, optReport);
-            else if (command == "graph") graphProject(config, argv[0], graphOutput, check, graphView, graphFormat);
+            if (command == "build") buildProject(config, argv[0], release, verbose, /*quiet=*/false, optReport, cliToolchain);
+            else if (command == "run") runProject(config, argv[0], release, verbose, optReport, cliToolchain);
+            else if (command == "graph") graphProject(config, argv[0], graphOutput, check, graphView, graphFormat, cliToolchain);
             else cleanProject(config);
             return 0;
         }

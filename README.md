@@ -10,7 +10,7 @@
 [![Backend](https://img.shields.io/badge/backend-LLVM%20Native-blue.svg)](https://llvm.org/)
 [![Embedded](https://img.shields.io/badge/target-RP2040%20Bare--Metal-brightgreen.svg)](https://thirstymelon.github.io/Loom/embedded-rp2040.html)
 [![VS Code](https://img.shields.io/badge/vscode-extension%20in%20repo-informational.svg)](vscode-loom/)
-[![macOS DMG](https://img.shields.io/badge/macos-dmg%20in%20releases-lightgrey.svg)](https://github.com/thirstymelon/Loom/releases)
+[![macOS PKG](https://img.shields.io/badge/macos-pkg%20in%20releases-lightgrey.svg)](https://github.com/thirstymelon/Loom/releases)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 [Documentation Hub](https://thirstymelon.github.io/Loom/) • [Getting Started](https://thirstymelon.github.io/Loom/getting-started.html) • [Beginner's Guide](https://thirstymelon.github.io/Loom/tutorials/beginner-guide.html) • [RP2040 Bare-Metal](https://thirstymelon.github.io/Loom/embedded-rp2040.html) • [Language Reference](https://thirstymelon.github.io/Loom/reference.html)
@@ -40,10 +40,23 @@ Featuring a platform-independent C++17 frontend and an optimizing LLVM native-co
 
 ---
 
-## Downloads & VS Code Extension
+## Downloads & Toolchain Management
 
-- **macOS Desktop Native Toolchain (`Loom-1.1.0-macos-arm64-native.dmg`)**: Prebuilt Apple Silicon disk image attached to [GitHub Releases](https://github.com/thirstymelon/Loom/releases), providing an installer for native desktop application development (optimizing compiler `loomc`, workspace build driver `loom`, standard library `sdk/std/`, and the VS Code extension).
-- **RP2040 Embedded Toolchain (`Loom-1.1.0-macos-arm64-rp2040.dmg`)**: Dedicated bare-metal embedded disk image attached to [GitHub Releases](https://github.com/thirstymelon/Loom/releases), providing the complete Raspberry Pi Pico toolchain (ARM Cortex-M0+ `loomc`, build driver with automatic UF2 packager `loom`, full 16-peripheral RP2040 HAL/BSP, `boot.s`, `linker.ld`, and the VS Code extension).
+- **macOS Desktop Native Toolchain (`Loom-1.1.0-macos-arm64-native.pkg`)**: Prebuilt Apple Silicon installer package attached to [GitHub Releases](https://github.com/thirstymelon/Loom/releases), providing a dedicated installer for native desktop application development (universal build driver `loom`, native compiler `loomc`, standard library `sdk/std/`, and the VS Code extension).
+- **RP2040 Embedded Toolchain (`Loom-1.1.0-macos-arm64-rp2040.pkg`)**: Dedicated bare-metal embedded installer package attached to [GitHub Releases](https://github.com/thirstymelon/Loom/releases), providing the complete Raspberry Pi Pico toolchain (universal build driver `loom`, ARM Cortex-M0+ `loomc`, automatic UF2 packager, full 16-peripheral RP2040 HAL/BSP, `boot.s`, `linker.ld`, and the VS Code extension).
+- **Independent Coexistence & Toolchain Management**: Both packages install independently into `/usr/local/share/loom/toolchains/` without conflicts. Manage and switch toolchains easily:
+  ```bash
+  # View all installed toolchains and active default
+  loom toolchains
+
+  # Switch the active default toolchain
+  loom use rp2040
+  loom use native
+
+  # Override toolchain for a single build
+  loom build --toolchain rp2040
+  ```
+  Loom's native toolchain strictly prevents building embedded RP2040 projects and guides you to switch to the RP2040 toolchain.
 - **VS Code Extension**: The official VS Code extension for Loom language support is bundled directly within this repository as a prepackaged `.vsix` file ([`vscode-loom/Loom-1.1.0.vsix`](vscode-loom/Loom-1.1.0.vsix)):
   - **Syntax Highlighting**: Complete TextMate grammar covering blocks, keywords, built-in types, operators, and string interpolation.
   - **Editor Productivity**: Automated code snippets, bracket autocompletion, intelligent indentation rules, and file icon associations.

@@ -81,6 +81,11 @@ struct Type {
     bool enumSigned = false;
     unsigned arraySize = 0;
     std::shared_ptr<Type> pointeeType = nullptr;
+
+    Type() = default;
+    Type(TypeKind k, unsigned b = 0, std::string n = "", bool es = false)
+        : kind(k), bits(b), name(std::move(n)), enumSigned(es), arraySize(0), pointeeType(nullptr) {}
+
     static Type boolean() {
         return {TypeKind::Boolean, 1};
     }
@@ -316,14 +321,18 @@ enum class K {
     Unsupported
 };
 struct Token {
-    K kind;
+    K kind = K::Id;
     std::string text;
-    int line;
+    int line = 1;
     std::uint64_t magnitude = 0;
     std::size_t sourceIndex = 0;
     int column = 1;
     std::size_t offset = 0;
     std::size_t length = 1;
+
+    Token() = default;
+    Token(K k, std::string t, int l, std::uint64_t m = 0, std::size_t src = 0, int col = 1, std::size_t off = 0, std::size_t len = 1)
+        : kind(k), text(std::move(t)), line(l), magnitude(m), sourceIndex(src), column(col), offset(off), length(len) {}
 };
 class Lexer {
     std::string source;
@@ -455,6 +464,7 @@ class Lexer {
                             case 'n': value += '\n'; break;
                             case 'r': value += '\r'; break;
                             case 't': value += '\t'; break;
+                            case '0': value += '\0'; break;
                             case '\\': value += '\\'; break;
                             case '"': value += '"'; break;
                             default: throw Error("line " + std::to_string(atLine) + ": unsupported string escape");
@@ -754,10 +764,14 @@ struct RecordDecl { std::string name; std::vector<RecordField> fields; int line;
 struct VarDecl {
     std::string name;
     Type type;
-    int line;
+    int line = 1;
     bool constant = false;
     std::unique_ptr<Expr> initializer;
     std::size_t sourceIndex = 0;
+
+    VarDecl() = default;
+    VarDecl(std::string n, Type t, int l, bool c = false, std::unique_ptr<Expr> init = nullptr, std::size_t src = 0)
+        : name(std::move(n)), type(std::move(t)), line(l), constant(c), initializer(std::move(init)), sourceIndex(src) {}
 };
 struct Function {
     std::string name;
@@ -938,6 +952,7 @@ class Parser {
             Type elem = parseTypeRef();
             expect(K::Comma, "expected ',' in Array[T, N]");
             Token sz = expect(K::Number, "expected array size");
+            if (sz.magnitude == 0) fail("array size must be greater than zero, found 0");
             expect(K::RBracket, "expected ']' after Array size");
             base = Type::arrayType(std::move(elem), static_cast<unsigned>(sz.magnitude));
         } else if (at(K::Id)) {
@@ -957,6 +972,7 @@ class Parser {
                 Type elem = parseTypeRef();
                 expect(K::Comma, "expected ',' in Array[T, N]");
                 Token sz = expect(K::Number, "expected array size");
+                if (sz.magnitude == 0) fail("array size must be greater than zero, found 0");
                 expect(K::RBracket, "expected ']' after Array size");
                 base = Type::arrayType(std::move(elem), static_cast<unsigned>(sz.magnitude));
             } else {
@@ -977,6 +993,7 @@ class Parser {
                 if (at(K::Id)) pop();
                 expect(K::LBracket, "expected '[' after 'Array'");
                 Token sz = expect(K::Number, "expected array size in Array[N]");
+                if (sz.magnitude == 0) fail("array size must be greater than zero, found 0");
                 expect(K::RBracket, "expected ']' after array size");
                 base = Type::arrayType(std::move(base), static_cast<unsigned>(sz.magnitude));
             } else {
@@ -1185,7 +1202,7 @@ class Parser {
         }
         return lhs;
     }
-    void endPair(const std::string& name, const std::string& kind) {
+    void endPair([[maybe_unused]] const std::string& name, const std::string& kind) {
         expect(K::End, "expected 'End " + kind + "' before function end");
         Token close = expect(kind == "If" ? K::If : (kind == "Match" ? K::Match : K::Loop), "expected 'End " + kind + "'");
         (void)close;
@@ -1643,14 +1660,12 @@ class Parser {
         }
         return out;
     }
-    VarDecl declaration(bool global = false) {
+    VarDecl declaration([[maybe_unused]] bool global = false) {
         Token n = expect(K::Id, "expected identifier in declaration");
         expect(K::Colon, "expected ':' after '" + n.text + "'");
         bool constant = eat(K::Constant);
         Type typ = parseTypeRef();
-        VarDecl value{n.text, std::move(typ), n.line};
-        value.sourceIndex = n.sourceIndex;
-        value.constant = constant;
+        VarDecl value(n.text, std::move(typ), n.line, constant, nullptr, n.sourceIndex);
         if (eat(K::Assign)) value.initializer = expression();
         if (constant && !value.initializer)
             throw Error("line " + std::to_string(n.line) + ": Constant '" + n.text + "' requires an initializer");
@@ -2080,7 +2095,8 @@ class Analyzer {
                 if (src.kind == TypeKind::Pointer && dst.integer() && dst.bits < 32) {
                     throw Error("line " + std::to_string(e.line) + ": cannot cast 64-bit Pointer to " + std::to_string(dst.bits) + "-bit integer '" + typeName(dst) + "'; truncation would corrupt address");
                 }
-                if ((srcBits > dstBits && dstBits > 0) || (src.kind == TypeKind::Float && dst.integer())) {
+                const bool isLiteralAndFits = (e.left->kind == Expr::Kind::Integer && fits(e.left->magnitude, dst));
+                if (!isLiteralAndFits && ((srcBits > dstBits && dstBits > 0) || (src.kind == TypeKind::Float && dst.integer()))) {
                     bool useColor = false;
 #ifndef _WIN32
                     if ((isatty(STDERR_FILENO) || std::getenv("LOOM_COLOR") != nullptr) && std::getenv("NO_COLOR") == nullptr) useColor = true;
@@ -3055,6 +3071,62 @@ enum class TargetFormat {
     COFF
 };
 
+inline std::filesystem::path getExecutablePath(const char* argv0 = nullptr) {
+    std::filesystem::path exePath;
+#if defined(__APPLE__)
+    char buf[1024];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) == 0) {
+        std::error_code ec;
+        exePath = std::filesystem::canonical(buf, ec);
+    }
+#elif defined(__linux__)
+    std::error_code ec;
+    exePath = std::filesystem::canonical("/proc/self/exe", ec);
+#elif defined(_WIN32)
+    char buf[MAX_PATH];
+    if (GetModuleFileNameA(NULL, buf, MAX_PATH) != 0) {
+        std::error_code ec;
+        exePath = std::filesystem::canonical(buf, ec);
+    }
+#endif
+    if (exePath.empty() && argv0 && argv0[0] != '\0') {
+        std::error_code ec;
+        exePath = std::filesystem::absolute(argv0, ec);
+    }
+    return exePath;
+}
+
+inline std::string detectToolchainKind(const char* argv0 = nullptr) {
+#ifdef LOOM_TOOLCHAIN_NATIVE_ONLY
+    return "native";
+#endif
+#ifdef LOOM_TOOLCHAIN_RP2040_ONLY
+    return "rp2040";
+#endif
+    if (const char* env = std::getenv("LOOM_TOOLCHAIN_KIND")) {
+        if (*env) return env;
+    }
+    std::error_code ec;
+    std::filesystem::path exe = getExecutablePath(argv0);
+    if (!exe.empty()) {
+        std::filesystem::path dir = exe.parent_path();
+        for (const auto& cand : {dir / "toolchain.toml", dir.parent_path() / "toolchain.toml", dir / "manifest.toml", dir.parent_path() / "manifest.toml"}) {
+            if (std::filesystem::is_regular_file(cand, ec)) {
+                std::ifstream f(cand);
+                std::string line;
+                while (std::getline(f, line)) {
+                    if (line.find("kind") != std::string::npos && line.find("native") != std::string::npos) return "native";
+                    if (line.find("kind") != std::string::npos && (line.find("embedded") != std::string::npos || line.find("rp2040") != std::string::npos)) return "rp2040";
+                    if (line.find("name") != std::string::npos && line.find("native") != std::string::npos) return "native";
+                    if (line.find("name") != std::string::npos && line.find("rp2040") != std::string::npos) return "rp2040";
+                }
+            }
+        }
+    }
+    return "universal";
+}
+
 struct TargetConfig {
     std::string triple;
     TargetArch arch = TargetArch::Unknown;
@@ -3114,6 +3186,31 @@ struct TargetConfig {
         if (t.isOSBinFormatMachO()) cfg.format = TargetFormat::MachO;
         else if (t.isOSBinFormatELF()) cfg.format = TargetFormat::ELF;
         else if (t.isOSBinFormatCOFF()) cfg.format = TargetFormat::COFF;
+
+        const std::string tcKind = detectToolchainKind();
+        if (tcKind == "native") {
+            bool isEmbedded = baremetal || t.isThumb() ||
+                              customTriple.find("thumb") != std::string::npos ||
+                              customTriple.find("none-eabi") != std::string::npos ||
+                              customCpu == "cortex-m0plus";
+            if (isEmbedded) {
+                throw Error("target '" + (customTriple.empty() ? "thumbv6m-none-eabi" : customTriple) +
+                            "' is not supported by the Loom native desktop toolchain.\n"
+                            "  Please install and switch to the 'rp2040' embedded toolchain:\n"
+                            "    loom use rp2040");
+            }
+        } else if (tcKind == "rp2040") {
+            bool isEmbedded = baremetal || t.isThumb() ||
+                              customTriple.find("thumb") != std::string::npos ||
+                              customTriple.find("none-eabi") != std::string::npos ||
+                              customCpu == "cortex-m0plus";
+            if (!isEmbedded) {
+                throw Error("target '" + cfg.triple +
+                            "' is not supported by the Loom 'rp2040' embedded toolchain.\n"
+                            "  Please install and switch to the 'native' desktop toolchain:\n"
+                            "    loom use native");
+            }
+        }
 
         if (!customCpu.empty()) {
             cfg.cpu = customCpu;
@@ -3353,6 +3450,8 @@ public:
         if (s.kind == Stmt::Kind::Call) {
             if (!pureSet.count(s.name)) return false;
         }
+        if (s.expr && !isPureExpr(*s.expr, pureSet)) return false;
+        if (s.target && !isPureExpr(*s.target, pureSet)) return false;
         for (const auto& child : s.body) {
             if (!isPureStmt(child, pureSet)) return false;
         }
@@ -3360,6 +3459,7 @@ public:
             if (!isPureStmt(child, pureSet)) return false;
         }
         for (const auto& mc : s.matchCases) {
+            if (mc.pattern && !isPureExpr(*mc.pattern, pureSet)) return false;
             for (const auto& child : mc.body) {
                 if (!isPureStmt(child, pureSet)) return false;
             }
@@ -5145,19 +5245,7 @@ std::vector<std::filesystem::path> getSdkIncludeDirs(const char* argv0, const st
             }
         }
     }
-    std::filesystem::path exePath;
-#if defined(__APPLE__)
-    char buf[1024];
-    uint32_t size = sizeof(buf);
-    if (_NSGetExecutablePath(buf, &size) == 0) {
-        std::error_code ec;
-        exePath = std::filesystem::canonical(buf, ec);
-    }
-#endif
-    if (exePath.empty() && argv0 && argv0[0] != '\0') {
-        std::error_code ec;
-        exePath = std::filesystem::absolute(argv0, ec);
-    }
+    std::filesystem::path exePath = getExecutablePath(argv0);
     if (!exePath.empty()) {
         std::filesystem::path exeDir = exePath.parent_path();
         for (const auto& rel : {
