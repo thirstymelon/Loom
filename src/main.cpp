@@ -2402,12 +2402,12 @@ class Analyzer {
                         result = Type::boolean();
                         break;
                     }
-                    if (!a.numeric() && a.kind != TypeKind::Boolean && a.kind != TypeKind::Enum && a.kind != TypeKind::Pointer)
+                    if (!a.numeric() && a.kind != TypeKind::Boolean && a.kind != TypeKind::Enum && a.kind != TypeKind::Pointer && a.kind != TypeKind::Character)
                         throw Error("line " + std::to_string(e.line) +
                                     ": equality requires compatible scalar operands");
                     result = Type::boolean();
                 } else if (op == "<" || op == "<=" || op == ">" || op == ">=") {
-                    if (!a.numeric())
+                    if (!a.numeric() && a.kind != TypeKind::Character)
                         throw Error("line " + std::to_string(e.line) +
                                     ": relational comparison requires numeric operands");
                     result = Type::boolean();
@@ -2723,6 +2723,56 @@ class Analyzer {
         fileModules = mods;
         fileImports = imps;
         fileUses = uses;
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (auto& [srcIdx, impSet] : fileImports) {
+                std::vector<std::string> toAdd;
+                for (const auto& impName : impSet) {
+                    for (const auto& [otherIdx, otherModName] : fileModules) {
+                        if (lower(otherModName) == lower(impName)) {
+                            auto it = fileImports.find(otherIdx);
+                            if (it != fileImports.end()) {
+                                for (const auto& transitiveImp : it->second) {
+                                    if (!impSet.count(transitiveImp)) {
+                                        toAdd.push_back(transitiveImp);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!toAdd.empty()) {
+                    changed = true;
+                    for (const auto& a : toAdd) impSet.insert(a);
+                }
+            }
+        }
+        changed = true;
+        while (changed) {
+            changed = false;
+            for (auto& [srcIdx, useSet] : fileUses) {
+                std::vector<std::string> toAdd;
+                for (const auto& useName : useSet) {
+                    for (const auto& [otherIdx, otherModName] : fileModules) {
+                        if (lower(otherModName) == lower(useName)) {
+                            auto it = fileUses.find(otherIdx);
+                            if (it != fileUses.end()) {
+                                for (const auto& transitiveUse : it->second) {
+                                    if (!useSet.count(transitiveUse)) {
+                                        toAdd.push_back(transitiveUse);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!toAdd.empty()) {
+                    changed = true;
+                    for (const auto& a : toAdd) useSet.insert(a);
+                }
+            }
+        }
         signatures.clear();
         globalTypes.clear();
         globalConstants.clear();
@@ -4289,7 +4339,7 @@ class Generator {
             return builder.CreateICmpEQ(a, b, "eq");
         if (op == "!=")
             return builder.CreateICmpNE(a, b, "ne");
-        if (t.kind == TypeKind::Unsigned) {
+        if (t.kind == TypeKind::Unsigned || t.kind == TypeKind::Character) {
             if (op == "<")
                 return builder.CreateICmpULT(a, b, "lt");
             if (op == "<=")
@@ -4824,8 +4874,11 @@ class Generator {
                 args.push_back(loomType(p.type));
             auto* ft = llvm::FunctionType::get(f.result ? loomType(*f.result) : llvm::Type::getVoidTy(context),
                                                args, false);
-            auto* fn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, f.name, *module);
-            fn->addFnAttr(llvm::Attribute::NoUnwind);
+            auto* fn = module->getFunction(f.name);
+            if (!fn) {
+                fn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, f.name, *module);
+                fn->addFnAttr(llvm::Attribute::NoUnwind);
+            }
             functions.emplace(f.name, fn);
         }
         for (const auto& f : fs) {
@@ -5173,7 +5226,7 @@ std::vector<std::filesystem::path> getSdkIncludeDirs(const char* argv0, const st
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--version") {
-        std::cout << "loomc 1.0.0 (LLVM " << LLVM_VERSION_STRING << ")\n";
+        std::cout << "loomc 1.1.0 (LLVM " << LLVM_VERSION_STRING << ")\n";
         return 0;
     }
     bool nativeEntry = false, objectOutput = false, release = false, graphData = false;

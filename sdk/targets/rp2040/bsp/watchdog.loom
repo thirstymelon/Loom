@@ -1,0 +1,98 @@
+Module Watchdog
+
+Import System
+use System
+
+Block Global
+    Declares
+        WATCHDOG_BOOTSEL_MAGIC : Constant Unsigned_32 = 0xB007C0D3
+End Global
+
+Block Watchdog_Enable Takes
+    Timeout_Ms : Signed_64
+    Pause_On_Debug : Boolean
+    Declares
+        Cycles_Per_Us : Unsigned_32
+        Reload_Val : Signed_64
+        Ctrl : Signed_64
+    Implements
+        # 1. Setup tick generator: 12 cycles of 12.000 MHz ref_clk = 1.0 us tick
+        # Enable tick: (1 LSL 9) | 12 = 512 | 12 = 524
+        Vol_Write_32(0x4005802C, 524)
+
+        # 2. RP2040 counts down at 2 * clk_tick (0.5 us per tick)
+        # Timeout_Us = Timeout_Ms * 1000
+        # Reload_Val = Timeout_Us * 2
+        Reload_Val = Timeout_Ms * 2000
+        If (Reload_Val > 0x00FFFFFF)
+            Reload_Val = 0x00FFFFFF
+        End If
+
+        Vol_Write_32(0x40058004, Cast[Unsigned_32](Reload_Val))
+
+        # 3. Setup CTRL register:
+        # ENABLE is bit 30 (0x40000000 = 1073741824)
+        Ctrl = 0x40000000 | (Reload_Val & 0x00FFFFFF)
+        If (Pause_On_Debug == True)
+            # PAUSE_JTAG (bit 24), PAUSE_DBG0 (bit 25), PAUSE_DBG1 (bit 26) = 0x07000000
+            Ctrl = Ctrl | 0x07000000
+        End If
+
+        Vol_Write_32(0x40058000, Cast[Unsigned_32](Ctrl))
+End Watchdog_Enable
+
+Block Watchdog_Feed
+    Declares
+        Ctrl : Unsigned_32
+        Time_Val : Unsigned_32
+    Implements
+        # Reload the watchdog timer with its initial configured load value
+        Ctrl = Vol_Read_32(0x40058000)
+        Time_Val = Ctrl & 0x00FFFFFF
+        Vol_Write_32(0x40058004, Time_Val)
+End Watchdog_Feed
+
+Block Watchdog_Reboot
+    Implements
+        # Force immediate reboot by setting TRIGGER (bit 31 = 0x80000000)
+        Vol_Write_32(0x40058000, 0x80000000)
+End Watchdog_Reboot
+
+Block Watchdog_Caused_Reboot
+    Produces Boolean
+    Declares
+        Reason : Unsigned_32
+    Implements
+        Reason = Vol_Read_32(0x40058008)
+        # Bit 0 = timer timeout, Bit 1 = force bit
+        Give ((Reason & 3) != 0)
+End Watchdog_Caused_Reboot
+
+Block Watchdog_Set_Scratch Takes
+    Index : Signed_64
+    Value : Unsigned_32
+    Declares
+        Addr : Signed_64
+    Implements
+        Addr = 0x4005800C + ((Index & 7) * 4)
+        Vol_Write_32(Addr, Value)
+End Watchdog_Set_Scratch
+
+Block Watchdog_Get_Scratch Takes
+    Index : Signed_64
+    Produces Unsigned_32
+    Declares
+        Addr : Signed_64
+    Implements
+        Addr = 0x4005800C + ((Index & 7) * 4)
+        Give Vol_Read_32(Addr)
+End Watchdog_Get_Scratch
+
+Block Watchdog_Reboot_To_Bootsel
+    Implements
+        # RP2040 Bootrom checks SCRATCH4 for magic value 0xB007C0D3 and SCRATCH5 for 0
+        Watchdog_Set_Scratch(4, 0xB007C0D3)
+        Watchdog_Set_Scratch(5, 0x00000000)
+        Watchdog_Reboot()
+End Watchdog_Reboot_To_Bootsel
+

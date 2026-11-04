@@ -372,28 +372,92 @@ function activate(context) {
       provideDocumentFormattingEdits(document, options) {
         const size = vscode.workspace.getConfiguration('loom').get('format.indentSize', 4);
         const unit = options.insertSpaces ? ' '.repeat(size) : '\t';
-        let block = false, body = false, controlDepth = 0, inDeclares = false;
+        let inBlock = false;
+        let inType = false;
+        let blockHasInlineImplements = false;
+        let blockHasInlineTakes = false;
+        let currentSection = '';
+        let controlStack = [];
         const edits = [];
+
         for (let i = 0; i < document.lineCount; i++) {
-          const line = document.lineAt(i), raw = line.text.trim();
-          if (!raw) continue;
-          const isEndControl = /^end\s+(if|loop|match)\b/i.test(raw);
-          const isEndBlock = block && /^end\s+[a-z_][a-z0-9_]*\s*$/i.test(raw) && !isEndControl;
-          if (isEndControl) controlDepth = Math.max(0, controlDepth - 1);
-          if (isEndBlock) { block = false; body = false; inDeclares = false; }
-          let depth = block ? 1 : 0;
-          if (inDeclares && !/^(implements|produces|end)\b/i.test(raw)) depth = 2;
-          if (body && !isEndBlock && !isEndControl) depth = 2 + controlDepth;
-          if (/^declares\s*$/i.test(raw)) { depth = 1; inDeclares = true; }
-          if (/^takes\s*$/i.test(raw)) depth = block ? 1 : 0;
-          if (/^(produces|implements)\b/i.test(raw)) depth = 1;
-          if (isEndControl) depth = 2 + controlDepth;
-          if (isEndBlock) depth = 0;
-          const desired = unit.repeat(depth) + raw;
+          const line = document.lineAt(i);
+          const raw = line.text.trim();
+          if (!raw) {
+            if (line.text.length > 0) edits.push(vscode.TextEdit.replace(line.range, ''));
+            continue;
+          }
+
+          const isEndIf = /^end\s+if\b/i.test(raw);
+          const isEndLoop = /^end\s+loop\b/i.test(raw);
+          const isEndMatch = /^end\s+match\b/i.test(raw);
+          const isEndEnsure = /^end\s+ensure\b/i.test(raw);
+          const isElseIf = /^else\s+if\b/i.test(raw);
+          const isElse = /^(else\b|else\s*:)/i.test(raw);
+          const isWhen = /^when\b/i.test(raw);
+          const isEndGeneral = /^end\s+[a-z_][a-z0-9_]*\s*$/i.test(raw) && !isEndIf && !isEndLoop && !isEndMatch && !isEndEnsure;
+
+          let lineDepth = 0;
+
+          if (isEndIf || isEndLoop || isEndMatch || isEndEnsure) {
+            if (controlStack.length > 0 && controlStack[controlStack.length - 1].type === 'when') controlStack.pop();
+            if (controlStack.length > 0) controlStack.pop();
+            const base = blockHasInlineImplements ? 1 : 2;
+            lineDepth = base + controlStack.length;
+          } else if (isElseIf || isElse) {
+            if (controlStack.length > 0 && controlStack[controlStack.length - 1].type === 'when') controlStack.pop();
+            const base = blockHasInlineImplements ? 1 : 2;
+            lineDepth = base + (controlStack.length > 0 ? controlStack.length - 1 : 0);
+          } else if (isWhen) {
+            if (controlStack.length > 0 && controlStack[controlStack.length - 1].type === 'when') controlStack.pop();
+            const base = blockHasInlineImplements ? 1 : 2;
+            lineDepth = base + controlStack.length;
+          } else if (isEndGeneral) {
+            lineDepth = 0;
+            inBlock = false;
+            inType = false;
+            currentSection = '';
+            controlStack = [];
+          } else if (/^block\b/i.test(raw)) {
+            lineDepth = 0;
+            inBlock = true;
+            inType = false;
+            controlStack = [];
+            blockHasInlineImplements = /\bimplements\b/i.test(raw);
+            blockHasInlineTakes = /\btakes\b/i.test(raw);
+            currentSection = blockHasInlineTakes ? 'takes' : (blockHasInlineImplements ? 'implements' : '');
+          } else if (/^(record|enum|extern\s+block)\b/i.test(raw)) {
+            lineDepth = 0;
+            inType = true;
+            inBlock = false;
+            currentSection = '';
+          } else if (/^(declares|implements|takes|produces)\b/i.test(raw)) {
+            lineDepth = 1;
+            if (/^declares\b/i.test(raw)) currentSection = 'declares';
+            else if (/^implements\b/i.test(raw)) currentSection = 'implements';
+            else if (/^takes\b/i.test(raw)) currentSection = 'takes';
+            else if (/^produces\b/i.test(raw)) currentSection = 'produces';
+          } else if (inType) {
+            lineDepth = 1;
+          } else if (inBlock) {
+            if (currentSection === 'takes' && blockHasInlineTakes) {
+              lineDepth = 1;
+            } else {
+              const base = blockHasInlineImplements ? 1 : 2;
+              lineDepth = base + controlStack.length;
+            }
+          } else {
+            lineDepth = 0;
+          }
+
+          const desired = unit.repeat(Math.max(0, lineDepth)) + raw;
           if (line.text !== desired) edits.push(vscode.TextEdit.replace(line.range, desired));
-          if (/^block\s+/i.test(raw)) { block = true; body = false; inDeclares = false; controlDepth = 0; }
-          if (/^implements\b/i.test(raw)) { body = true; inDeclares = false; }
-          if (/^if\b/i.test(raw) || /^loop\b/i.test(raw) || /^match\b/i.test(raw)) controlDepth++;
+
+          if (/^if\b/i.test(raw)) controlStack.push({ type: 'if' });
+          else if (/^loop\b/i.test(raw)) controlStack.push({ type: 'loop' });
+          else if (/^match\b/i.test(raw)) controlStack.push({ type: 'match' });
+          else if (/^ensure\s*$/i.test(raw)) controlStack.push({ type: 'ensure' });
+          else if (isWhen || /^else\s*:\s*$/i.test(raw)) controlStack.push({ type: 'when' });
         }
         return edits;
       }
@@ -401,9 +465,9 @@ function activate(context) {
     vscode.languages.registerCompletionItemProvider('loom', {
       provideCompletionItems() {
         const words = [
-          'Block','Takes','Produces','Declares','Implements','End','If','Else','Until','While','Loop','Exit','Skip','Give','Write',
+          'Block','Takes','Produces','Declares','Implements','End','If','Else','Until','While','Loop','Exit','Skip','Give','Write','Write_UART',
           'Match','When','use','Use','while','until',
-          'Call','Address','Deref','Pointer','Slice','Array','Ensure','Cast','Null','Extern','Import','Record','Enum','Module','Constant',
+          'Address','Deref','Pointer','Slice','Array','Ensure','Cast','Null','Extern','Import','Record','Enum','Module','Constant',
           'And','Or','Not','LSL','LSR','Mod','True','False',
           'Signed_8','Signed_16','Signed_32','Signed_64','Unsigned_8','Unsigned_16','Unsigned_32','Unsigned_64',
           'Float_32','Float_64','Boolean','String','Character','Integer','Int',
@@ -441,7 +505,7 @@ function activate(context) {
           produces:'Declares the function result type (supports scalars, pointers, and Records).',
           declares:'Begins local variable declarations.',
           implements:'Begins the function body.',
-          call:'`FunctionName(...)` invokes a function or procedure directly (the `Call` keyword has been retired).',
+          call:'Note: The `Call` keyword has been removed from Loom. Invoke functions and procedures directly: `FunctionName(...)` or `Var = FunctionName(...)`.',
           address:'`Address(Variable)` takes the memory address of an lvalue and produces a `T Pointer`.',
           deref:'`Deref(Pointer)` accesses the value pointed to by a pointer. Can be read or assigned (`Deref(P) = Val`).',
           pointer:'`T Pointer` represents a typed raw memory pointer to type `T`.',

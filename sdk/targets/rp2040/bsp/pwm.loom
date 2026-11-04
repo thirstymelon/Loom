@@ -1,75 +1,141 @@
 Module PWM
 
 Import System
+Import GPIO
 use System
+use GPIO
 
 Block Global
-Declares
-    PWM_MAX_LEVEL : Constant Signed_64 = 65535
+    Declares
+        PWM_MAX_LEVEL : Constant Signed_64 = 65535
+
+        PWM_SLICE_0   : Constant Signed_64 = 0
+        PWM_SLICE_1   : Constant Signed_64 = 1
+        PWM_SLICE_2   : Constant Signed_64 = 2
+        PWM_SLICE_3   : Constant Signed_64 = 3
+        PWM_SLICE_4   : Constant Signed_64 = 4
+        PWM_SLICE_5   : Constant Signed_64 = 5
+        PWM_SLICE_6   : Constant Signed_64 = 6
+        PWM_SLICE_7   : Constant Signed_64 = 7
+
+        PWM_CHAN_A    : Constant Signed_64 = 0
+        PWM_CHAN_B    : Constant Signed_64 = 1
 End Global
 
 Block PWM_Init Takes
     Pin : Signed_64
-Declares
-    Ctrl_Addr : Signed_64
-    Pwm_Slice : Signed_64
-    Slice_Offset : Signed_64
-Implements
-    # 1. Unreset PWM block (bit 14 = 16384)
-    Unreset_Peripherals(Cast[Unsigned_32](16384))
+    Declares
+        Pwm_Slice : Signed_64
+        Slice_Offset : Signed_64
+    Implements
+        # 1. Unreset PWM block (bit 14 = 16384)
+        Unreset_Peripherals(RESET_PWM)
 
-    # 2. Configure Pin Function to PWM (FUNCSEL = 4)
-    Ctrl_Addr = 0x40014004 + (Pin * 8)
-    Vol_Write_32(Ctrl_Addr, 4)
+        # 2. Configure Pin Function to PWM (FUNCSEL = 4)
+        Set_Function(Pin, GPIO_FUNC_PWM)
 
-    # 3. Setup PWM slice (Pwm_Slice = (Pin / 2) & 7)
-    Pwm_Slice = (Pin / 2) & 7
-    Slice_Offset = 0x40050000 + (Pwm_Slice * 20)
+        # 3. Setup PWM slice: each slice controls 2 pins (slice = (Pin / 2) & 7)
+        Pwm_Slice = (Pin / 2) & 7
+        Slice_Offset = 0x40050000 + (Pwm_Slice * 20)
 
-    # Set TOP to 65535 (Offset 0x10)
-    Vol_Write_32(Slice_Offset + 16, 65535)
+        # Set TOP to 65535 (Offset 0x10)
+        Vol_Write_32(Slice_Offset + 16, 65535)
 
-    # Enable slice: CSR bit 0 = 1 (Offset 0x00)
-    Vol_Write_32(Slice_Offset, 1)
+        # Enable slice: CSR bit 0 = 1 (Offset 0x00)
+        Vol_Write_32(Slice_Offset, 1)
 End PWM_Init
+
+Block PWM_Set_Clock_Div Takes
+    Pin : Signed_64
+    Int_Div : Signed_64
+    Frac_Div : Signed_64
+    Declares
+        Pwm_Slice : Signed_64
+        Slice_Offset : Signed_64
+        Div_Val : Signed_64
+    Implements
+        Pwm_Slice = (Pin / 2) & 7
+        Slice_Offset = 0x40050000 + (Pwm_Slice * 20)
+        # INT in [11:4], FRAC in [3:0]
+        Div_Val = ((Int_Div & 255) LSL 4) | (Frac_Div & 15)
+        Vol_Write_32(Slice_Offset + 4, Cast[Unsigned_32](Div_Val))
+End PWM_Set_Clock_Div
+
+Block PWM_Set_Wrap Takes
+    Pin : Signed_64
+    Wrap : Signed_64
+    Declares
+        Pwm_Slice : Signed_64
+        Slice_Offset : Signed_64
+    Implements
+        Pwm_Slice = (Pin / 2) & 7
+        Slice_Offset = 0x40050000 + (Pwm_Slice * 20)
+        Vol_Write_32(Slice_Offset + 16, Cast[Unsigned_32](Wrap & 0xFFFF))
+End PWM_Set_Wrap
+
+Block PWM_Set_Enabled Takes
+    Pin : Signed_64
+    Enabled : Boolean
+    Declares
+        Pwm_Slice : Signed_64
+        Slice_Offset : Signed_64
+        Csr : Unsigned_32
+    Implements
+        Pwm_Slice = (Pin / 2) & 7
+        Slice_Offset = 0x40050000 + (Pwm_Slice * 20)
+        Csr = Vol_Read_32(Slice_Offset)
+        If (Enabled == True)
+            Csr = Csr | 1
+        Else
+            Csr = Csr & 0xFFFFFFFE
+        End If
+        Vol_Write_32(Slice_Offset, Csr)
+End PWM_Set_Enabled
+
+Block PWM_Set_Mask_Enabled Takes
+    Mask : Unsigned_32
+    Implements
+        # PWM_EN register at offset 0xA0 controls all 8 slices simultaneously
+        Vol_Write_32(0x400500A0, Mask & 0xFF)
+End PWM_Set_Mask_Enabled
 
 Block Set_PWM_Raw Takes
     Pin : Signed_64
     Level : Signed_64
-Declares
-    Pwm_Slice : Signed_64
-    Chan : Signed_64
-    Cc_Addr : Signed_64
-    Current_Cc : Unsigned_32
-    New_Cc : Signed_64
-Implements
-    Pwm_Slice = (Pin / 2) & 7
-    Chan = Pin & 1
-    Cc_Addr = 0x40050000 + (Pwm_Slice * 20) + 12
+    Declares
+        Pwm_Slice : Signed_64
+        Chan : Signed_64
+        Cc_Addr : Signed_64
+        Current_Cc : Unsigned_32
+        New_Cc : Signed_64
+    Implements
+        Pwm_Slice = (Pin / 2) & 7
+        Chan = Pin & 1
+        Cc_Addr = 0x40050000 + (Pwm_Slice * 20) + 12
 
-    Current_Cc = Vol_Read_32(Cc_Addr)
-    If (Chan == 0)
-        # Channel A: bits 15:0
-        New_Cc = (Cast[Signed_64](Current_Cc) & 0xFFFF0000) | (Level & 0xFFFF)
-    Else
-        # Channel B: bits 31:16
-        New_Cc = (Cast[Signed_64](Current_Cc) & 0x0000FFFF) | ((Level & 0xFFFF) LSL 16)
-    End If
-    Vol_Write_32(Cc_Addr, New_Cc)
+        Current_Cc = Vol_Read_32(Cc_Addr)
+        If (Chan == 0)
+            # Channel A: bits 15:0
+            New_Cc = (Cast[Signed_64](Current_Cc) & 0xFFFF0000) | (Level & 0xFFFF)
+        Else
+            # Channel B: bits 31:16
+            New_Cc = (Cast[Signed_64](Current_Cc) & 0x0000FFFF) | ((Level & 0xFFFF) LSL 16)
+        End If
+        Vol_Write_32(Cc_Addr, Cast[Unsigned_32](New_Cc))
 End Set_PWM_Raw
 
 Block Set_PWM_Duty Takes
     Pin : Signed_64
     Duty_Percent : Signed_64
-Declares
-    Level : Signed_64
-Implements
-    If (Duty_Percent <= 0)
-        Level = 0
-    Else If (Duty_Percent >= 100)
-        Level = 65535
-    Else
-        Level = (Duty_Percent * 65535) / 100
-    End If
-    Set_PWM_Raw(Pin, Level)
+    Declares
+        Level : Signed_64
+    Implements
+        If (Duty_Percent <= 0)
+            Level = 0
+        Else If (Duty_Percent >= 100)
+            Level = 65535
+        Else
+            Level = (Duty_Percent * 65535) / 100
+        End If
+        Set_PWM_Raw(Pin, Level)
 End Set_PWM_Duty

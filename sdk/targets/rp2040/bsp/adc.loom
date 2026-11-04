@@ -1,79 +1,134 @@
 Module ADC
 
 Import System
+Import GPIO
 use System
+use GPIO
 
 Block Global
-Declares
-    ADC_GPIO_26     : Constant Signed_64 = 0
-    ADC_GPIO_27     : Constant Signed_64 = 1
-    ADC_GPIO_28     : Constant Signed_64 = 2
-    ADC_GPIO_29     : Constant Signed_64 = 3
-    ADC_TEMP_SENSOR : Constant Signed_64 = 4
+    Declares
+        ADC_GPIO_26     : Constant Signed_64 = 0
+        ADC_GPIO_27     : Constant Signed_64 = 1
+        ADC_GPIO_28     : Constant Signed_64 = 2
+        ADC_GPIO_29     : Constant Signed_64 = 3
+        ADC_TEMP_SENSOR : Constant Signed_64 = 4
 End Global
 
 Block ADC_Init
-Implements
-    # 1. Unreset ADC (bit 0 = 1)
-    Unreset_Peripherals(Cast[Unsigned_32](1))
+    Declares
+        Clk_Ctrl : Unsigned_32
+        Pll_Usb_Cs : Unsigned_32
+    Implements
+        # 1. Unreset ADC (bit 0 = 1)
+        Unreset_Peripherals(RESET_ADC)
 
-    # 2. Enable ADC power (bit 0) and Temperature Sensor (bit 1) -> 3
-    Vol_Write_32(0x4004C000, 3)
+        # 2. Ensure clk_adc is running (CLOCKS: CLK_ADC_CTRL = 0x40008060)
+        Clk_Ctrl = Vol_Read_32(0x40008060)
+        If ((Clk_Ctrl & 2048) == 0)
+            # If PLL_USB locked, use PLL_USB (auxsrc 0), else XOSC (auxsrc 3)
+            Pll_Usb_Cs = Vol_Read_32(0x4002C000)
+            If ((Pll_Usb_Cs & 0x80000000) != 0)
+                # PLL_USB (0) | ENABLE (2048)
+                Vol_Write_32(0x40008060, 2048)
+            Else
+                # XOSC (3 << 5 = 96) | ENABLE (2048) = 2144
+                Vol_Write_32(0x40008060, 2144)
+            End If
+            Vol_Write_32(0x40008064, 1 LSL 8)  # div 1
+        End If
+
+        # 3. Enable ADC power (bit 0) and Temperature Sensor (bit 1) -> 3
+        Vol_Write_32(0x4004C000, 3)
+
+        # 4. Wait until ADC is ready (bit 8 = 256)
+        Loop Until ((Vol_Read_32(0x4004C000) & 256) != 0)
+        End Loop
 End ADC_Init
+
+Block ADC_Select_Input Takes
+    Channel : Signed_64
+    Declares
+        Cs : Unsigned_32
+        New_Cs : Signed_64
+    Implements
+        Cs = Vol_Read_32(0x4004C000)
+        # Clear AINSEL [14:12] (mask 0x7000 = 28672) and set channel
+        New_Cs = (Cast[Signed_64](Cs) & (~28672)) | ((Channel & 7) LSL 12)
+        Vol_Write_32(0x4004C000, Cast[Unsigned_32](New_Cs))
+End ADC_Select_Input
+
+Block ADC_Init_Pin Takes
+    Pin : Signed_64
+    Declares
+        Ctrl_Addr : Signed_64
+        Pad_Addr : Signed_64
+        Pad_Val : Unsigned_32
+    Implements
+        # 1. Disconnect digital IO in IO_BANK0 (FUNCSEL = 31 / NULL)
+        Ctrl_Addr = 0x40014004 + (Pin * 8)
+        Vol_Write_32(Ctrl_Addr, 31)
+
+        # 2. In PADS_BANK0: Disable digital input buffer (IE=0) and output (OD=1)
+        Pad_Addr = 0x4001C004 + (Pin * 4)
+        Pad_Val = Vol_Read_32(Pad_Addr)
+        # Clear IE (bit 6 = 64), Set OD (bit 7 = 128)
+        Pad_Val = (Pad_Val & 0xFFFFFFBF) | 128
+        Vol_Write_32(Pad_Addr, Pad_Val)
+End ADC_Init_Pin
 
 Block Read_ADC_Raw Takes
     Channel : Signed_64
-Produces Signed_64
-Declares
-    Cs_Val : Signed_64
-    Status : Unsigned_32
-    Raw : Unsigned_32
-Implements
-    # CS layout: [14:12] = AINSEL, [2] = START_ONCE, [1] = TS_EN, [0] = EN
-    Cs_Val = (Channel LSL 12) | 7
-    Vol_Write_32(0x4004C000, Cs_Val)
+    Produces Signed_64
+    Declares
+        Cs_Val : Signed_64
+        Status : Unsigned_32
+        Raw : Unsigned_32
+    Implements
+        # CS layout: [14:12] = AINSEL, [2] = START_ONCE, [1] = TS_EN, [0] = EN
+        Cs_Val = ((Channel & 7) LSL 12) | 7
+        Vol_Write_32(0x4004C000, Cast[Unsigned_32](Cs_Val))
 
-    # Wait for READY bit (bit 8 = 256)
-    Status = Vol_Read_32(0x4004C000)
-    Loop Until ((Status & 256) != 0)
+        # Wait for READY bit (bit 8 = 256)
         Status = Vol_Read_32(0x4004C000)
-    End Loop
+        Loop Until ((Status & 256) != 0)
+            Status = Vol_Read_32(0x4004C000)
+        End Loop
 
-    Raw = Vol_Read_32(0x4004C004)
-    Give Cast[Signed_64](Raw & 0xFFF)
+        Raw = Vol_Read_32(0x4004C004)
+        Give Cast[Signed_64](Raw & 0xFFF)
 End Read_ADC_Raw
 
 Block Read_ADC_Millivolts Takes
     Channel : Signed_64
-Produces Signed_64
-Declares
-    Raw : Signed_64
-Implements
-    Raw = Read_ADC_Raw(Channel)
-    # (Raw * 3300) / 4095
-    Give (Raw * 3300) / 4095
+    Produces Signed_64
+    Declares
+        Raw : Signed_64
+    Implements
+        Raw = Read_ADC_Raw(Channel)
+        # (Raw * 3300) / 4095
+        Give (Raw * 3300) / 4095
 End Read_ADC_Millivolts
 
 Block Read_Temperature_Celsius
-Produces Signed_64
-Declares
-    Mv : Signed_64
-    Diff : Signed_64
-Implements
-    Mv = Read_ADC_Millivolts(4)
-    Diff = Mv - 706
-    # RP2040 datasheet formula: T = 27 - (V - 0.706) / 0.001721
-    # Scaled by 1000: 27 - (Diff * 1000) / 1721
-    Give 27 - ((Diff * 1000) / 1721)
+    Produces Signed_64
+    Declares
+        Mv : Signed_64
+        Diff : Signed_64
+    Implements
+        Mv = Read_ADC_Millivolts(4)
+        Diff = Mv - 706
+        # RP2040 datasheet formula: T = 27 - (V - 0.706) / 0.001721
+        # Scaled by 1000: 27 - (Diff * 1000) / 1721
+        Give 27 - ((Diff * 1000) / 1721)
 End Read_Temperature_Celsius
 
 Block Read_Temperature_Millicelsius
-Produces Signed_64
-Declares
-    Mv : Signed_64
-    Diff : Signed_64
-Implements
-    Mv = Read_ADC_Millivolts(4)
-    Diff = Mv - 706
-    Give 27000 - ((Diff * 1000000) / 1721)
+    Produces Signed_64
+    Declares
+        Mv : Signed_64
+        Diff : Signed_64
+    Implements
+        Mv = Read_ADC_Millivolts(4)
+        Diff = Mv - 706
+        Give 27000 - ((Diff * 1000000) / 1721)
 End Read_Temperature_Millicelsius

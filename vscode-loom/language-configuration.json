@@ -62,28 +62,28 @@
     }
   ],
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(?:Block\\b.*|Takes\\s*$|Declares\\s*$|Implements\\s*$|If\\b.*|Else\\b.*|Loop\\b.*|Match\\b.*|When\\b.*:\\s*$|Else:\\s*$)(?:\\s*(?:#|//).*)?$",
-    "decreaseIndentPattern": "^\\s*(?:End\\b.*|Else\\b.*|When\\b.*:\\s*$|Else:\\s*)$"
+    "increaseIndentPattern": "^\\s*(?:Block\\b.*|Record\\b.*|Enum\\b.*|Extern\\s+Block\\b.*|Takes\\s*$|Declares\\s*$|Implements\\s*$|Produces\\s*$|If\\b.*|Else\\b.*|Loop\\b.*|Match\\b.*|When\\b.*:\\s*$|Else:\\s*$|Ensure(?:\\s*\\{)?)(?:\\s*(?:#|//).*)?$",
+    "decreaseIndentPattern": "^\\s*(?:End\\b.*|Else\\b.*|When\\b.*:\\s*$|Else:\\s*|Declares\\s*$|Implements\\s*$|Produces\\s*$)(?:\\s*(?:#|//).*)?$"
   },
   "onEnterRules": [
     {
-      "beforeText": "^\\s*(?:Block\\b.*|Takes\\s*$|Declares\\s*$|Implements\\s*$|If\\b.*|Else\\b.*|Loop\\b.*|Match\\b.*|When\\b.*:\\s*$|Else:\\s*$)(?:\\s*(?:#|//).*)?$",
+      "beforeText": "^\\s*(?:Block\\b.*|Record\\b.*|Enum\\b.*|Extern\\s+Block\\b.*|Takes\\s*$|Declares\\s*$|Implements\\s*$|Produces\\s*$|If\\b.*|Else\\b.*|Loop\\b.*|Match\\b.*|When\\b.*:\\s*$|Else:\\s*$|Ensure(?:\\s*\\{)?)(?:\\s*(?:#|//).*)?$",
       "action": {
         "indent": "indent"
       }
     },
     {
-      "beforeText": "^\\s*End\\s+(?:If|Loop|Match|[A-Za-z_][A-Za-z0-9_]*)\\s*$",
+      "beforeText": "^\\s*End\\s+.*$",
       "action": {
-        "indent": "outdent"
+        "indent": "none"
       }
     }
   ],
   "folding": {
-    "offSide": true,
+    "offSide": false,
     "markers": {
-      "start": "^\\s*#region\\b",
-      "end": "^\\s*#endregion\\b"
+      "start": "^\\s*(?:Block|Record|Enum|If|Loop|Match|Extern\\s+Block|#region)\\b",
+      "end": "^\\s*(?:End|#endregion)\\b"
     }
   }
 }

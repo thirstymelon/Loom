@@ -734,7 +734,7 @@ void createProject(const std::string& name, bool rp2040 = false) {
             std::ofstream config(namePath / "config.toml");
             config << "[project]\n"
                    << "name = \"" << name << "\"\n"
-                   << "version = \"1.0.0\"\n\n"
+                   << "version = \"1.1.0\"\n\n"
                    << "[build]\n"
                    << "main = \"src/main.loom\"\n"
                    << "sources = [\"src/*.loom\"]\n"
@@ -830,7 +830,7 @@ void createProject(const std::string& name, bool rp2040 = false) {
         }
 
         std::ofstream config(namePath / "config.toml");
-        config << "[project]\nname = \"" << name << "\"\nversion = \"1.0.0\"\n\n[build]\nmain = \"src/main.loom\"\nsources = [\"src/*.loom\"]\ntarget-dir = \"target\"\nexecutable = \"" << name << "\"\n\n[toolchain]\nclang = \"clang\"\n";
+        config << "[project]\nname = \"" << name << "\"\nversion = \"1.1.0\"\n\n[build]\nmain = \"src/main.loom\"\nsources = [\"src/*.loom\"]\ntarget-dir = \"target\"\nexecutable = \"" << name << "\"\n\n[toolchain]\nclang = \"clang\"\n";
         if (!config) throw Error("failed to write config.toml");
         std::ofstream main(namePath / "src" / "main.loom");
         main << "Module Main\n\nBlock Main\n    Implements\n        Write(\"Hello, Loom!\\n\")\nEnd Main\n";
@@ -885,7 +885,7 @@ void buildProject(const fs::path& configFile, const char* argv0, bool release, b
     const auto compiler = loomcPath(argv0);
     const Colors col = Colors::detect(false);
     if (!quiet) {
-        std::cout << col.bold << col.cyan << "Loom 1.0.0" << col.reset
+        std::cout << col.bold << col.cyan << "Loom 1.1.0" << col.reset
                   << col.dim << " | " << col.reset
                   << col.bold << "Building " << config.name << col.reset << "\n\n"
                   << col.bold << col.blue << "Configuration" << col.reset << "\n"
@@ -1223,7 +1223,7 @@ void cleanProject(const fs::path& configFile) {
     }
 }
 void usage() {
-    std::cout << "Loom workspace tool 1.0.0\n\nUsage:\n"
+    std::cout << "Loom workspace tool 1.1.0\n\nUsage:\n"
                  "  loom new <name> [--rp2040]\n"
                  "  loom build [--release] [--opt-report] [--verbose] [--config <path>]\n"
                  "  loom run [--release] [--verbose] [--config <path>]\n"
@@ -1248,7 +1248,7 @@ int main(int argc, char** argv) {
     try {
         if (argc == 1 || std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h") { usage(); return 0; }
         const std::string command = argv[1];
-        if (command == "--version" || command == "-V") { std::cout << "loom 1.0.0\n"; return 0; }
+        if (command == "--version" || command == "-V") { std::cout << "loom 1.1.0\n"; return 0; }
         if (command == "new") {
             if (argc < 3 || argc > 4) throw Error("usage: loom new <name> [--rp2040]");
             std::string name;

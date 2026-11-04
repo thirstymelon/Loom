@@ -1,0 +1,664 @@
+Module Clock
+
+Import System
+Import GPIO
+use System
+use GPIO
+
+Block Global
+    Declares
+        # Clock Generator Indices
+        CLK_GPOUT0 : Constant Signed_64 = 0
+        CLK_GPOUT1 : Constant Signed_64 = 1
+        CLK_GPOUT2 : Constant Signed_64 = 2
+        CLK_GPOUT3 : Constant Signed_64 = 3
+        CLK_REF    : Constant Signed_64 = 4
+        CLK_SYS    : Constant Signed_64 = 5
+        CLK_PERI   : Constant Signed_64 = 6
+        CLK_USB    : Constant Signed_64 = 7
+        CLK_ADC    : Constant Signed_64 = 8
+        CLK_RTC    : Constant Signed_64 = 9
+        CLK_COUNT  : Constant Signed_64 = 10
+
+        # Glitchless MUX Sources for CLK_REF
+        CLK_REF_SRC_ROSC  : Constant Signed_64 = 0
+        CLK_REF_SRC_AUX   : Constant Signed_64 = 1
+        CLK_REF_SRC_XOSC  : Constant Signed_64 = 2
+
+        # Auxiliary Sources for CLK_REF
+        CLK_REF_AUX_PLL_USB : Constant Signed_64 = 0
+        CLK_REF_AUX_GPIN0   : Constant Signed_64 = 1
+        CLK_REF_AUX_GPIN1   : Constant Signed_64 = 2
+
+        # Glitchless MUX Sources for CLK_SYS
+        CLK_SYS_SRC_REF : Constant Signed_64 = 0
+        CLK_SYS_SRC_AUX : Constant Signed_64 = 1
+
+        # Auxiliary Sources for CLK_SYS
+        CLK_SYS_AUX_PLL_SYS : Constant Signed_64 = 0
+        CLK_SYS_AUX_PLL_USB : Constant Signed_64 = 1
+        CLK_SYS_AUX_ROSC    : Constant Signed_64 = 2
+        CLK_SYS_AUX_XOSC    : Constant Signed_64 = 3
+        CLK_SYS_AUX_GPIN0   : Constant Signed_64 = 4
+        CLK_SYS_AUX_GPIN1   : Constant Signed_64 = 5
+
+        # Auxiliary Sources for CLK_PERI
+        CLK_PERI_AUX_SYS     : Constant Signed_64 = 0
+        CLK_PERI_AUX_PLL_SYS : Constant Signed_64 = 1
+        CLK_PERI_AUX_PLL_USB : Constant Signed_64 = 2
+        CLK_PERI_AUX_ROSC    : Constant Signed_64 = 3
+        CLK_PERI_AUX_XOSC    : Constant Signed_64 = 4
+        CLK_PERI_AUX_GPIN0   : Constant Signed_64 = 5
+        CLK_PERI_AUX_GPIN1   : Constant Signed_64 = 6
+
+        # Auxiliary Sources for CLK_USB, CLK_ADC, CLK_RTC
+        CLK_AUX_PLL_USB : Constant Signed_64 = 0
+        CLK_AUX_PLL_SYS : Constant Signed_64 = 1
+        CLK_AUX_ROSC    : Constant Signed_64 = 2
+        CLK_AUX_XOSC    : Constant Signed_64 = 3
+        CLK_AUX_GPIN0   : Constant Signed_64 = 4
+        CLK_AUX_GPIN1   : Constant Signed_64 = 5
+
+        # Frequency Counter Sources (FC0_SRC)
+        FC_SRC_NULL       : Constant Signed_64 = 0
+        FC_SRC_PLL_SYS    : Constant Signed_64 = 1
+        FC_SRC_PLL_USB    : Constant Signed_64 = 2
+        FC_SRC_ROSC       : Constant Signed_64 = 3
+        FC_SRC_ROSC_PH    : Constant Signed_64 = 4
+        FC_SRC_XOSC       : Constant Signed_64 = 5
+        FC_SRC_GPIN0      : Constant Signed_64 = 6
+        FC_SRC_GPIN1      : Constant Signed_64 = 7
+        FC_SRC_CLK_REF    : Constant Signed_64 = 8
+        FC_SRC_CLK_SYS    : Constant Signed_64 = 9
+        FC_SRC_CLK_PERI   : Constant Signed_64 = 10
+        FC_SRC_CLK_USB    : Constant Signed_64 = 11
+        FC_SRC_CLK_ADC    : Constant Signed_64 = 12
+        FC_SRC_CLK_RTC    : Constant Signed_64 = 13
+
+        # Base Addresses
+        CLOCKS_BASE  : Constant Signed_64 = 0x40008000
+        XOSC_BASE    : Constant Signed_64 = 0x40024000
+        ROSC_BASE    : Constant Signed_64 = 0x40060000
+        PLL_SYS_BASE : Constant Signed_64 = 0x40028000
+        PLL_USB_BASE : Constant Signed_64 = 0x4002C000
+End Global
+
+# ==============================================================================
+# 1. Crystal Oscillator (XOSC) Control
+# ==============================================================================
+
+Block XOSC_Is_Stable
+    Produces Boolean
+    Declares
+        Status : Unsigned_32
+    Implements
+        # Bit 31: STABLE
+        Status = Vol_Read_32(XOSC_BASE + 0x04)
+        Give ((Status & 0x80000000) != 0)
+End XOSC_Is_Stable
+
+Block XOSC_Init
+    Declares
+        Timeout : Signed_64
+        Stable : Boolean
+    Implements
+        Stable = XOSC_Is_Stable()
+        If (Stable == False)
+            # Startup delay ~1ms (47 * 256 / 12MHz = 1002 us)
+            Vol_Write_32(XOSC_BASE + 0x0C, 47)
+
+            # 0xFAB enable password in [23:12], 0xAA0 1-15MHz range in [11:0]
+            # (0xFAB LSL 12) | 0xAA0 = 0x00FABAA0 (16431776)
+            Vol_Write_32(XOSC_BASE + 0x00, 0x00FABAA0)
+
+            Timeout = 100000
+            Stable = XOSC_Is_Stable()
+            Loop Until ((Stable == True) Or (Timeout <= 0))
+                Stable = XOSC_Is_Stable()
+                Timeout = Timeout - 1
+            End Loop
+        End If
+End XOSC_Init
+
+Block XOSC_Disable
+    Implements
+        # 0xD1E disable password in [23:12]
+        Vol_Write_32(XOSC_BASE + 0x00, 0x00D1EAA0)
+End XOSC_Disable
+
+# ==============================================================================
+# 2. Ring Oscillator (ROSC) Control & Hardware Random Generator
+# ==============================================================================
+
+Block ROSC_Is_Stable
+    Produces Boolean
+    Declares
+        Status : Unsigned_32
+    Implements
+        Status = Vol_Read_32(ROSC_BASE + 0x18)
+        Give ((Status & 0x80000000) != 0)
+End ROSC_Is_Stable
+
+Block ROSC_Set_Div Takes
+    Div : Signed_64
+    Declares
+        Div_Code : Signed_64
+    Implements
+        # 0xAA0 password + div (1-31)
+        Div_Code = 0xAA0 + (Div & 31)
+        Vol_Write_32(ROSC_BASE + 0x10, Cast[Unsigned_32](Div_Code))
+End ROSC_Set_Div
+
+Block ROSC_Get_Random_Bit
+    Produces Signed_64
+    Declares
+        Val : Unsigned_32
+    Implements
+        # ROSC: RANDOMBIT at offset 0x1C (Bit 0)
+        Val = Vol_Read_32(ROSC_BASE + 0x1C)
+        Give Cast[Signed_64](Val & 1)
+End ROSC_Get_Random_Bit
+
+Block ROSC_Get_Random_Word
+    Produces Unsigned_32
+    Declares
+        Result : Unsigned_32
+        I : Signed_64
+        Bit : Signed_64
+    Implements
+        Result = 0
+        I = 1
+        Loop Until (I > 32)
+            Bit = ROSC_Get_Random_Bit()
+            Result = (Result LSL 1) | Cast[Unsigned_32](Bit)
+            I = I + 1
+        End Loop
+        Give Result
+End ROSC_Get_Random_Word
+
+# ==============================================================================
+# 3. Phase-Locked Loop (PLL) Hardware Engine
+# ==============================================================================
+
+Block PLL_Init Takes
+    Pll_Base : Signed_64
+    Ref_Div : Signed_64
+    Vco_Freq : Signed_64
+    Post_Div1 : Signed_64
+    Post_Div2 : Signed_64
+    Declares
+        Ref_Mhz : Signed_64
+        Fb_Div : Signed_64
+        P_Div : Signed_64
+        Pll_Reset_Mask : Unsigned_32
+        Cs : Unsigned_32
+        Timeout : Signed_64
+        Power_Bits : Unsigned_32
+    Implements
+        # 1. Calculate dividers: assuming 12 MHz reference crystal
+        Ref_Mhz = 12 / Ref_Div
+        Fb_Div = Vco_Freq / (Ref_Mhz * 1000000)
+        P_Div = ((Post_Div1 & 7) LSL 16) | ((Post_Div2 & 7) LSL 12)
+
+        # 2. Reset and unreset target PLL
+        If (Pll_Base == PLL_USB_BASE)
+            Pll_Reset_Mask = RESET_PLL_USB
+        Else
+            Pll_Reset_Mask = RESET_PLL_SYS
+        End If
+        Reset_Peripherals(Pll_Reset_Mask)
+        Unreset_Peripherals(Pll_Reset_Mask)
+
+        # 3. Load VCO-related dividers before starting VCO
+        Vol_Write_32(Pll_Base + 0x00, Cast[Unsigned_32](Ref_Div & 63))
+        Vol_Write_32(Pll_Base + 0x08, Cast[Unsigned_32](Fb_Div & 4095))
+
+        # 4. Turn on PLL: clear PD (bit 0 = 1) and VCOPD (bit 5 = 32) -> 33
+        # Atomic CLR at Pll_Base + 0x04 + 0x3000
+        Vol_Write_32(Pll_Base + 0x04 + 0x3000, 33)
+
+        # 5. Wait for PLL to lock (CS bit 31 = 0x80000000)
+        Timeout = 100000
+        Cs = Vol_Read_32(Pll_Base + 0x00)
+        Loop Until (((Cs & 0x80000000) != 0) Or (Timeout <= 0))
+            Cs = Vol_Read_32(Pll_Base + 0x00)
+            Timeout = Timeout - 1
+        End Loop
+
+        # 6. Set up post dividers
+        Vol_Write_32(Pll_Base + 0x0C, Cast[Unsigned_32](P_Div))
+
+        # 7. Turn on post dividers: clear POSTDIVPD (bit 3 = 8)
+        Vol_Write_32(Pll_Base + 0x04 + 0x3000, 8)
+End PLL_Init
+
+# Standard PLL Presets:
+# PLL SYS: 12MHz * 125 = 1500MHz / 6 / 2 = 125 MHz
+Block PLL_Sys_Init_125Mhz
+    Implements
+        PLL_Init(PLL_SYS_BASE, 1, 1500000000, 6, 2)
+End PLL_Sys_Init_125Mhz
+
+# PLL SYS: 12MHz * 133 = 1596MHz / 6 / 2 = 133 MHz
+Block PLL_Sys_Init_133Mhz
+    Implements
+        PLL_Init(PLL_SYS_BASE, 1, 1596000000, 6, 2)
+End PLL_Sys_Init_133Mhz
+
+# PLL USB: 12MHz * 40 = 480MHz / 5 / 2 = 48 MHz
+Block PLL_Usb_Init_48Mhz
+    Implements
+        PLL_Init(PLL_USB_BASE, 1, 480000000, 5, 2)
+End PLL_Usb_Init_48Mhz
+
+# ==============================================================================
+# 4. Clock Generator Register Routing & Glitchless Switching
+# ==============================================================================
+
+Block Clock_Ctrl_Addr Takes
+    Clock_Id : Signed_64
+    Produces Signed_64
+    Implements
+        If (Clock_Id == CLK_GPOUT0)
+            Give CLOCKS_BASE + 0x00
+        Else If (Clock_Id == CLK_GPOUT1)
+            Give CLOCKS_BASE + 0x0C
+        Else If (Clock_Id == CLK_GPOUT2)
+            Give CLOCKS_BASE + 0x18
+        Else If (Clock_Id == CLK_GPOUT3)
+            Give CLOCKS_BASE + 0x24
+        Else If (Clock_Id == CLK_REF)
+            Give CLOCKS_BASE + 0x30
+        Else If (Clock_Id == CLK_SYS)
+            Give CLOCKS_BASE + 0x3C
+        Else If (Clock_Id == CLK_PERI)
+            Give CLOCKS_BASE + 0x48
+        Else If (Clock_Id == CLK_USB)
+            Give CLOCKS_BASE + 0x54
+        Else If (Clock_Id == CLK_ADC)
+            Give CLOCKS_BASE + 0x60
+        Else If (Clock_Id == CLK_RTC)
+            Give CLOCKS_BASE + 0x6C
+        End If
+        Give CLOCKS_BASE + 0x3C
+End Clock_Ctrl_Addr
+
+Block Clock_Div_Addr Takes
+    Clock_Id : Signed_64
+    Produces Signed_64
+    Implements
+        If (Clock_Id == CLK_GPOUT0)
+            Give CLOCKS_BASE + 0x04
+        Else If (Clock_Id == CLK_GPOUT1)
+            Give CLOCKS_BASE + 0x10
+        Else If (Clock_Id == CLK_GPOUT2)
+            Give CLOCKS_BASE + 0x1C
+        Else If (Clock_Id == CLK_GPOUT3)
+            Give CLOCKS_BASE + 0x28
+        Else If (Clock_Id == CLK_REF)
+            Give CLOCKS_BASE + 0x34
+        Else If (Clock_Id == CLK_SYS)
+            Give CLOCKS_BASE + 0x40
+        Else If (Clock_Id == CLK_PERI)
+            # CLK_PERI has no integer.frac divider
+            Give 0
+        Else If (Clock_Id == CLK_USB)
+            Give CLOCKS_BASE + 0x58
+        Else If (Clock_Id == CLK_ADC)
+            Give CLOCKS_BASE + 0x64
+        Else If (Clock_Id == CLK_RTC)
+            Give CLOCKS_BASE + 0x70
+        End If
+        Give 0
+End Clock_Div_Addr
+
+Block Clock_Selected_Addr Takes
+    Clock_Id : Signed_64
+    Produces Signed_64
+    Implements
+        If (Clock_Id == CLK_GPOUT0)
+            Give CLOCKS_BASE + 0x08
+        Else If (Clock_Id == CLK_GPOUT1)
+            Give CLOCKS_BASE + 0x14
+        Else If (Clock_Id == CLK_GPOUT2)
+            Give CLOCKS_BASE + 0x20
+        Else If (Clock_Id == CLK_GPOUT3)
+            Give CLOCKS_BASE + 0x2C
+        Else If (Clock_Id == CLK_REF)
+            Give CLOCKS_BASE + 0x38
+        Else If (Clock_Id == CLK_SYS)
+            Give CLOCKS_BASE + 0x44
+        Else If (Clock_Id == CLK_PERI)
+            Give CLOCKS_BASE + 0x50
+        Else If (Clock_Id == CLK_USB)
+            Give CLOCKS_BASE + 0x5C
+        Else If (Clock_Id == CLK_ADC)
+            Give CLOCKS_BASE + 0x68
+        Else If (Clock_Id == CLK_RTC)
+            Give CLOCKS_BASE + 0x74
+        End If
+        Give CLOCKS_BASE + 0x44
+End Clock_Selected_Addr
+
+Block Clock_Has_Glitchless_Mux Takes
+    Clock_Id : Signed_64
+    Produces Boolean
+    Implements
+        # Only CLK_REF and CLK_SYS possess a dual glitchless multiplexer
+        Give ((Clock_Id == CLK_REF) Or (Clock_Id == CLK_SYS))
+End Clock_Has_Glitchless_Mux
+
+Block Clock_Configure Takes
+    Clock_Id : Signed_64
+    Src : Signed_64
+    Aux_Src : Signed_64
+    Src_Freq : Signed_64
+    Desired_Freq : Signed_64
+    Produces Boolean
+    Declares
+        Div_Reg : Signed_64
+        Div_Val : Signed_64
+        Current_Div : Unsigned_32
+        Ctrl_Reg : Signed_64
+        Selected_Reg : Signed_64
+        Ctrl : Unsigned_32
+        Has_Glitchless : Boolean
+        Timeout : Signed_64
+        Selected : Unsigned_32
+        Target_Mask : Unsigned_32
+        Aux_Shift : Signed_64
+        Aux_Mask : Unsigned_32
+    Implements
+        If (Desired_Freq > Src_Freq)
+            Give False
+        End If
+
+        # 24.8 fixed point divisor calculation (left shift by 8)
+        Div_Val = (Src_Freq LSL 8) / Desired_Freq
+
+        Ctrl_Reg = Clock_Ctrl_Addr(Clock_Id)
+        Div_Reg = Clock_Div_Addr(Clock_Id)
+        Selected_Reg = Clock_Selected_Addr(Clock_Id)
+        Has_Glitchless = Clock_Has_Glitchless_Mux(Clock_Id)
+
+        # 1. If increasing divisor, apply divisor before switching source to avoid overspeed
+        If (Div_Reg != 0)
+            Current_Div = Vol_Read_32(Div_Reg)
+            If (Div_Val > Cast[Signed_64](Current_Div))
+                Vol_Write_32(Div_Reg, Cast[Unsigned_32](Div_Val))
+            End If
+        End If
+
+        # 2. Glitchless vs Auxiliary handling
+        If (Has_Glitchless == True)
+            # Switch away from AUX first before changing AUX mux
+            If (Src != 0)
+                # Clear SRC bits to 0 (Atomic CLR at Ctrl_Reg + 0x3000)
+                # Bits [1:0] for CLK_REF, Bit 0 for CLK_SYS
+                Vol_Write_32(Ctrl_Reg + 0x3000, 3)
+                Timeout = 10000
+                Selected = Vol_Read_32(Selected_Reg)
+                Loop Until (((Selected & 1) != 0) Or (Timeout <= 0))
+                    Selected = Vol_Read_32(Selected_Reg)
+                    Timeout = Timeout - 1
+                End Loop
+            End If
+        Else
+            # Cleanly stop auxiliary clock before modifying AUXSRC (clear ENABLE bit 11 = 2048)
+            Vol_Write_32(Ctrl_Reg + 0x3000, 2048)
+        End If
+
+        # 3. Set AUXSRC:
+        # For GPOUT: bits [8:5] (mask 0x1E0 = 480)
+        # For others: bits [7:5] (mask 0x0E0 = 224)
+        If (Clock_Id <= CLK_GPOUT3)
+            Aux_Shift = 5
+            Aux_Mask = 0x1E0
+        Else
+            Aux_Shift = 5
+            Aux_Mask = 0x0E0
+        End If
+
+        Ctrl = Vol_Read_32(Ctrl_Reg)
+        Ctrl = (Ctrl & (~Aux_Mask)) | Cast[Unsigned_32]((Aux_Src LSL Aux_Shift) & Cast[Signed_64](Aux_Mask))
+        Vol_Write_32(Ctrl_Reg, Ctrl)
+
+        # 4. If glitchless, switch glitchless MUX to target source and wait for SELECTED
+        If (Has_Glitchless == True)
+            Ctrl = Vol_Read_32(Ctrl_Reg)
+            If (Clock_Id == CLK_REF)
+                Ctrl = (Ctrl & 0xFFFFFFFC) | Cast[Unsigned_32](Src & 3)
+            Else
+                Ctrl = (Ctrl & 0xFFFFFFFE) | Cast[Unsigned_32](Src & 1)
+            End If
+            Vol_Write_32(Ctrl_Reg, Ctrl)
+
+            Target_Mask = 1 LSL Cast[Unsigned_32](Src & 3)
+            Timeout = 10000
+            Selected = Vol_Read_32(Selected_Reg)
+            Loop Until (((Selected & Target_Mask) != 0) Or (Timeout <= 0))
+                Selected = Vol_Read_32(Selected_Reg)
+                Timeout = Timeout - 1
+            End Loop
+        End If
+
+        # 5. Enable clock generator (ENABLE bit 11 = 2048)
+        Vol_Write_32(Ctrl_Reg + 0x2000, 2048)
+
+        # 6. Apply final divisor
+        If (Div_Reg != 0)
+            Vol_Write_32(Div_Reg, Cast[Unsigned_32](Div_Val))
+        End If
+
+        Give True
+End Clock_Configure
+
+# ==============================================================================
+# 5. High-Level Turnkey Startup & Retuning
+# ==============================================================================
+
+Block Clock_Init
+    Declares
+        Ok : Boolean
+    Implements
+        # 1. Start XOSC (12 MHz)
+        XOSC_Init()
+
+        # 2. Before touching PLLs, switch clk_ref and clk_sys cleanly to 12 MHz XOSC
+        # Switch clk_ref to XOSC (source 2 = xosc_clksrc)
+        Ok = Clock_Configure(CLK_REF, CLK_REF_SRC_XOSC, 0, 12000000, 12000000)
+
+        # Switch clk_sys glitchlessly to clk_ref
+        Ok = Clock_Configure(CLK_SYS, CLK_SYS_SRC_REF, 0, 12000000, 12000000)
+
+        # 3. Initialize PLL_SYS to 125 MHz and PLL_USB to 48 MHz
+        PLL_Sys_Init_125Mhz()
+        PLL_Usb_Init_48Mhz()
+
+        # 4. Switch clk_sys to PLL_SYS (125 MHz)
+        Ok = Clock_Configure(CLK_SYS, CLK_SYS_SRC_AUX, CLK_SYS_AUX_PLL_SYS, 125000000, 125000000)
+
+        # 5. Configure peripheral clock (clk_peri) from clk_sys (125 MHz)
+        Ok = Clock_Configure(CLK_PERI, 0, CLK_PERI_AUX_SYS, 125000000, 125000000)
+
+        # 6. Configure USB and ADC clocks (48 MHz from PLL_USB)
+        Ok = Clock_Configure(CLK_USB, 0, CLK_AUX_PLL_USB, 48000000, 48000000)
+        Ok = Clock_Configure(CLK_ADC, 0, CLK_AUX_PLL_USB, 48000000, 48000000)
+
+        # 7. Configure RTC clock: 46875 Hz derived from 12 MHz XOSC (div = 256)
+        Ok = Clock_Configure(CLK_RTC, 0, CLK_AUX_XOSC, 12000000, 46875)
+
+        # 8. Setup Watchdog tick: 12 cycles of 12.000 MHz clk_ref = 1.000000 MHz tick
+        Vol_Write_32(0x4005802C, 524)
+End Clock_Init
+
+Block Clock_Set_Sys_Freq Takes
+    Freq_Hz : Signed_64
+    Declares
+        Ok : Boolean
+        Ref_Mhz : Signed_64
+        Fb_Div : Signed_64
+    Implements
+        # 1. Switch clk_sys safely to clk_ref (12 MHz) before re-tuning PLL
+        Ok = Clock_Configure(CLK_SYS, CLK_SYS_SRC_REF, 0, 12000000, 12000000)
+
+        # 2. Retune PLL_SYS
+        If (Freq_Hz == 133000000)
+            PLL_Sys_Init_133Mhz()
+        Else If (Freq_Hz == 48000000)
+            # 12 MHz * 40 = 480 MHz / 5 / 2 = 48 MHz
+            PLL_Init(PLL_SYS_BASE, 1, 480000000, 5, 2)
+        Else
+            # Default to 125 MHz
+            PLL_Sys_Init_125Mhz()
+        End If
+
+        # 3. Switch clk_sys back to PLL_SYS
+        Ok = Clock_Configure(CLK_SYS, CLK_SYS_SRC_AUX, CLK_SYS_AUX_PLL_SYS, Freq_Hz, Freq_Hz)
+
+        # 4. Update clk_peri
+        Ok = Clock_Configure(CLK_PERI, 0, CLK_PERI_AUX_SYS, Freq_Hz, Freq_Hz)
+End Clock_Set_Sys_Freq
+
+Block Clock_Stop Takes
+    Clock_Id : Signed_64
+    Declares
+        Ctrl_Reg : Signed_64
+    Implements
+        Ctrl_Reg = Clock_Ctrl_Addr(Clock_Id)
+        # Clear ENABLE bit (bit 11 = 2048)
+        Vol_Write_32(Ctrl_Reg + 0x3000, 2048)
+End Clock_Stop
+
+Block Clock_Start Takes
+    Clock_Id : Signed_64
+    Declares
+        Ctrl_Reg : Signed_64
+    Implements
+        Ctrl_Reg = Clock_Ctrl_Addr(Clock_Id)
+        # Set ENABLE bit (bit 11 = 2048)
+        Vol_Write_32(Ctrl_Reg + 0x2000, 2048)
+End Clock_Start
+
+Block Clock_Gpio_Init Takes
+    Gpio_Pin : Signed_64
+    Aux_Src : Signed_64
+    Div_Int : Signed_64
+    Declares
+        Gpclk_Id : Signed_64
+        Ctrl_Reg : Signed_64
+        Div_Reg : Signed_64
+        Ctrl_Val : Signed_64
+    Implements
+        Gpclk_Id = -1
+        If (Gpio_Pin == 21)
+            Gpclk_Id = CLK_GPOUT0
+        Else If (Gpio_Pin == 23)
+            Gpclk_Id = CLK_GPOUT1
+        Else If (Gpio_Pin == 24)
+            Gpclk_Id = CLK_GPOUT2
+        Else If (Gpio_Pin == 25)
+            Gpclk_Id = CLK_GPOUT3
+        End If
+
+        If (Gpclk_Id >= 0)
+            Ctrl_Reg = Clock_Ctrl_Addr(Gpclk_Id)
+            Div_Reg = Clock_Div_Addr(Gpclk_Id)
+
+            # Set auxsrc in bits [8:5] and enable bit 11 (2048)
+            Ctrl_Val = ((Aux_Src & 15) LSL 5) | 2048
+            Vol_Write_32(Ctrl_Reg, Cast[Unsigned_32](Ctrl_Val))
+
+            # Div integer in bits [31:8]
+            Vol_Write_32(Div_Reg, Cast[Unsigned_32]((Div_Int & 0xFFFF) LSL 8))
+
+            # Set GPIO pin function to GPCK (FUNC 8)
+            Set_Function(Gpio_Pin, GPIO_FUNC_GPCK)
+        End If
+End Clock_Gpio_Init
+
+# ==============================================================================
+# 6. Frequency Counter (FC0) Hardware Diagnostics
+# ==============================================================================
+
+Block Clock_Frequency_Count_Khz Takes
+    Src : Signed_64
+    Produces Signed_64
+    Declares
+        Status : Unsigned_32
+        Result : Unsigned_32
+        Timeout : Signed_64
+    Implements
+        # 1. Wait if frequency counter is currently running (bit 8 = 256)
+        Status = Vol_Read_32(CLOCKS_BASE + 0x98)
+        Timeout = 100000
+        Loop Until (((Status & 256) == 0) Or (Timeout <= 0))
+            Status = Vol_Read_32(CLOCKS_BASE + 0x98)
+            Timeout = Timeout - 1
+        End Loop
+
+        # 2. Set reference frequency: 12000 kHz (12 MHz clk_ref)
+        Vol_Write_32(CLOCKS_BASE + 0x80, 12000)
+
+        # 3. Test interval: 10 (~1024 us test window)
+        Vol_Write_32(CLOCKS_BASE + 0x90, 10)
+
+        # 4. Optional min and max pass frequencies
+        Vol_Write_32(CLOCKS_BASE + 0x84, 0)
+        Vol_Write_32(CLOCKS_BASE + 0x88, 0x01FFFFFF)
+
+        # 5. Writing to FC0_SRC initiates the measurement
+        Vol_Write_32(CLOCKS_BASE + 0x94, Cast[Unsigned_32](Src & 0xFF))
+
+        # 6. Wait for DONE status bit (bit 4 = 16)
+        Timeout = 100000
+        Status = Vol_Read_32(CLOCKS_BASE + 0x98)
+        Loop Until (((Status & 16) != 0) Or (Timeout <= 0))
+            Status = Vol_Read_32(CLOCKS_BASE + 0x98)
+            Timeout = Timeout - 1
+        End Loop
+
+        # 7. Read result from FC0_RESULT (bits [29:5])
+        Result = Vol_Read_32(CLOCKS_BASE + 0x9C)
+        Give Cast[Signed_64]((Result LSR 5) & 0x01FFFFFF)
+End Clock_Frequency_Count_Khz
+
+Block Clock_Frequency_Count_Mhz Takes
+    Src : Signed_64
+    Produces Signed_64
+    Declares
+        Khz : Signed_64
+    Implements
+        Khz = Clock_Frequency_Count_Khz(Src)
+        Give Khz / 1000
+End Clock_Frequency_Count_Mhz
+
+# ==============================================================================
+# 7. Clock Resuscitation (Resus)
+# ==============================================================================
+
+Block Clock_Resus_Enable Takes
+    Timeout_Cycles : Signed_64
+    Declares
+        Ctrl_Val : Signed_64
+    Implements
+        # Bit 8 = ENABLE (256), Bits [7:0] = TIMEOUT
+        Ctrl_Val = 256 | (Timeout_Cycles & 255)
+        Vol_Write_32(CLOCKS_BASE + 0x78, Cast[Unsigned_32](Ctrl_Val))
+End Clock_Resus_Enable
+
+Block Clock_Resus_Has_Triggered
+    Produces Boolean
+    Declares
+        Status : Unsigned_32
+    Implements
+        # Bit 0 = RESUSSED
+        Status = Vol_Read_32(CLOCKS_BASE + 0x7C)
+        Give ((Status & 1) != 0)
+End Clock_Resus_Has_Triggered
+
+Block Clock_Resus_Clear
+    Implements
+        # Bit 16 = CLEAR (65536)
+        Vol_Write_32(CLOCKS_BASE + 0x78 + 0x2000, 65536)
+End Clock_Resus_Clear

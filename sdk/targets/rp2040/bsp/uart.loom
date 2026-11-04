@@ -1,66 +1,220 @@
 Module UART
 
 Import System
+Import GPIO
 use System
+use GPIO
 
 Block Global
-Declares
-    BAUD_115200 : Constant Signed_64 = 115200
-    BAUD_9600   : Constant Signed_64 = 9600
+    Declares
+        UART_0      : Constant Signed_64 = 0
+        UART_1      : Constant Signed_64 = 1
+
+        BAUD_115200 : Constant Signed_64 = 115200
+        BAUD_57600  : Constant Signed_64 = 57600
+        BAUD_38400  : Constant Signed_64 = 38400
+        BAUD_19200  : Constant Signed_64 = 19200
+        BAUD_9600   : Constant Signed_64 = 9600
 End Global
+
+Block UART_Base_Address Takes
+    Uart_Idx : Signed_64
+    Produces Signed_64
+    Implements
+        If (Uart_Idx == 1)
+            Give 0x40038000
+        Else
+            Give 0x40034000
+        End If
+End UART_Base_Address
+
+Block UART_Set_Baud_Rate Takes
+    Uart_Idx : Signed_64
+    Baud_Rate : Signed_64
+    Peri_Clock_Hz : Signed_64
+    Declares
+        Base_Addr : Signed_64
+        Divisor : Signed_64
+        Int_Part : Signed_64
+        Frac_Part : Signed_64
+        Lcr_H : Unsigned_32
+    Implements
+        Base_Addr = UART_Base_Address(Uart_Idx)
+        # 16-bit integer and 6-bit fractional divisor: (Peri_Clock_Hz * 4) / Baud_Rate
+        Divisor = (Peri_Clock_Hz * 4) / Baud_Rate
+        Int_Part = Divisor / 64
+        Frac_Part = Divisor Mod 64
+
+        Vol_Write_32(Base_Addr + 0x24, Int_Part)
+        Vol_Write_32(Base_Addr + 0x28, Frac_Part)
+
+        # Divisor latch update requires writing to UARTLCR_H (offset 0x2C)
+        Lcr_H = Vol_Read_32(Base_Addr + 0x2C)
+        Vol_Write_32(Base_Addr + 0x2C, Lcr_H)
+End UART_Set_Baud_Rate
+
+Block UART_Init_Channel_Freq Takes
+    Uart_Idx : Signed_64
+    Baud_Rate : Signed_64
+    Pin_Tx : Signed_64
+    Pin_Rx : Signed_64
+    Peri_Clock_Hz : Signed_64
+    Declares
+        Base_Addr : Signed_64
+    Implements
+        Base_Addr = UART_Base_Address(Uart_Idx)
+
+        # 1. Unreset UART hardware peripheral
+        If (Uart_Idx == 1)
+            Unreset_Peripherals(RESET_UART1)
+        Else
+            Unreset_Peripherals(RESET_UART0)
+        End If
+
+        # 2. Configure TX and RX pins to UART function (FUNC 2)
+        Set_Function(Pin_Tx, GPIO_FUNC_UART)
+        Set_Function(Pin_Rx, GPIO_FUNC_UART)
+
+        # 3. Calculate 16-bit integer and 6-bit fractional baud divisors
+        UART_Set_Baud_Rate(Uart_Idx, Baud_Rate, Peri_Clock_Hz)
+
+        # 4. Line Control: 8 data bits, no parity, 1 stop bit, FIFOs enabled (0x70)
+        Vol_Write_32(Base_Addr + 0x2C, 0x70)
+
+        # 5. Control Register: Enable UART (bit 0), TX (bit 8), RX (bit 9) = 0x301
+        Vol_Write_32(Base_Addr + 0x30, 0x301)
+End UART_Init_Channel_Freq
+
+Block UART_Init_Channel Takes
+    Uart_Idx : Signed_64
+    Baud_Rate : Signed_64
+    Pin_Tx : Signed_64
+    Pin_Rx : Signed_64
+    Declares
+        Peri_Clk : Signed_64
+        Pll_Sys_Cs : Unsigned_32
+    Implements
+        # Auto-detect peripheral clock: 125 MHz if PLL_SYS is locked, 12 MHz if running from crystal
+        Pll_Sys_Cs = Vol_Read_32(0x40028000)
+        If ((Pll_Sys_Cs & 0x80000000) != 0)
+            Peri_Clk = 125000000
+        Else
+            Peri_Clk = 12000000
+        End If
+        UART_Init_Channel_Freq(Uart_Idx, Baud_Rate, Pin_Tx, Pin_Rx, Peri_Clk)
+End UART_Init_Channel
 
 Block UART_Init Takes
     Baud_Rate : Signed_64
-Declares
-    Done : Unsigned_32
-    Divisor : Signed_64
-    Int_Part : Signed_64
-    Frac_Part : Signed_64
-Implements
-    # 1. Unreset UART0 (bit 22 = 4194304)
-    Unreset_Peripherals(Cast[Unsigned_32](4194304))
-
-    # 2. Configure GPIO 0 (TX) and GPIO 1 (RX) for UART function (FUNCSEL 2)
-    Vol_Write_32(0x40014004, 2)
-    Vol_Write_32(0x4001400C, 2)
-
-    # 3. Calculate baud rate divisor for 12 MHz clock
-    # Divisor = (12000000 * 4) / Baud_Rate
-    Divisor = 48000000 / Baud_Rate
-    Int_Part = Divisor / 64
-    Frac_Part = Divisor Mod 64
-    Vol_Write_32(0x40034024, Int_Part)
-    Vol_Write_32(0x40034028, Frac_Part)
-
-    # 4. Configure Line Control (UART_LCR_H: 0x4003402C)
-    # 8 data bits, no parity, 1 stop bit, FIFOs enabled (0x70)
-    Vol_Write_32(0x4003402C, 0x70)
-
-    # 5. Enable UART, Transmit, and Receive (UART_CR: 0x40034030)
-    # UARTEN (bit 0) | TXE (bit 8) | RXE (bit 9) = 0x301
-    Vol_Write_32(0x40034030, 0x301)
+    Implements
+        # Default RP2040 UART0 on GP0 (TX) and GP1 (RX)
+        UART_Init_Channel(UART_0, Baud_Rate, 0, 1)
 End UART_Init
 
-Block Read_UART_Char
-Produces Character
-Declares
-    Fr : Unsigned_32
-    Data : Unsigned_32
-Implements
-    Fr = Vol_Read_32(0x40034018)
-    Loop Until ((Fr & 0x10) == 0)
-        Fr = Vol_Read_32(0x40034018)
-    End Loop
-    Data = Vol_Read_32(0x40034000)
-    Give Cast[Character](Cast[Signed_32](Data & 0xFF))
-End Read_UART_Char
+Block UART_Write_Byte_Ch Takes
+    Uart_Idx : Signed_64
+    Byte : Signed_64
+    Declares
+        Base_Addr : Signed_64
+        Fr : Unsigned_32
+    Implements
+        Base_Addr = UART_Base_Address(Uart_Idx)
+        # Wait until TX FIFO is not full (UARTFR bit 5 = 32)
+        Fr = Vol_Read_32(Base_Addr + 0x18)
+        Loop Until ((Fr & 32) == 0)
+            Fr = Vol_Read_32(Base_Addr + 0x18)
+        End Loop
+        Vol_Write_32(Base_Addr + 0x00, Byte & 0xFF)
+End UART_Write_Byte_Ch
+
+Block Write_UART_Byte Takes
+    Byte : Signed_64
+    Implements
+        UART_Write_Byte_Ch(UART_0, Byte)
+End Write_UART_Byte
+
+Block UART_Write_String_Ch Takes
+    Uart_Idx : Signed_64
+    Str : String
+    Declares
+        Len : Unsigned_64
+        I : Unsigned_64
+    Implements
+        Len = Str.Length
+        I = 1
+        Loop Until (I > Len)
+            UART_Write_Byte_Ch(Uart_Idx, Cast[Signed_64](Str[I]))
+            I = I + 1
+        End Loop
+End UART_Write_String_Ch
+
+Block Write_UART Takes
+    Str : String
+    Implements
+        UART_Write_String_Ch(UART_0, Str)
+End Write_UART
+
+Block UART_Is_Available_Ch Takes
+    Uart_Idx : Signed_64
+    Produces Boolean
+    Declares
+        Base_Addr : Signed_64
+        Fr : Unsigned_32
+    Implements
+        Base_Addr = UART_Base_Address(Uart_Idx)
+        # RXFE is bit 4 (16) of UARTFR
+        Fr = Vol_Read_32(Base_Addr + 0x18)
+        Give ((Fr & 16) == 0)
+End UART_Is_Available_Ch
 
 Block UART_Available
-Produces Boolean
-Declares
-    Fr : Unsigned_32
-Implements
-    Fr = Vol_Read_32(0x40034018)
-    Give ((Fr & 0x10) == 0)
+    Produces Boolean
+    Implements
+        Give UART_Is_Available_Ch(UART_0)
 End UART_Available
 
+Block UART_Is_Writable_Ch Takes
+    Uart_Idx : Signed_64
+    Produces Boolean
+    Declares
+        Base_Addr : Signed_64
+        Fr : Unsigned_32
+    Implements
+        Base_Addr = UART_Base_Address(Uart_Idx)
+        # TXFF is bit 5 (32) of UARTFR
+        Fr = Vol_Read_32(Base_Addr + 0x18)
+        Give ((Fr & 32) == 0)
+End UART_Is_Writable_Ch
+
+Block UART_Is_Writable
+    Produces Boolean
+    Implements
+        Give UART_Is_Writable_Ch(UART_0)
+End UART_Is_Writable
+
+Block UART_Read_Byte_Ch Takes
+    Uart_Idx : Signed_64
+    Produces Signed_64
+    Declares
+        Base_Addr : Signed_64
+        Fr : Unsigned_32
+        Data : Unsigned_32
+    Implements
+        Base_Addr = UART_Base_Address(Uart_Idx)
+        # Wait until RX FIFO has data (RXFE bit 4 == 0)
+        Fr = Vol_Read_32(Base_Addr + 0x18)
+        Loop Until ((Fr & 16) == 0)
+            Fr = Vol_Read_32(Base_Addr + 0x18)
+        End Loop
+        Data = Vol_Read_32(Base_Addr + 0x00)
+        Give Cast[Signed_64](Data & 0xFF)
+End UART_Read_Byte_Ch
+
+Block Read_UART_Char
+    Produces Character
+    Declares
+        B : Signed_64
+    Implements
+        B = UART_Read_Byte_Ch(UART_0)
+        Give Cast[Character](Cast[Signed_32](B))
+End Read_UART_Char

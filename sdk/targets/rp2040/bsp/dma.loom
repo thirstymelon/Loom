@@ -1,0 +1,222 @@
+Module DMA
+
+Import System
+use System
+
+Block Global
+    Declares
+        # Transfer Data Sizes
+        DMA_SIZE_8  : Constant Signed_64 = 0
+        DMA_SIZE_16 : Constant Signed_64 = 1
+        DMA_SIZE_32 : Constant Signed_64 = 2
+
+        # Pacing DREQ Signals
+        DREQ_PIO0_TX0   : Constant Signed_64 = 0
+        DREQ_PIO0_TX1   : Constant Signed_64 = 1
+        DREQ_PIO0_TX2   : Constant Signed_64 = 2
+        DREQ_PIO0_TX3   : Constant Signed_64 = 3
+        DREQ_PIO0_RX0   : Constant Signed_64 = 4
+        DREQ_PIO0_RX1   : Constant Signed_64 = 5
+        DREQ_PIO0_RX2   : Constant Signed_64 = 6
+        DREQ_PIO0_RX3   : Constant Signed_64 = 7
+        DREQ_PIO1_TX0   : Constant Signed_64 = 8
+        DREQ_PIO1_TX1   : Constant Signed_64 = 9
+        DREQ_PIO1_TX2   : Constant Signed_64 = 10
+        DREQ_PIO1_TX3   : Constant Signed_64 = 11
+        DREQ_PIO1_RX0   : Constant Signed_64 = 12
+        DREQ_PIO1_RX1   : Constant Signed_64 = 13
+        DREQ_PIO1_RX2   : Constant Signed_64 = 14
+        DREQ_PIO1_RX3   : Constant Signed_64 = 15
+        DREQ_SPI0_TX    : Constant Signed_64 = 16
+        DREQ_SPI0_RX    : Constant Signed_64 = 17
+        DREQ_SPI1_TX    : Constant Signed_64 = 18
+        DREQ_SPI1_RX    : Constant Signed_64 = 19
+        DREQ_UART0_TX   : Constant Signed_64 = 20
+        DREQ_UART0_RX   : Constant Signed_64 = 21
+        DREQ_UART1_TX   : Constant Signed_64 = 22
+        DREQ_UART1_RX   : Constant Signed_64 = 23
+        DREQ_PWM_WRAP0  : Constant Signed_64 = 24
+        DREQ_PWM_WRAP1  : Constant Signed_64 = 25
+        DREQ_PWM_WRAP2  : Constant Signed_64 = 26
+        DREQ_PWM_WRAP3  : Constant Signed_64 = 27
+        DREQ_PWM_WRAP4  : Constant Signed_64 = 28
+        DREQ_PWM_WRAP5  : Constant Signed_64 = 29
+        DREQ_PWM_WRAP6  : Constant Signed_64 = 30
+        DREQ_PWM_WRAP7  : Constant Signed_64 = 31
+        DREQ_I2C0_TX    : Constant Signed_64 = 32
+        DREQ_I2C0_RX    : Constant Signed_64 = 33
+        DREQ_I2C1_TX    : Constant Signed_64 = 34
+        DREQ_I2C1_RX    : Constant Signed_64 = 35
+        DREQ_ADC        : Constant Signed_64 = 36
+        DREQ_UNPACED    : Constant Signed_64 = 63
+End Global
+
+Block DMA_Init
+    Implements
+        # Unreset DMA peripheral (bit 2 = 4)
+        Unreset_Peripherals(RESET_DMA)
+End DMA_Init
+
+Block DMA_Channel_Index Takes
+    Chan : Signed_64
+    Produces Signed_64
+    Implements
+        If (Chan < 0)
+            Give 0
+        Else If (Chan > 11)
+            Give 11
+        End If
+        Give Chan
+End DMA_Channel_Index
+
+Block DMA_Channel_Base Takes
+    Chan : Signed_64
+    Produces Signed_64
+    Declares
+        C : Signed_64
+    Implements
+        C = DMA_Channel_Index(Chan)
+        Give 0x50000000 + (C * 64)
+End DMA_Channel_Base
+
+Block DMA_Channel_Configure Takes
+    Chan : Signed_64
+    Read_Addr : Signed_64
+    Write_Addr : Signed_64
+    Transfer_Count : Signed_64
+    Data_Size : Signed_64
+    Inc_Read : Boolean
+    Inc_Write : Boolean
+    Treq : Signed_64
+    Chain_To : Signed_64
+    Declares
+        C : Signed_64
+        Base_Addr : Signed_64
+        Ctrl : Signed_64
+    Implements
+        C = DMA_Channel_Index(Chan)
+        Base_Addr = 0x50000000 + (C * 64)
+
+        # Abort any in-progress transfer first
+        Vol_Write_32(0x50000444, 1 LSL Cast[Unsigned_32](C))
+
+        # Set Read, Write and Count
+        Vol_Write_32(Base_Addr + 0x00, Cast[Unsigned_32](Read_Addr))
+        Vol_Write_32(Base_Addr + 0x04, Cast[Unsigned_32](Write_Addr))
+        Vol_Write_32(Base_Addr + 0x08, Cast[Unsigned_32](Transfer_Count))
+
+        # Construct CTRL register:
+        # DATA_SIZE [3:2], INCR_READ [4], INCR_WRITE [5], CHAIN_TO [14:11], TREQ_SEL [20:15]
+        Ctrl = (Data_Size & 3) LSL 2
+        If (Inc_Read == True)
+            Ctrl = Ctrl | 16
+        End If
+        If (Inc_Write == True)
+            Ctrl = Ctrl | 32
+        End If
+        Ctrl = Ctrl | ((Chain_To & 15) LSL 11)
+        Ctrl = Ctrl | ((Treq & 63) LSL 15)
+
+        # Write to CHx_AL1_CTRL (offset 0x10) without triggering
+        Vol_Write_32(Base_Addr + 0x10, Cast[Unsigned_32](Ctrl))
+End DMA_Channel_Configure
+
+Block DMA_Channel_Set_Read_Addr Takes
+    Chan : Signed_64
+    Read_Addr : Signed_64
+    Declares
+        Base_Addr : Signed_64
+    Implements
+        Base_Addr = DMA_Channel_Base(Chan)
+        Vol_Write_32(Base_Addr + 0x00, Cast[Unsigned_32](Read_Addr))
+End DMA_Channel_Set_Read_Addr
+
+Block DMA_Channel_Set_Write_Addr Takes
+    Chan : Signed_64
+    Write_Addr : Signed_64
+    Declares
+        Base_Addr : Signed_64
+    Implements
+        Base_Addr = DMA_Channel_Base(Chan)
+        Vol_Write_32(Base_Addr + 0x04, Cast[Unsigned_32](Write_Addr))
+End DMA_Channel_Set_Write_Addr
+
+Block DMA_Channel_Set_Trans_Count Takes
+    Chan : Signed_64
+    Transfer_Count : Signed_64
+    Declares
+        Base_Addr : Signed_64
+    Implements
+        Base_Addr = DMA_Channel_Base(Chan)
+        Vol_Write_32(Base_Addr + 0x08, Cast[Unsigned_32](Transfer_Count))
+End DMA_Channel_Set_Trans_Count
+
+Block DMA_Channel_Start Takes
+    Chan : Signed_64
+    Declares
+        Base_Addr : Signed_64
+        Ctrl : Unsigned_32
+    Implements
+        Base_Addr = DMA_Channel_Base(Chan)
+        Ctrl = Vol_Read_32(Base_Addr + 0x10)
+        # Set bit 0 (EN = 1) in CTRL_TRIG (offset 0x0C) to trigger
+        Vol_Write_32(Base_Addr + 0x0C, Ctrl | 1)
+End DMA_Channel_Start
+
+Block DMA_Start_Multi_Channel Takes
+    Mask : Unsigned_32
+    Implements
+        # MULTI_CHAN_TRIGGER at offset 0x430
+        Vol_Write_32(0x50000430, Mask & 0x0FFF)
+End DMA_Start_Multi_Channel
+
+Block DMA_Channel_Is_Busy Takes
+    Chan : Signed_64
+    Produces Boolean
+    Declares
+        Base_Addr : Signed_64
+        Ctrl : Unsigned_32
+    Implements
+        Base_Addr = DMA_Channel_Base(Chan)
+        # BUSY is bit 24 (16777216 = 0x1000000)
+        Ctrl = Vol_Read_32(Base_Addr + 0x0C)
+        Give ((Ctrl & 0x01000000) != 0)
+End DMA_Channel_Is_Busy
+
+Block DMA_Channel_Wait_Blocking Takes
+    Chan : Signed_64
+    Declares
+        Busy : Boolean
+    Implements
+        Busy = DMA_Channel_Is_Busy(Chan)
+        Loop Until (Busy == False)
+            Busy = DMA_Channel_Is_Busy(Chan)
+        End Loop
+End DMA_Channel_Wait_Blocking
+
+Block DMA_Channel_Abort Takes
+    Chan : Signed_64
+    Declares
+        C : Signed_64
+        Mask : Unsigned_32
+    Implements
+        C = DMA_Channel_Index(Chan)
+        Mask = 1 LSL Cast[Unsigned_32](C)
+        Vol_Write_32(0x50000444, Mask)
+        # Wait until abort completes
+        Loop Until ((Vol_Read_32(0x50000444) & Mask) == 0)
+        End Loop
+End DMA_Channel_Abort
+
+# High-Performance Hardware Memory Copy using DMA Channel 0
+Block DMA_Memcpy_32 Takes
+    Dest_Addr : Signed_64
+    Src_Addr : Signed_64
+    Word_Count : Signed_64
+    Implements
+        DMA_Init()
+        DMA_Channel_Configure(0, Src_Addr, Dest_Addr, Word_Count, DMA_SIZE_32, True, True, DREQ_UNPACED, 0)
+        DMA_Channel_Start(0)
+        DMA_Channel_Wait_Blocking(0)
+End DMA_Memcpy_32
+

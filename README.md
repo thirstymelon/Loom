@@ -6,7 +6,7 @@
 
 **A modern, deterministic, high-performance systems programming language with an LLVM backend and first-class bare-metal support.**
 
-[![Version](https://img.shields.io/badge/version-1.0.0-92a9e1.svg)](https://github.com/thirstymelon/Loom/releases)
+[![Version](https://img.shields.io/badge/version-1.1.0-92a9e1.svg)](https://github.com/thirstymelon/Loom/releases)
 [![Backend](https://img.shields.io/badge/backend-LLVM%20Native-blue.svg)](https://llvm.org/)
 [![Embedded](https://img.shields.io/badge/target-RP2040%20Bare--Metal-brightgreen.svg)](https://thirstymelon.github.io/Loom/embedded-rp2040.html)
 [![VS Code](https://img.shields.io/badge/vscode-extension%20in%20repo-informational.svg)](vscode-loom/)
@@ -34,7 +34,7 @@ Featuring a platform-independent C++17 frontend and an optimizing LLVM native-co
 - **Deterministic Cleanup**: Last-In First-Out (LIFO) scoped cleanup execution guarantees timely finalization of system resources.
 - **1-Based Indexing**: Natural mathematical indexing (1..Length) across arrays, slices, and strings, safeguarded by static analysis and runtime bounds checks.
 - **Turnkey RP2040 Bare-Metal Support**: Built-in scaffolding for Raspberry Pi Pico firmware, including Boot2 stage, vector tables, linker scripts, and direct generation of UF2 bootloader images.
-- **Pre-Integrated Hardware HAL**: Modular SDK libraries for System clocks, GPIO, Time, UART serial communications, ADC, and PWM.
+- **Pre-Integrated Hardware HAL**: Comprehensive 16-peripheral hardware abstraction layer (Clock, GPIO, UART, SPI, I2C, ADC, PWM, DMA, Watchdog, Multicore, PIO, RTC, Interp, System, and Time).
 - **C ABI Interoperability**: Direct foreign function linkage enabling frictionless communication with existing C libraries.
 - **Integrated Toolchain**: Includes the unified `loom` project tool, the optimizing `loomc` compiler, and the `loom-lsp` Language Server Protocol service.
 
@@ -42,8 +42,9 @@ Featuring a platform-independent C++17 frontend and an optimizing LLVM native-co
 
 ## Downloads & VS Code Extension
 
-- **macOS Installer (.dmg)**: A prebuilt Apple Silicon disk image (`.dmg`) is attached to every [GitHub Release](https://github.com/thirstymelon/Loom/releases), providing an installer for the compiler (`loomc`), build driver (`loom`), language server (`loom-lsp`), and RP2040 SDK.
-- **VS Code Extension**: The official VS Code extension for Loom language support is bundled directly within this repository as a prepackaged `.vsix` file ([`vscode-loom/Loom-1.0.0.vsix`](vscode-loom/Loom-1.0.0.vsix)):
+- **macOS Desktop Native Toolchain (`Loom-1.1.0-macos-arm64-native.dmg`)**: Prebuilt Apple Silicon disk image attached to [GitHub Releases](https://github.com/thirstymelon/Loom/releases), providing an installer for native desktop application development (optimizing compiler `loomc`, workspace build driver `loom`, standard library `sdk/std/`, and the VS Code extension).
+- **RP2040 Embedded Toolchain (`Loom-1.1.0-macos-arm64-rp2040.dmg`)**: Dedicated bare-metal embedded disk image attached to [GitHub Releases](https://github.com/thirstymelon/Loom/releases), providing the complete Raspberry Pi Pico toolchain (ARM Cortex-M0+ `loomc`, build driver with automatic UF2 packager `loom`, full 16-peripheral RP2040 HAL/BSP, `boot.s`, `linker.ld`, and the VS Code extension).
+- **VS Code Extension**: The official VS Code extension for Loom language support is bundled directly within this repository as a prepackaged `.vsix` file ([`vscode-loom/Loom-1.1.0.vsix`](vscode-loom/Loom-1.1.0.vsix)):
   - **Syntax Highlighting**: Complete TextMate grammar covering blocks, keywords, built-in types, operators, and string interpolation.
   - **Editor Productivity**: Automated code snippets, bracket autocompletion, intelligent indentation rules, and file icon associations.
   - **Compiler-Backed Diagnostics**: Real-time error reporting and inline diagnostic squiggles.

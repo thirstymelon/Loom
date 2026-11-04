@@ -1,0 +1,298 @@
+Module I2C
+
+Import System
+Import GPIO
+use System
+use GPIO
+
+Block Global
+    Declares
+        I2C_0 : Constant Signed_64 = 0
+        I2C_1 : Constant Signed_64 = 1
+
+        I2C_STANDARD_100K : Constant Signed_64 = 100000
+        I2C_FAST_400K     : Constant Signed_64 = 400000
+        I2C_FAST_PLUS_1M  : Constant Signed_64 = 1000000
+End Global
+
+Block I2C_Base_Address Takes
+    I2c_Idx : Signed_64
+    Produces Signed_64
+    Implements
+        If (I2c_Idx == 1)
+            Give 0x40048000
+        Else
+            Give 0x40044000
+        End If
+End I2C_Base_Address
+
+Block I2C_Init_Channel_Freq Takes
+    I2c_Idx : Signed_64
+    Baud_Hz : Signed_64
+    Pin_Sda : Signed_64
+    Pin_Scl : Signed_64
+    Sys_Clock_Hz : Signed_64
+    Declares
+        Base_Addr : Signed_64
+        Sys_Mhz : Signed_64
+        Hcnt : Signed_64
+        Lcnt : Signed_64
+    Implements
+        Base_Addr = I2C_Base_Address(I2c_Idx)
+        Sys_Mhz = Sys_Clock_Hz / 1000000
+
+        # 1. Unreset I2C hardware block
+        If (I2c_Idx == 1)
+            Unreset_Peripherals(RESET_I2C1)
+        Else
+            Unreset_Peripherals(RESET_I2C0)
+        End If
+
+        # 2. Configure SDA and SCL pins: Function 3 (I2C) with Pull-ups enabled
+        Set_Function(Pin_Sda, GPIO_FUNC_I2C)
+        Set_Function(Pin_Scl, GPIO_FUNC_I2C)
+        Set_Pull(Pin_Sda, PULL_UP)
+        Set_Pull(Pin_Scl, PULL_UP)
+
+        # 3. Disable I2C before configuring registers (IC_ENABLE bit 0 = 0)
+        Vol_Write_32(Base_Addr + 0x6C, 0)
+
+        # 4. Configure IC_CON and High/Low SCL counts according to Section 4.3.14:
+        # Master mode (bit 0 = 1), Restart enable (bit 5 = 32), Slave disable (bit 6 = 64) -> 97 (0x61)
+        # SPEED: bits 2:1 -> 1 for standard 100k (2), 2 for fast 400k (4)
+        If (Baud_Hz >= 400000)
+            # Fast mode (0x65 = 101)
+            Vol_Write_32(Base_Addr + 0x00, 101)
+            # Fast mode: min SCL high 600ns, low 1300ns
+            Hcnt = (600 * Sys_Mhz) / 1000
+            Lcnt = (1300 * Sys_Mhz) / 1000
+            If (Hcnt < 6)
+                Hcnt = 6
+            End If
+            If (Lcnt < 8)
+                Lcnt = 8
+            End If
+            Vol_Write_32(Base_Addr + 0x1C, Cast[Unsigned_32](Hcnt))  # IC_FS_SCL_HCNT
+            Vol_Write_32(Base_Addr + 0x20, Cast[Unsigned_32](Lcnt))  # IC_FS_SCL_LCNT
+        Else
+            # Standard mode (0x63 = 99)
+            Vol_Write_32(Base_Addr + 0x00, 99)
+            # Standard mode: min SCL high 4000ns, low 4700ns
+            Hcnt = (4000 * Sys_Mhz) / 1000
+            Lcnt = (4700 * Sys_Mhz) / 1000
+            If (Hcnt < 6)
+                Hcnt = 6
+            End If
+            If (Lcnt < 8)
+                Lcnt = 8
+            End If
+            Vol_Write_32(Base_Addr + 0x14, Cast[Unsigned_32](Hcnt))  # IC_SS_SCL_HCNT
+            Vol_Write_32(Base_Addr + 0x18, Cast[Unsigned_32](Lcnt))  # IC_SS_SCL_LCNT
+        End If
+
+        # 5. Enable I2C block (IC_ENABLE = 1)
+        Vol_Write_32(Base_Addr + 0x6C, 1)
+End I2C_Init_Channel_Freq
+
+Block I2C_Init_Channel Takes
+    I2c_Idx : Signed_64
+    Baud_Hz : Signed_64
+    Pin_Sda : Signed_64
+    Pin_Scl : Signed_64
+    Declares
+        Sys_Clk : Signed_64
+        Pll_Sys_Cs : Unsigned_32
+    Implements
+        # Auto-detect clk_sys: 125 MHz if PLL_SYS is locked, 12 MHz if running from crystal
+        Pll_Sys_Cs = Vol_Read_32(0x40028000)
+        If ((Pll_Sys_Cs & 0x80000000) != 0)
+            Sys_Clk = 125000000
+        Else
+            Sys_Clk = 12000000
+        End If
+        I2C_Init_Channel_Freq(I2c_Idx, Baud_Hz, Pin_Sda, Pin_Scl, Sys_Clk)
+End I2C_Init_Channel
+
+Block I2C_Init Takes
+    Baud_Hz : Signed_64
+    Implements
+        # Default I2C0 pins on Raspberry Pi Pico: SDA=GP4, SCL=GP5
+        I2C_Init_Channel(I2C_0, Baud_Hz, 4, 5)
+End I2C_Init
+
+Block I2C_Write_Byte_Direct Takes
+    I2c_Idx : Signed_64
+    Addr : Signed_64
+    Byte : Signed_64
+    Issue_Stop : Boolean
+    Produces Boolean
+    Declares
+        Base_Addr : Signed_64
+        Cmd : Signed_64
+        Stat : Unsigned_32
+        Abrt : Unsigned_32
+    Implements
+        Base_Addr = I2C_Base_Address(I2c_Idx)
+
+        # Set target peripheral 7-bit address
+        Vol_Write_32(Base_Addr + 0x04, Addr & 0x7F)
+
+        Cmd = Byte & 0xFF
+        If (Issue_Stop == True)
+            Cmd = Cmd | 512    # Set STOP bit (bit 9 = 512)
+        End If
+
+        # Wait until TX FIFO not full (IC_STATUS bit 1 = 2)
+        Stat = Vol_Read_32(Base_Addr + 0x70)
+        Loop Until ((Stat & 2) != 0)
+            Stat = Vol_Read_32(Base_Addr + 0x70)
+        End Loop
+
+        # Write to IC_DATA_CMD
+        Vol_Write_32(Base_Addr + 0x10, Cmd)
+
+        # Wait for TX FIFO completely empty (IC_STATUS bit 2 = 4)
+        Stat = Vol_Read_32(Base_Addr + 0x70)
+        Loop Until ((Stat & 4) != 0)
+            Stat = Vol_Read_32(Base_Addr + 0x70)
+        End Loop
+
+        # Check for Abort / NACK in IC_TX_ABRT_SOURCE (0x80)
+        Abrt = Vol_Read_32(Base_Addr + 0x80)
+        If (Abrt != 0)
+            # Clear abort by reading IC_CLR_TX_ABRT (0x54)
+            Abrt = Vol_Read_32(Base_Addr + 0x54)
+            Give False
+        End If
+
+        Give True
+End I2C_Write_Byte_Direct
+
+Block I2C_Read_Byte_Direct Takes
+    I2c_Idx : Signed_64
+    Addr : Signed_64
+    Issue_Stop : Boolean
+    Produces Signed_64
+    Declares
+        Base_Addr : Signed_64
+        Cmd : Signed_64
+        Stat : Unsigned_32
+        Data : Unsigned_32
+    Implements
+        Base_Addr = I2C_Base_Address(I2c_Idx)
+        Vol_Write_32(Base_Addr + 0x04, Addr & 0x7F)
+
+        # Bit 8 = 256 indicates a READ command
+        Cmd = 256
+        If (Issue_Stop == True)
+            Cmd = Cmd | 512    # STOP bit (512)
+        End If
+
+        # Wait until TX FIFO not full
+        Stat = Vol_Read_32(Base_Addr + 0x70)
+        Loop Until ((Stat & 2) != 0)
+            Stat = Vol_Read_32(Base_Addr + 0x70)
+        End Loop
+
+        Vol_Write_32(Base_Addr + 0x10, Cmd)
+
+        # Wait until RX FIFO has data (IC_STATUS bit 3 = 8)
+        Stat = Vol_Read_32(Base_Addr + 0x70)
+        Loop Until ((Stat & 8) != 0)
+            Stat = Vol_Read_32(Base_Addr + 0x70)
+        End Loop
+
+        Data = Vol_Read_32(Base_Addr + 0x10)
+        Give Cast[Signed_64](Data & 0xFF)
+End I2C_Read_Byte_Direct
+
+Block I2C_Write_Slice Takes
+    I2c_Idx : Signed_64
+    Addr : Signed_64
+    Buf : Unsigned_8 Slice
+    No_Stop : Boolean
+    Produces Boolean
+    Declares
+        Len : Unsigned_64
+        I : Unsigned_64
+        Last : Boolean
+        Ok : Boolean
+    Implements
+        Len = Buf.Length
+        If (Len == 0)
+            Give True
+        End If
+        I = 1
+        Loop Until (I > Len)
+            Last = (I == Len) And (No_Stop == False)
+            Ok = I2C_Write_Byte_Direct(I2c_Idx, Addr, Cast[Signed_64](Buf[I]), Last)
+            If (Ok == False)
+                Give False
+            End If
+            I = I + 1
+        End Loop
+        Give True
+End I2C_Write_Slice
+
+Block I2C_Read_Slice Takes
+    I2c_Idx : Signed_64
+    Addr : Signed_64
+    Buf : Unsigned_8 Slice
+    No_Stop : Boolean
+    Produces Boolean
+    Declares
+        Len : Unsigned_64
+        I : Unsigned_64
+        Last : Boolean
+        B : Signed_64
+    Implements
+        Len = Buf.Length
+        If (Len == 0)
+            Give True
+        End If
+        I = 1
+        Loop Until (I > Len)
+            Last = (I == Len) And (No_Stop == False)
+            B = I2C_Read_Byte_Direct(I2c_Idx, Addr, Last)
+            Buf[I] = Cast[Unsigned_8](B & 0xFF)
+            I = I + 1
+        End Loop
+        Give True
+End I2C_Read_Slice
+
+# Common Register Helpers for I2C Sensors & Chips
+Block I2C_Write_Register_8 Takes
+    I2c_Idx : Signed_64
+    Dev_Addr : Signed_64
+    Reg_Addr : Signed_64
+    Val : Signed_64
+    Produces Boolean
+    Declares
+        Ok : Boolean
+    Implements
+        # Write register pointer without STOP
+        Ok = I2C_Write_Byte_Direct(I2c_Idx, Dev_Addr, Reg_Addr, False)
+        If (Ok == False)
+            Give False
+        End If
+        # Write data byte with STOP
+        Give I2C_Write_Byte_Direct(I2c_Idx, Dev_Addr, Val, True)
+End I2C_Write_Register_8
+
+Block I2C_Read_Register_8 Takes
+    I2c_Idx : Signed_64
+    Dev_Addr : Signed_64
+    Reg_Addr : Signed_64
+    Produces Signed_64
+    Declares
+        Ok : Boolean
+    Implements
+        # Write register address without STOP
+        Ok = I2C_Write_Byte_Direct(I2c_Idx, Dev_Addr, Reg_Addr, False)
+        If (Ok == False)
+            Give -1
+        End If
+        # Read byte with STOP
+        Give I2C_Read_Byte_Direct(I2c_Idx, Dev_Addr, True)
+End I2C_Read_Register_8
+

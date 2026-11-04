@@ -1,0 +1,56 @@
+Module RP2040
+
+Import System
+Import Clock
+Import GPIO
+Import Time
+Import UART
+Import SPI
+Import I2C
+Import ADC
+Import PWM
+Import DMA
+Import Watchdog
+Import Multicore
+Import PIO
+Import RTC
+Import Interp
+
+use System
+use Clock
+use GPIO
+use Time
+use UART
+use SPI
+use I2C
+use ADC
+use PWM
+use DMA
+use Watchdog
+use Multicore
+use PIO
+use RTC
+use Interp
+
+Block RP2040_Init
+    Implements
+        # 1. Initialize full clock tree: XOSC 12 MHz, PLL_SYS 125 MHz, PLL_USB 48 MHz,
+        # clk_sys 125 MHz, clk_peri 125 MHz, clk_usb 48 MHz, clk_adc 48 MHz, clk_rtc 46875 Hz
+        Clock_Init()
+
+        # 2. Unreset essential hardware peripherals: IO_BANK0, PADS_BANK0, TIMER
+        Unreset_Peripherals(RESET_IO_BANK0 | RESET_PADS_BANK0 | RESET_TIMER)
+
+        # 3. Initialize hardware watchdog tick and arm watchdog with 5s timeout
+        Watchdog_Enable(5000, True)
+        Watchdog_Feed()
+End RP2040_Init
+
+Block RP2040_Init_Minimal
+    Implements
+        # Minimal initialization running directly from 12 MHz XOSC without starting PLLs
+        System_Init()
+        Watchdog_Enable(5000, True)
+        Watchdog_Feed()
+End RP2040_Init_Minimal
+

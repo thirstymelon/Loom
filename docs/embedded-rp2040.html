@@ -1,4 +1,4 @@
-<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Embedded RP2040 · Loom 1.0.0</title><link rel=stylesheet href="styles.css"><link rel="icon" type="image/png" href="assets/logo.png"></head><body data-r=""><header><div class=w><a class=brand href="index.html"><img src="assets/logo.png" alt="Loom"><span>Loom<i>.</i><sup>1.0.0</sup></span></a><nav><a href="getting-started.html">Start</a><a href="tutorials/index.html">Tutorials</a><a href="developer-overview.html">Developer</a><a href="embedded-rp2040.html" class=on>Embedded</a><a href="reference.html">Reference</a></nav><button class=sb id=sk>Search <kbd>Ctrl K</kbd></button><button class=mb id=mb aria-label=Menu>≡</button></div></header><div class="w doc"><article>
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Embedded RP2040 · Loom 1.1.0</title><link rel=stylesheet href="styles.css"><link rel="icon" type="image/png" href="assets/logo.png"></head><body data-r=""><header><div class=w><a class=brand href="index.html"><img src="assets/logo.png" alt="Loom"><span>Loom<i>.</i><sup>1.1.0</sup></span></a><nav><a href="getting-started.html">Start</a><a href="tutorials/index.html">Tutorials</a><a href="developer-overview.html">Developer</a><a href="embedded-rp2040.html" class=on>Embedded</a><a href="reference.html">Reference</a></nav><button class=sb id=sk>Search <kbd>Ctrl K</kbd></button><button class=mb id=mb aria-label=Menu>≡</button></div></header><div class="w doc"><article>
 <p class=eb>Bare-Metal Systems & Embedded Hardware</p><h1>Bare-metal RP2040 development</h1>
 <p class=lead>Write high-performance bare-metal firmware for the Raspberry Pi RP2040 (Raspberry Pi Pico) using Loom and the Loom SDK. No operating system, zero hidden runtime overhead, and direct register control.</p>
 
@@ -32,59 +32,178 @@ cd PicoBlink</code></pre>
 <tr><th>SDK Path<th>Technical Function</tr>
 <tr><td><code>targets/rp2040/boot.s</code><td>Stage-2 bootloader (boot2 with 256-byte CRC32 header) configured for W25Q080 QSPI Flash, full ARM Cortex-M0+ vector table (Reset, NMI, HardFault, SysTick), stack initialization, flash-to-RAM <code>.data</code> segment copying, and <code>.bss</code> zeroing.</tr>
 <tr><td><code>targets/rp2040/linker.ld</code><td>Bare-metal memory map configuring 2 MB Flash (<code>0x10000000</code>) and 264 KB SRAM (<code>0x20000000</code>), section alignments, and initial stack pointer placement at the top of RAM (<code>0x20042000</code>).</tr>
-<tr><td><code>targets/rp2040/bsp/</code><td>Pre-compiled Loom hardware abstraction modules (<code>System</code>, <code>GPIO</code>, <code>Time</code>, <code>UART</code>, <code>ADC</code>, <code>PWM</code>).</tr>
-<tr><td><code>std/</code><td>Loom standard library: <code>math.loom</code> (math functions) and <code>io.loom</code>.</tr>
+<tr><td><code>targets/rp2040/bsp/</code><td>Pre-compiled Loom hardware abstraction modules (<code>RP2040</code>, <code>System</code>, <code>Clock</code>, <code>GPIO</code>, <code>Time</code>, <code>UART</code>, <code>SPI</code>, <code>I2C</code>, <code>ADC</code>, <code>PWM</code>, <code>DMA</code>, <code>Watchdog</code>, <code>Multicore</code>, <code>PIO</code>, <code>RTC</code>, <code>Interp</code>).</tr>
+<tr><td><code>std/</code><td>Loom standard library: <code>math.loom</code> (standard mathematical routines).</tr>
 </table>
 
 <div class=note><p><b>Resolution Order:</b> <code>loom build</code> searches your local project directory first, then checks <code>/usr/local/share/loom/sdk/</code> or <code>$LOOM_SDK_PATH</code>. To customize a hardware driver, simply place a file named <code>src/bsp/gpio.loom</code> in your project, and it will override the SDK default.</p></div>
 
 <h2 id="hardware-abstraction-layer">Hardware Abstraction Layer (HAL) modules</h2>
-<p>The Loom SDK provides clean, modular HAL components for controlling RP2040 hardware peripherals:</p>
+<p>The Loom SDK provides clean, zero-overhead modular HAL components for controlling every hardware peripheral on the RP2040:</p>
 
-<h3>1. Module System (<code>System</code>)</h3>
+<h3>1. Master Umbrella Module (<code>RP2040</code>)</h3>
 <ul>
-<li><code>System_Init()</code>: Starts the 12 MHz external crystal oscillator (XOSC), switches reference clocks, and enables hardware timers.</li>
-<li><code>Unreset_Peripherals(Mask : Unsigned_32)</code>: Releases hardware peripherals from the RP2040 reset controller and polls until operational.</li>
+<li><code>RP2040_Init()</code>: High-performance initialization configuring 12 MHz XOSC, tuning PLL_SYS to 125 MHz, PLL_USB to 48 MHz, clk_adc to 48 MHz, clk_rtc to 46875 Hz, enabling hardware timers, initializing UART0 at 115200 baud, and unresetting all core peripherals.</li>
+<li><code>RP2040_Init_Minimal()</code>: Fast lightweight boot directly on 12 MHz XOSC without PLL lock wait times, suitable for low-power or minimalist firmware.</li>
+<li><code>Import RP2040</code> / <code>use RP2040</code>: Transitive imports grant immediate access to all peripheral drivers with a single line.</li>
 </ul>
 
-<h3>2. Module GPIO (<code>GPIO</code>)</h3>
+<h3>2. Module System (<code>System</code>)</h3>
+<ul>
+<li><code>System_Init()</code>: Initializes crystal oscillator (XOSC), switches reference clocks, and unresets timers.</li>
+<li><code>Unreset_Peripherals(Mask : Unsigned_32)</code>: Atomically clears reset bits for selected peripherals and polls until operational.</li>
+<li><code>Reset_Peripherals(Mask : Unsigned_32)</code>: Asserts hardware reset on target peripheral blocks.</li>
+<li><code>Is_Peripheral_Ready(Mask : Unsigned_32)</code>: Returns <code>True</code> when all masked peripherals are out of reset.</li>
+<li><code>System_Reset()</code>: Performs a deterministic software chip reboot via ARM Cortex-M0+ AIRCR sysresetreq and Watchdog trigger.</li>
+<li><code>Get_Chip_Revision()</code> / <code>Get_Chip_Part()</code> / <code>Is_ASIC_Platform()</code>: Hardware silicon identification via SIO <code>CHIP_ID</code> and <code>PLATFORM</code> registers.</li>
+</ul>
+
+<h3>3. Module Clock (<code>Clock</code>)</h3>
+<ul>
+<li><code>Clock_Init()</code>: Configures complete standard RP2040 clock tree: 125 MHz system clock, 125 MHz peripheral clock, 48 MHz USB clock, 48 MHz ADC clock, and 46875 Hz RTC clock.</li>
+<li><code>Clock_Set_Sys_Freq(FreqHz : Signed_64)</code>: Dynamically retunes the system clock (48 MHz, 125 MHz, 133 MHz) through glitchless muxing without crashing running code.</li>
+<li><code>Clock_Configure(Clock_Idx, Glitchless_Src, Aux_Src, Src_Freq, Target_Freq)</code>: Full low-level clock generator configuration following the official datasheet switching protocol.</li>
+<li><code>XOSC_Init()</code> / <code>XOSC_Disable()</code> / <code>XOSC_Is_Stable()</code>: Controls the 12 MHz crystal oscillator with hardware startup delay counters.</li>
+<li><code>ROSC_Set_Div(Div)</code> / <code>ROSC_Get_Random_Word()</code> / <code>ROSC_Get_Random_Bit()</code>: Controls ring oscillator and extracts true hardware entropy (TRNG) from physical ring oscillator jitter.</li>
+<li><code>PLL_Init(Pll_Idx, RefDiv, FbDiv, PostDiv1, PostDiv2)</code> / <code>PLL_Sys_Init_125Mhz()</code> / <code>PLL_Usb_Init_48Mhz()</code>: Precision integer and fractional PLL synthesis.</li>
+<li><code>Clock_Frequency_Count_Khz(FcSrc)</code> / <code>Clock_Frequency_Count_Mhz(FcSrc)</code>: Hardware frequency measurement via FC0 counter against reference crystal.</li>
+<li><code>Clock_Resus_Enable(Cycles)</code> / <code>Clock_Resus_Has_Triggered()</code> / <code>Clock_Resus_Clear()</code>: Clock resuscitation watchdog that auto-switches to backup clock if PLL fails.</li>
+<li><code>Clock_Gpio_Init(GpioPin, ClkSrc, Div)</code>: Outputs internal clock signals to GPIO pins (GPIO 21, 23, 24, 25).</li>
+</ul>
+
+<h3>4. Module GPIO (<code>GPIO</code>)</h3>
 <ul>
 <li><code>Init_Pin(Pin : Signed_64)</code>: Configures a pin for Single-Cycle IO (SIO function 5).</li>
+<li><code>Set_Function(Pin : Signed_64, Func : Signed_64)</code>: Maps pin to hardware functions (SPI, UART, I2C, PWM, SIO, PIO0, PIO1, USB).</li>
 <li><code>Set_Direction(Pin : Signed_64, Direction : Signed_64)</code>: Sets pin mode to <code>PIN_OUTPUT</code> (1) or <code>PIN_INPUT</code> (0).</li>
 <li><code>Set_High(Pin : Signed_64)</code> / <code>Set_Low(Pin : Signed_64)</code>: Drives pin state high (3.3V) or low (0V) in a single CPU cycle.</li>
 <li><code>Toggle(Pin : Signed_64)</code>: Inverts the current logic state of the pin.</li>
 <li><code>Read_Pin(Pin : Signed_64)</code>: Reads digital input state, returning 0 or 1.</li>
 <li><code>Set_Pull(Pin : Signed_64, Pull : Signed_64)</code>: Configures pull-up (<code>PULL_UP</code>), pull-down (<code>PULL_DOWN</code>), or floating (<code>PULL_NONE</code>).</li>
+<li><code>Set_Drive_Strength(Pin : Signed_64, Drive : Signed_64)</code>: Configures output drive current (2mA, 4mA, 8mA, 12mA).</li>
+<li><code>Set_Slew_Rate(Pin : Signed_64, Fast : Boolean)</code> / <code>Set_Schmitt_Trigger(Pin : Signed_64, Enable : Boolean)</code>: Configures pad slew rate and hysteresis.</li>
+<li><code>Set_Pins_Mask(Mask : Unsigned_32)</code> / <code>Clear_Pins_Mask(Mask : Unsigned_32)</code>: Atomic multi-pin port manipulation.</li>
+<li><code>Enable_Pin_Interrupt(Pin : Signed_64, Events : Signed_64)</code> / <code>Clear_Pin_Interrupt(Pin : Signed_64, Events : Signed_64)</code>: Pin edge/level interrupt configuration and clearing on default Core 0.</li>
+<li><code>Enable_Pin_Interrupt_Core(CoreId : Signed_64, Pin : Signed_64, Events : Signed_64)</code> / <code>Get_Pin_Interrupt_Status_Core(...)</code>: Independent dual-core GPIO interrupt routing for Core 0 or Core 1.</li>
 </ul>
 
-<h3>3. Module Time (<code>Time</code>)</h3>
+<h3>5. Module Time (<code>Time</code>)</h3>
 <ul>
-<li><code>Get_Time_Microseconds()</code>: Reads the RP2040 64-bit 1 MHz hardware timer directly from memory register <code>0x4005400C</code>.</li>
+<li><code>Get_Time_Microseconds()</code>: Reads the RP2040 64-bit 1 MHz hardware timer directly and safely using non-latching registers.</li>
+<li><code>Get_Time_64_Microseconds()</code>: Thread-safe, multi-core safe non-latching atomic 64-bit microsecond counter read via <code>TIMERAWH</code> and <code>TIMERAWL</code>.</li>
 <li><code>Get_Time()</code>: Returns current board uptime in milliseconds.</li>
-<li><code>Delay_Microseconds(Microseconds : Signed_64)</code>: Busy-wait delay accurate to the microsecond.</li>
-<li><code>Delay(Milliseconds : Signed_64)</code>: Busy-wait delay in milliseconds.</li>
+<li><code>Delay_Microseconds(Microseconds : Signed_64)</code> / <code>Delay(Milliseconds : Signed_64)</code>: Busy-wait delay calibrated to hardware clock.</li>
+<li><code>SleepUs(Microseconds : Signed_64)</code> / <code>SleepMs(Milliseconds : Signed_64)</code>: Precision sleep helpers.</li>
+<li><code>Set_Alarm_Target(AlarmId : Signed_64, TargetUs : Signed_64)</code> / <code>Set_Alarm_Delay(AlarmId : Signed_64, DelayUs : Signed_64)</code>: Arms hardware alarms 0–3.</li>
+<li><code>Is_Alarm_Armed(AlarmId : Signed_64)</code> / <code>Disarm_Alarm(AlarmId : Signed_64)</code> / <code>Clear_Alarm_Interrupt(AlarmId : Signed_64)</code>: Hardware alarm polling, disarming, and interrupt clearing.</li>
 </ul>
 
-<h3>4. Module UART (<code>UART</code>)</h3>
+<h3>6. Module UART (<code>UART</code>)</h3>
 <ul>
-<li><code>UART_Init(Baud_Rate : Signed_64)</code>: Configures UART0 on GPIO 0 (TX) and GPIO 1 (RX) with line control (8 data bits, no parity, 1 stop bit, FIFOs enabled).</li>
-<li><code>Write_UART(Msg : String)</code>: High-performance intrinsic for serial string output with interpolation.</li>
-<li><code>Read_UART_Char()</code>: Blocking read of a single character from the UART receive FIFO.</li>
-<li><code>UART_Available()</code>: Returns <code>True</code> if characters are waiting in the receive buffer.</li>
+<li><code>UART_Init(Baud_Rate : Signed_64)</code>: Configures default UART0 on GPIO 0 (TX) and GPIO 1 (RX) with line control (8 data bits, no parity, 1 stop bit, FIFOs enabled) automatically sensing peripheral clock.</li>
+<li><code>UART_Init_Channel(Channel : Signed_64, Baud_Rate : Signed_64, PinTx : Signed_64, PinRx : Signed_64)</code>: Configures either UART0 or UART1 with custom pin assignments and fractional baud rate divisor.</li>
+<li><code>UART_Set_Baud_Rate(Uart_Idx : Signed_64, Baud_Rate : Signed_64, Peri_Clock_Hz : Signed_64)</code>: Dynamically recalibrates integer and fractional baud divisors for any peripheral clock.</li>
+<li><code>Write_UART(Msg : String)</code>: Serial string output with automatic newline handling.</li>
+<li><code>Write_UART_Byte(B : Signed_64)</code> / <code>Read_UART_Char()</code>: Single-byte FIFO write and blocking read.</li>
+<li><code>UART_Available()</code> / <code>UART_Is_Writable()</code>: Checks receive FIFO depth and transmit FIFO headroom.</li>
 </ul>
 
-<h3>5. Module ADC (<code>ADC</code>)</h3>
+<h3>7. Module SPI (<code>SPI</code>)</h3>
 <ul>
-<li><code>ADC_Init()</code>: Powers up the 12-bit ADC and onboard temperature sensor.</li>
-<li><code>Read_ADC_Raw(Channel : Signed_64)</code>: Reads 12-bit conversion result (0–4095) for GPIO 26–29 (channels 0–3) or temperature sensor (channel 4).</li>
+<li><code>SPI_Init(BaudRate : Signed_64)</code>: Configures default SPI0 at target baud rate (GPIO 16 MISO, 19 MOSI, 18 SCK) automatically adapting to peripheral clock.</li>
+<li><code>SPI_Init_Channel(Channel : Signed_64, BaudRate : Signed_64, PinRx : Signed_64, PinTx : Signed_64, PinSck : Signed_64)</code>: Initializes SPI0 or SPI1 with custom pin muxing.</li>
+<li><code>SPI_Set_Baud_Rate(Spi_Idx : Signed_64, Baud_Hz : Signed_64, Peri_Clock_Hz : Signed_64)</code>: Computes even prescale and serial clock dividers for exact target frequencies.</li>
+<li><code>SPI_Set_Format(Channel : Signed_64, DataBits : Signed_64, Cpol : Signed_64, Cpha : Signed_64)</code>: Configures Motorola SPI Modes 0, 1, 2, or 3 and word size (4 to 16 bits).</li>
+<li><code>SPI_Write_Byte_Ch(Channel : Signed_64, Data : Signed_64)</code> / <code>SPI_Read_Byte_Ch(Channel : Signed_64)</code>: Single-word blocking transmission and reception.</li>
+<li><code>SPI_Transfer_Byte_Ch(Channel : Signed_64, Data : Signed_64)</code>: Full-duplex simultaneous write/read.</li>
+<li><code>SPI_Write_Slice(Channel : Signed_64, Data : Unsigned_8 Slice)</code> / <code>SPI_Read_Slice(...)</code>: High-throughput buffer streaming via fat slices.</li>
+</ul>
+
+<h3>8. Module I2C (<code>I2C</code>)</h3>
+<ul>
+<li><code>I2C_Init(SpeedHz : Signed_64)</code>: Configures default I2C0 on GPIO 4 (SDA) and GPIO 5 (SCL) in standard (100 kHz) or fast (400 kHz) mode.</li>
+<li><code>I2C_Init_Channel(Channel : Signed_64, SpeedHz : Signed_64, PinSda : Signed_64, PinScl : Signed_64)</code>: Initializes I2C0 or I2C1 with automatic clock frequency dividers.</li>
+<li><code>I2C_Init_Channel_Freq(...)</code>: Uses exact datasheet timing equations to synthesize SCL High and Low counts dynamically for any system clock frequency.</li>
+<li><code>I2C_Write_Byte_Direct(Channel : Signed_64, Addr : Signed_64, Val : Signed_64, Stop : Boolean)</code>: Transmits a single byte to a 7-bit slave address.</li>
+<li><code>I2C_Read_Byte_Direct(Channel : Signed_64, Addr : Signed_64, Stop : Boolean)</code>: Receives a single byte from a 7-bit slave address.</li>
+<li><code>I2C_Write_Slice(...)</code> / <code>I2C_Read_Slice(...)</code>: Multi-byte block transfers with configurable STOP condition.</li>
+<li><code>I2C_Write_Register_8(...)</code> / <code>I2C_Read_Register_8(...)</code>: Sensor register transactions.</li>
+</ul>
+
+<h3>9. Module ADC (<code>ADC</code>)</h3>
+<ul>
+<li><code>ADC_Init()</code>: Powers up the 12-bit ADC, verifies active ADC clocking, and enables onboard temperature sensor.</li>
+<li><code>ADC_Init_Pin(Pin : Signed_64)</code>: Disables digital pad buffers on GPIO 26–29 to eliminate leakage during analog sampling.</li>
+<li><code>ADC_Select_Input(Channel : Signed_64)</code>: Selects the active multiplexer input channel (0–3 for GPIO 26–29, 4 for temperature sensor).</li>
+<li><code>Read_ADC_Raw(Channel : Signed_64)</code>: Reads 12-bit conversion result (0–4095).</li>
 <li><code>Read_ADC_Millivolts(Channel : Signed_64)</code>: Converts reading to calibrated millivolts.</li>
+<li><code>Read_Temperature_Celsius()</code> / <code>Read_Temperature_Millicelsius()</code>: Computes onboard temperature using official RP2040 datasheet $V_{BE}$ conversion curve.</li>
 </ul>
 
-<h3>6. Module PWM (<code>PWM</code>)</h3>
+<h3>10. Module PWM (<code>PWM</code>)</h3>
 <ul>
 <li><code>PWM_Init(Pin : Signed_64)</code>: Assigns a GPIO pin to its hardware PWM slice (channels 0–7) with 16-bit TOP wrap (65535).</li>
-<li><code>Set_PWM_Raw(Pin : Signed_64, Level : Signed_64)</code>: Directly sets the compare level (0–65535).</li>
+<li><code>PWM_Set_Clock_Div(Pin : Signed_64, IntegerPart : Signed_64, FracPart : Signed_64)</code>: Fine-grained clock prescaler control.</li>
+<li><code>PWM_Set_Wrap(Pin : Signed_64, Wrap : Signed_64)</code>: Configures custom counter reload period (TOP).</li>
+<li><code>PWM_Set_Enabled(Pin : Signed_64, Enabled : Boolean)</code>: Starts or halts an individual PWM counter slice.</li>
+<li><code>PWM_Set_Mask_Enabled(Mask : Unsigned_32)</code>: Atomically starts or stops multiple PWM slices simultaneously.</li>
+<li><code>Set_PWM_Raw(Pin : Signed_64, Level : Signed_64)</code>: Directly sets the compare level (0–TOP).</li>
 <li><code>Set_PWM_Duty(Pin : Signed_64, Percent : Signed_64)</code>: Sets duty cycle by percentage (0–100%).</li>
+</ul>
+
+<h3>11. Module DMA (<code>DMA</code>)</h3>
+<ul>
+<li><code>DMA_Init()</code>: Unresets the 12-channel Direct Memory Access controller.</li>
+<li><code>DMA_Channel_Configure(...)</code>: Configures transfer size (8, 16, or 32-bit), source/destination address increments, peripheral DREQ pacing, and channel chaining.</li>
+<li><code>DMA_Channel_Set_Read_Addr(...)</code> / <code>DMA_Channel_Set_Write_Addr(...)</code> / <code>DMA_Channel_Set_Trans_Count(...)</code>: Dedicated address and count setters.</li>
+<li><code>DMA_Channel_Start(Channel : Signed_64)</code>: Initiates asynchronous data transfer on a single channel.</li>
+<li><code>DMA_Start_Multi_Channel(Mask : Unsigned_32)</code>: Atomically triggers simultaneous transfers across multiple DMA channels.</li>
+<li><code>DMA_Channel_Is_Busy(Channel : Signed_64)</code> / <code>DMA_Channel_Wait_Blocking(Channel : Signed_64)</code>: Transfer polling and blocking synchronization.</li>
+<li><code>DMA_Memcpy_32(DestAddr : Signed_64, SrcAddr : Signed_64, WordCount : Signed_64)</code>: High-speed hardware-accelerated memory block copies.</li>
+</ul>
+
+<h3>12. Module Watchdog (<code>Watchdog</code>)</h3>
+<ul>
+<li><code>Watchdog_Enable(TimeoutMs : Signed_64, PauseOnDebug : Boolean)</code>: Configures and arms the hardware watchdog timer (up to 8,388 ms).</li>
+<li><code>Watchdog_Feed()</code>: Reloads the watchdog counter.</li>
+<li><code>Watchdog_Caused_Reboot()</code>: Detects if the previous reset was triggered by a watchdog countdown expiration.</li>
+<li><code>Watchdog_Set_Scratch(RegIndex : Signed_64, Value : Unsigned_32)</code> / <code>Watchdog_Get_Scratch(...)</code>: Non-volatile scratch registers 0–7 surviving soft resets.</li>
+<li><code>Watchdog_Reboot_To_Bootsel()</code>: Soft-reboots microcontroller directly into USB BOOTSEL mass-storage flashing mode without unplugging.</li>
+</ul>
+
+<h3>13. Module Multicore (<code>Multicore</code>)</h3>
+<ul>
+<li><code>Get_Core_Num()</code>: Returns current CPU core (0 or 1).</li>
+<li><code>Spinlock_Claim(LockIndex : Signed_64)</code> / <code>Spinlock_Release(LockIndex : Signed_64)</code>: 32 atomic hardware spinlocks providing single-cycle inter-core mutex synchronization.</li>
+<li><code>Spinlock_Try_Claim(LockIndex : Signed_64)</code>: Non-blocking spinlock attempt returning <code>True</code> if acquired.</li>
+<li><code>Multicore_FIFO_Push_Blocking(Data : Unsigned_32)</code> / <code>Multicore_FIFO_Pop_Blocking()</code>: Inter-core mailbox FIFO message queues.</li>
+<li><code>Multicore_Launch_Core1(EntryAddr : Signed_64, StackTop : Signed_64)</code>: Bootrom handshake sequence launching Core 1 execution.</li>
+</ul>
+
+<h3>14. Module PIO (<code>PIO</code>)</h3>
+<ul>
+<li><code>PIO_Init(PioIndex : Signed_64)</code>: Unresets PIO0 or PIO1 programmable I/O subsystem.</li>
+<li><code>PIO_Load_Instruction(PioIndex : Signed_64, Offset : Signed_64, Instr : Unsigned_16)</code>: Loads raw instructions into the 32-instruction shared memory.</li>
+<li><code>PIO_Load_Program(...)</code>: Streams complete state machine microcode programs via slices.</li>
+<li><code>PIO_SM_Init(...)</code> / <code>PIO_SM_Set_Clock_Div(...)</code> / <code>PIO_SM_Set_Enabled(...)</code>: Initializes and controls execution for any of the 8 state machines.</li>
+<li><code>PIO_SM_Push_Blocking(...)</code> / <code>PIO_SM_Pull_Blocking(...)</code>: Direct data exchange with state machine TX and RX FIFOs.</li>
+</ul>
+
+<h3>15. Module RTC (<code>RTC</code>)</h3>
+<ul>
+<li><code>RTC_Init()</code>: Configures reference clock 1 Hz dividers and starts the hardware Real-Time Clock calendar.</li>
+<li><code>RTC_Set_DateTime(Year, Month, Day, DayOfWeek, Hour, Minute, Second)</code>: Sets calendar date and time.</li>
+<li><code>RTC_Get_Year()</code>, <code>RTC_Get_Month()</code>, <code>RTC_Get_Day()</code>, <code>RTC_Get_Hour()</code>, <code>RTC_Get_Minute()</code>, <code>RTC_Get_Second()</code>: Reads atomic calendar values.</li>
+<li><code>RTC_Is_Running()</code>: Verifies active RTC oscillator tracking.</li>
+</ul>
+
+<h3>16. Module Interp (<code>Interp</code>)</h3>
+<ul>
+<li>Dual SIO hardware interpolators (<code>INTERP_0</code> and <code>INTERP_1</code>) featuring two simultaneous calculation lanes (<code>LANE_0</code> and <code>LANE_1</code>) and shared <code>BASE2</code> register.</li>
+<li><code>Interp_Set_Accum(...)</code> / <code>Interp_Add_Accum(...)</code> / <code>Interp_Set_Base(...)</code> / <code>Interp_Set_Base_2(...)</code> / <code>Interp_Set_Base_1And0(...)</code>: Configures accumulator registers, lane bases, and packed base registers.</li>
+<li><code>Interp_Set_Config(...)</code>: Configures bit shifts, masks, and signed clamping.</li>
+<li><code>Interp_Peek_Result(...)</code> / <code>Interp_Pop_Result(...)</code>: Instant hardware evaluation with automatic writeback for affine texture mapping, audio synthesis, and fixed-point stepping.</li>
+<li><code>Interp_Peek_Combined(...)</code> / <code>Interp_Pop_Combined(...)</code>: Simultaneous multi-lane evaluation for 2D coordinate generation.</li>
 </ul>
 
 <h2 id="blink-firmware">Complete Blink & UART heartbeat firmware</h2>
@@ -163,7 +282,7 @@ End Read_Timer</code></pre>
 <li>The virtual Raspberry Pi Pico will boot the compiled ELF binary, flash the LED, and print messages to the built-in serial monitor.</li>
 </ol>
 
-<div class=pn><a href="developer-overview.html"><small>← Previous</small>Developer overview</a><a href="reference.html"><small>Next →</small>Reference</a></div></article><aside id=toc></aside></div><footer><div class=w><span>Loom 1.0.0</span><span>loomc 1.0.0 (LLVM 23.1.4)</span></div></footer><div id=pal><div><input id=pi placeholder="Search the docs…"><div id=pl></div></div></div><script>const IDX=[["Overview", "index.html", "Page"], ["Getting started", "getting-started.html", "Page"], ["Tutorials", "tutorials/index.html", "Page"], ["Beginner guide", "tutorials/beginner-guide.html", "Page"], ["Developer overview", "developer-overview.html", "Page"], ["Embedded RP2040", "embedded-rp2040.html", "Page"], ["Reference", "reference.html", "Page"], ["Pillars", "index.html#pillars", "Overview"], ["Features", "index.html#features", "Overview"], ["Quick start", "index.html#quick-start", "Overview"], ["Explore", "index.html#explore", "Overview"], ["Install", "getting-started.html#install", "Getting started"], ["Toolchain", "getting-started.html#toolchain", "Getting started"], ["Editor setup", "getting-started.html#editor-setup", "Getting started"], ["Project anatomy", "getting-started.html#project-anatomy", "Getting started"], ["Your first project", "getting-started.html#your-first-project", "Getting started"], ["1. Hello, World", "tutorials/beginner-guide.html#l1", "Beginner guide"], ["2. Variables, types and literals", "tutorials/beginner-guide.html#l2", "Beginner guide"], ["3. Operators", "tutorials/beginner-guide.html#l3", "Beginner guide"], ["4. Decisions", "tutorials/beginner-guide.html#l4", "Beginner guide"], ["5. Loops", "tutorials/beginner-guide.html#l5", "Beginner guide"], ["6. Procedures", "tutorials/beginner-guide.html#l6", "Beginner guide"], ["7. Records, enums and Match", "tutorials/beginner-guide.html#l7", "Beginner guide"], ["8. Arrays and slices", "tutorials/beginner-guide.html#l8", "Beginner guide"], ["9. Pointers, Cast and Ensure", "tutorials/beginner-guide.html#l9", "Beginner guide"], ["10. Modules", "tutorials/beginner-guide.html#l10", "Beginner guide"], ["Memory model", "developer-overview.html#memory-model", "Developer overview"], ["Safety rules", "developer-overview.html#safety-rules", "Developer overview"], ["Deterministic cleanup", "developer-overview.html#deterministic-cleanup", "Developer overview"], ["Why one-based indexing", "developer-overview.html#why-one-based-indexing", "Developer overview"], ["Compiler pipeline", "developer-overview.html#compiler-pipeline", "Developer overview"], ["Volatile I/O", "developer-overview.html#volatile-i-o", "Developer overview"], ["C FFI", "developer-overview.html#c-ffi", "Developer overview"], ["Module graphs", "developer-overview.html#module-graphs", "Developer overview"], ["The chip", "embedded-rp2040.html#the-chip", "Embedded RP2040"], ["Create a project", "embedded-rp2040.html#create-a-project", "Embedded RP2040"], ["The SDK", "embedded-rp2040.html#the-sdk", "Embedded RP2040"], ["Hardware abstraction layer", "embedded-rp2040.html#hardware-abstraction-layer", "Embedded RP2040"], ["Blink firmware", "embedded-rp2040.html#blink-firmware", "Embedded RP2040"], ["Direct register access", "embedded-rp2040.html#direct-register-access", "Embedded RP2040"], ["Build and flash", "embedded-rp2040.html#build-and-flash", "Embedded RP2040"], ["Simulate with Wokwi", "embedded-rp2040.html#simulate-with-wokwi", "Embedded RP2040"], ["Types", "reference.html#types", "Reference"], ["Literals", "reference.html#literals", "Reference"], ["Keywords", "reference.html#keywords", "Reference"], ["Operators", "reference.html#operators", "Reference"], ["Volatile intrinsics", "reference.html#volatile-intrinsics", "Reference"], ["CLI", "reference.html#cli", "Reference"], ["Grammar", "reference.html#grammar", "Reference"]];
+<div class=pn><a href="developer-overview.html"><small>← Previous</small>Developer overview</a><a href="reference.html"><small>Next →</small>Reference</a></div></article><aside id=toc></aside></div><footer><div class=w><span>Loom 1.1.0</span><span>loomc 1.1.0 (LLVM 23.1.4)</span></div></footer><div id=pal><div><input id=pi placeholder="Search the docs…"><div id=pl></div></div></div><script>const IDX=[["Overview", "index.html", "Page"], ["Getting started", "getting-started.html", "Page"], ["Tutorials", "tutorials/index.html", "Page"], ["Beginner guide", "tutorials/beginner-guide.html", "Page"], ["Developer overview", "developer-overview.html", "Page"], ["Embedded RP2040", "embedded-rp2040.html", "Page"], ["Reference", "reference.html", "Page"], ["Pillars", "index.html#pillars", "Overview"], ["Features", "index.html#features", "Overview"], ["Quick start", "index.html#quick-start", "Overview"], ["Explore", "index.html#explore", "Overview"], ["Install", "getting-started.html#install", "Getting started"], ["Toolchain", "getting-started.html#toolchain", "Getting started"], ["Editor setup", "getting-started.html#editor-setup", "Getting started"], ["Project anatomy", "getting-started.html#project-anatomy", "Getting started"], ["Your first project", "getting-started.html#your-first-project", "Getting started"], ["1. Hello, World", "tutorials/beginner-guide.html#l1", "Beginner guide"], ["2. Variables, types and literals", "tutorials/beginner-guide.html#l2", "Beginner guide"], ["3. Operators", "tutorials/beginner-guide.html#l3", "Beginner guide"], ["4. Decisions", "tutorials/beginner-guide.html#l4", "Beginner guide"], ["5. Loops", "tutorials/beginner-guide.html#l5", "Beginner guide"], ["6. Procedures", "tutorials/beginner-guide.html#l6", "Beginner guide"], ["7. Records, enums and Match", "tutorials/beginner-guide.html#l7", "Beginner guide"], ["8. Arrays and slices", "tutorials/beginner-guide.html#l8", "Beginner guide"], ["9. Pointers, Cast and Ensure", "tutorials/beginner-guide.html#l9", "Beginner guide"], ["10. Modules", "tutorials/beginner-guide.html#l10", "Beginner guide"], ["Memory model", "developer-overview.html#memory-model", "Developer overview"], ["Safety rules", "developer-overview.html#safety-rules", "Developer overview"], ["Deterministic cleanup", "developer-overview.html#deterministic-cleanup", "Developer overview"], ["Why one-based indexing", "developer-overview.html#why-one-based-indexing", "Developer overview"], ["Compiler pipeline", "developer-overview.html#compiler-pipeline", "Developer overview"], ["Volatile I/O", "developer-overview.html#volatile-i-o", "Developer overview"], ["C FFI", "developer-overview.html#c-ffi", "Developer overview"], ["Module graphs", "developer-overview.html#module-graphs", "Developer overview"], ["The chip", "embedded-rp2040.html#the-chip", "Embedded RP2040"], ["Create a project", "embedded-rp2040.html#create-a-project", "Embedded RP2040"], ["The SDK", "embedded-rp2040.html#the-sdk", "Embedded RP2040"], ["Hardware abstraction layer", "embedded-rp2040.html#hardware-abstraction-layer", "Embedded RP2040"], ["Blink firmware", "embedded-rp2040.html#blink-firmware", "Embedded RP2040"], ["Direct register access", "embedded-rp2040.html#direct-register-access", "Embedded RP2040"], ["Build and flash", "embedded-rp2040.html#build-and-flash", "Embedded RP2040"], ["Simulate with Wokwi", "embedded-rp2040.html#simulate-with-wokwi", "Embedded RP2040"], ["Types", "reference.html#types", "Reference"], ["Literals", "reference.html#literals", "Reference"], ["Keywords", "reference.html#keywords", "Reference"], ["Operators", "reference.html#operators", "Reference"], ["Volatile intrinsics", "reference.html#volatile-intrinsics", "Reference"], ["CLI", "reference.html#cli", "Reference"], ["Grammar", "reference.html#grammar", "Reference"]];
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],R=document.body.dataset.r;
 const RE=/(#[^\n]*)|("(?:[^"\\]|\\.)*"|'[^'\n]*')|\b(0x[0-9a-fA-F_]+|0b[01_]+|\d[\d_]*(?:\.\d+)?)\b|\b(Module|Block|Global|Takes|Produces|Declares|Implements|End|Give|If|Else|Loop|While|Until|For|In|Exit|Skip|Ensure|Match|With|When|Import|Use|Constant|Record|Enum|Extern)\b|\b(Address|Deref|Cast|Slice|Null|True|False|And|Or|Not|Mod|LSL|LSR|ASR)\b|\b(Signed_\d+|Unsigned_\d+|Float_\d+|Boolean|Character|String|Pointer|Array|Int\d*|Uint\d*|Float\d*|Bool|Char|Byte|Word|Usize|Isize)\b|([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()|(\+=|-=|\*=|\/=|%=|:=|==|!=|<=|>=|->|=>|::|@|\^)/g;
 const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');

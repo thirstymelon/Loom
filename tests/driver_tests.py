@@ -132,7 +132,7 @@ End Add
     missing_config = run(["graph", "--config", "missing.toml"], project, check=False)
     assert missing_config.returncode != 0 and "missing.toml" in missing_config.stderr
     version = run(["--version"], project)
-    assert "1.0.0" in version.stdout
+    assert "1.1.0" in version.stdout
     help_text = run(["--help"], project)
     assert "loom graph" in help_text.stdout and "--verbose" in help_text.stdout
     unsupported_mode = run(["build", "--freestanding"], project, check=False)
@@ -168,7 +168,7 @@ End Add
     expected = ("==========================================\n"
                 "       Loom Language Feature Showcase     \n"
                 "==========================================\n\n"
-                "1. Scalars, Explicit 'Call' Keyword & Recursion:\n"
+                "1. Scalars, Function Calls & Recursion:\n"
                 "Loom: Native Block-Oriented Systems Language\n"
                 "⚡\n"
                 "42\n"

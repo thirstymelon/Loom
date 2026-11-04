@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Loom VERSION 1.0.0 LANGUAGES C CXX)
+project(Loom VERSION 1.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,4 +33,6 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_validation_suite.py $<TARGET_FILE:loomc>)
   add_test(NAME modern_features_suite
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/modern_features_tests.py $<TARGET_FILE:loomc>)
+  add_test(NAME rp2040_peripherals_suite
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/rp2040_peripherals_test.py $<TARGET_FILE:loomc>)
 endif()

@@ -1,0 +1,167 @@
+Module Interp
+
+Import System
+use System
+
+Block Global
+    Declares
+        INTERP_0 : Constant Signed_64 = 0
+        INTERP_1 : Constant Signed_64 = 1
+
+        LANE_0   : Constant Signed_64 = 0
+        LANE_1   : Constant Signed_64 = 1
+End Global
+
+Block Interp_Base_Address Takes
+    Interp_Idx : Signed_64
+    Produces Signed_64
+    Implements
+        If (Interp_Idx == 1)
+            Give 0xD00000C0
+        Else
+            Give 0xD0000080
+        End If
+End Interp_Base_Address
+
+Block Interp_Set_Accum Takes
+    Interp_Idx : Signed_64
+    Lane : Signed_64
+    Value : Unsigned_32
+    Declares
+        Base_Addr : Signed_64
+        Offset : Signed_64
+    Implements
+        Base_Addr = Interp_Base_Address(Interp_Idx)
+        Offset = (Lane & 1) * 4
+        Vol_Write_32(Base_Addr + Offset, Value)
+End Interp_Set_Accum
+
+Block Interp_Set_Base Takes
+    Interp_Idx : Signed_64
+    Lane : Signed_64
+    Value : Unsigned_32
+    Declares
+        Base_Addr : Signed_64
+        Offset : Signed_64
+    Implements
+        Base_Addr = Interp_Base_Address(Interp_Idx)
+        Offset = 8 + ((Lane & 1) * 4)
+        Vol_Write_32(Base_Addr + Offset, Value)
+End Interp_Set_Base
+
+Block Interp_Set_Base_2 Takes
+    Interp_Idx : Signed_64
+    Value : Unsigned_32
+    Declares
+        Base_Addr : Signed_64
+    Implements
+        Base_Addr = Interp_Base_Address(Interp_Idx)
+        Vol_Write_32(Base_Addr + 16, Value)
+End Interp_Set_Base_2
+
+Block Interp_Set_Base_1And0 Takes
+    Interp_Idx : Signed_64
+    Base0_16 : Signed_64
+    Base1_16 : Signed_64
+    Declares
+        Base_Addr : Signed_64
+        Combined : Signed_64
+    Implements
+        Base_Addr = Interp_Base_Address(Interp_Idx)
+        Combined = (Base0_16 & 0xFFFF) | ((Base1_16 & 0xFFFF) LSL 16)
+        Vol_Write_32(Base_Addr + 60, Cast[Unsigned_32](Combined))
+End Interp_Set_Base_1And0
+
+Block Interp_Add_Accum Takes
+    Interp_Idx : Signed_64
+    Lane : Signed_64
+    Value : Unsigned_32
+    Declares
+        Base_Addr : Signed_64
+        Offset : Signed_64
+    Implements
+        Base_Addr = Interp_Base_Address(Interp_Idx)
+        # ACCUM0_ADD at +52, ACCUM1_ADD at +56
+        Offset = 52 + ((Lane & 1) * 4)
+        Vol_Write_32(Base_Addr + Offset, Value)
+End Interp_Add_Accum
+
+Block Interp_Set_Config Takes
+    Interp_Idx : Signed_64
+    Lane : Signed_64
+    Shift : Signed_64
+    Mask_Lsb : Signed_64
+    Mask_Msb : Signed_64
+    Signed_Flag : Boolean
+    Clamp_Flag : Boolean
+    Declares
+        Base_Addr : Signed_64
+        Ctrl_Addr : Signed_64
+        Ctrl : Signed_64
+    Implements
+        Base_Addr = Interp_Base_Address(Interp_Idx)
+        # CTRL_LANE0 is at +44 (0x2C), CTRL_LANE1 is at +48 (0x30)
+        Ctrl_Addr = Base_Addr + 44 + ((Lane & 1) * 4)
+
+        # SHIFT [4:0], MASK_LSB [9:5], MASK_MSB [14:10]
+        Ctrl = (Shift & 31) | ((Mask_Lsb & 31) LSL 5) | ((Mask_Msb & 31) LSL 10)
+        If (Signed_Flag == True)
+            Ctrl = Ctrl | (1 LSL 15)
+        End If
+        If (Clamp_Flag == True)
+            Ctrl = Ctrl | (1 LSL 22)
+        End If
+
+        Vol_Write_32(Ctrl_Addr, Cast[Unsigned_32](Ctrl))
+End Interp_Set_Config
+
+Block Interp_Peek_Result Takes
+    Interp_Idx : Signed_64
+    Lane : Signed_64
+    Produces Unsigned_32
+    Declares
+        Base_Addr : Signed_64
+        Offset : Signed_64
+    Implements
+        Base_Addr = Interp_Base_Address(Interp_Idx)
+        # PEEK0 at +32 (0x20), PEEK1 at +36 (0x24)
+        Offset = 32 + ((Lane & 1) * 4)
+        Give Vol_Read_32(Base_Addr + Offset)
+End Interp_Peek_Result
+
+Block Interp_Pop_Result Takes
+    Interp_Idx : Signed_64
+    Lane : Signed_64
+    Produces Unsigned_32
+    Declares
+        Base_Addr : Signed_64
+        Offset : Signed_64
+    Implements
+        Base_Addr = Interp_Base_Address(Interp_Idx)
+        # POP0 at +20 (0x14), POP1 at +24 (0x18)
+        Offset = 20 + ((Lane & 1) * 4)
+        Give Vol_Read_32(Base_Addr + Offset)
+End Interp_Pop_Result
+
+Block Interp_Peek_Combined Takes
+    Interp_Idx : Signed_64
+    Produces Unsigned_32
+    Declares
+        Base_Addr : Signed_64
+    Implements
+        Base_Addr = Interp_Base_Address(Interp_Idx)
+        # PEEK_FULL is at +40 (0x28)
+        Give Vol_Read_32(Base_Addr + 40)
+End Interp_Peek_Combined
+
+Block Interp_Pop_Combined Takes
+    Interp_Idx : Signed_64
+    Produces Unsigned_32
+    Declares
+        Base_Addr : Signed_64
+    Implements
+        Base_Addr = Interp_Base_Address(Interp_Idx)
+        # POP_FULL is at +28 (0x1C)
+        Give Vol_Read_32(Base_Addr + 28)
+End Interp_Pop_Combined
+

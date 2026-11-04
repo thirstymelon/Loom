@@ -31,12 +31,12 @@
     ],
     "description": "Parameterless procedure"
   },
-  "Call function": {
-    "prefix": "call",
+  "Invoke block": {
+    "prefix": "invoke",
     "body": [
-      "${1:FunctionName}($0)"
+      "${1:BlockName}($0)"
     ],
-    "description": "Direct function or procedure invocation"
+    "description": "Direct function or procedure invocation (Loom calls blocks directly without 'Call')"
   },
   "If": {
     "prefix": "if",

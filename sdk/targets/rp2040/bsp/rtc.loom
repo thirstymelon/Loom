@@ -1,0 +1,129 @@
+Module RTC
+
+Import System
+use System
+
+Block Global
+    Declares
+        RTC_BASE_ADDR : Constant Signed_64 = 0x4005C000
+End Global
+
+Block RTC_Init
+    Declares
+        Divider : Unsigned_32
+    Implements
+        # 1. Unreset RTC peripheral
+        Unreset_Peripherals(RESET_RTC)
+
+        # 2. Disable RTC before setup (CTRL bit 0 = 0)
+        Vol_Write_32(0x4005C00C, 0)
+
+        # 3. Configure clock divider for 12 MHz reference clock
+        # clk_rtc is driven by clk_ref / 256 = 46875 Hz
+        # Divider minus 1 = 46875 - 1 = 46874
+        Vol_Write_32(0x4005C000, 46874)
+End RTC_Init
+
+Block RTC_Set_DateTime Takes
+    Year : Signed_64
+    Month : Signed_64
+    Day : Signed_64
+    Dotw : Signed_64
+    Hour : Signed_64
+    Minute : Signed_64
+    Second : Signed_64
+    Declares
+        Setup0 : Signed_64
+        Setup1 : Signed_64
+    Implements
+        # SETUP_0: YEAR [23:12], MONTH [11:8], DAY [4:0]
+        Setup0 = ((Year & 4095) LSL 12) | ((Month & 15) LSL 8) | (Day & 31)
+        Vol_Write_32(0x4005C004, Cast[Unsigned_32](Setup0))
+
+        # SETUP_1: DOTW [26:24], HOUR [20:16], MIN [13:8], SEC [5:0]
+        Setup1 = ((Dotw & 7) LSL 24) | ((Hour & 31) LSL 16) | ((Minute & 63) LSL 8) | (Second & 63)
+        Vol_Write_32(0x4005C008, Cast[Unsigned_32](Setup1))
+
+        # Load into active counter (CTRL bit 4 = 16)
+        Vol_Write_32(0x4005C00C, 16)
+
+        # Enable RTC (CTRL bit 0 = 1)
+        Vol_Write_32(0x4005C00C, 1)
+
+        # Wait until RTC_ACTIVE (bit 1 = 2) is asserted
+        Loop Until ((Vol_Read_32(0x4005C00C) & 2) != 0)
+        End Loop
+End RTC_Set_DateTime
+
+Block RTC_Is_Running
+    Produces Boolean
+    Declares
+        Ctrl : Unsigned_32
+    Implements
+        Ctrl = Vol_Read_32(0x4005C00C)
+        Give ((Ctrl & 2) != 0)
+End RTC_Is_Running
+
+Block RTC_Get_Year
+    Produces Signed_64
+    Declares
+        Rtc1 : Unsigned_32
+    Implements
+        Rtc1 = Vol_Read_32(0x4005C018)
+        Give Cast[Signed_64]((Rtc1 LSR 12) & 4095)
+End RTC_Get_Year
+
+Block RTC_Get_Month
+    Produces Signed_64
+    Declares
+        Rtc1 : Unsigned_32
+    Implements
+        Rtc1 = Vol_Read_32(0x4005C018)
+        Give Cast[Signed_64]((Rtc1 LSR 8) & 15)
+End RTC_Get_Month
+
+Block RTC_Get_Day
+    Produces Signed_64
+    Declares
+        Rtc1 : Unsigned_32
+    Implements
+        Rtc1 = Vol_Read_32(0x4005C018)
+        Give Cast[Signed_64](Rtc1 & 31)
+End RTC_Get_Day
+
+Block RTC_Get_Day_Of_Week
+    Produces Signed_64
+    Declares
+        Rtc0 : Unsigned_32
+    Implements
+        Rtc0 = Vol_Read_32(0x4005C01C)
+        Give Cast[Signed_64]((Rtc0 LSR 24) & 7)
+End RTC_Get_Day_Of_Week
+
+Block RTC_Get_Hour
+    Produces Signed_64
+    Declares
+        Rtc0 : Unsigned_32
+    Implements
+        Rtc0 = Vol_Read_32(0x4005C01C)
+        Give Cast[Signed_64]((Rtc0 LSR 16) & 31)
+End RTC_Get_Hour
+
+Block RTC_Get_Minute
+    Produces Signed_64
+    Declares
+        Rtc0 : Unsigned_32
+    Implements
+        Rtc0 = Vol_Read_32(0x4005C01C)
+        Give Cast[Signed_64]((Rtc0 LSR 8) & 63)
+End RTC_Get_Minute
+
+Block RTC_Get_Second
+    Produces Signed_64
+    Declares
+        Rtc0 : Unsigned_32
+    Implements
+        Rtc0 = Vol_Read_32(0x4005C01C)
+        Give Cast[Signed_64](Rtc0 & 63)
+End RTC_Get_Second
+

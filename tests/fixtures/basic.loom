@@ -203,13 +203,13 @@ Block Main
         Message = "Loom: Native Block-Oriented Systems Language"
 
         # ----------------------------------------------------------------------
-        # B. Function Calls with 'Call', Recursion & Globals
+        # B. Function Calls, Recursion & Globals
         # ----------------------------------------------------------------------
         S32 = Add(20, 22)
         Factorial_Res = Factorial(5)
         Global_Counter = Global_Counter + 1
 
-        Write("1. Scalars, Explicit 'Call' Keyword & Recursion:")
+        Write("1. Scalars, Function Calls & Recursion:")
         Write(Message)
         Write(Symbol)
         Write(S32)

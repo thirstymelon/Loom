@@ -1,0 +1,227 @@
+Module PIO
+
+Import System
+Import GPIO
+use System
+use GPIO
+
+Block Global
+    Declares
+        PIO_0 : Constant Signed_64 = 0
+        PIO_1 : Constant Signed_64 = 1
+
+        # Instruction Opcodes (16-bit)
+        PIO_INSTR_NOP : Constant Unsigned_16 = 0xA042  # mov y, y
+End Global
+
+Block PIO_Base_Address Takes
+    Pio_Idx : Signed_64
+    Produces Signed_64
+    Implements
+        If (Pio_Idx == 1)
+            Give 0x50300000
+        Else
+            Give 0x50200000
+        End If
+End PIO_Base_Address
+
+Block PIO_Init Takes
+    Pio_Idx : Signed_64
+    Implements
+        If (Pio_Idx == 1)
+            Unreset_Peripherals(RESET_PIO1)
+        Else
+            Unreset_Peripherals(RESET_PIO0)
+        End If
+End PIO_Init
+
+Block PIO_Load_Instruction Takes
+    Pio_Idx : Signed_64
+    Slot : Signed_64
+    Instruction : Unsigned_16
+    Declares
+        Base_Addr : Signed_64
+        Slot_Addr : Signed_64
+    Implements
+        Base_Addr = PIO_Base_Address(Pio_Idx)
+        # Instruction memory at 0x48 + slot * 4 (32 slots)
+        Slot_Addr = Base_Addr + 0x48 + ((Slot & 31) * 4)
+        Vol_Write_32(Slot_Addr, Cast[Unsigned_32](Instruction))
+End PIO_Load_Instruction
+
+Block PIO_Load_Program Takes
+    Pio_Idx : Signed_64
+    Start_Slot : Signed_64
+    Program : Unsigned_16 Slice
+    Declares
+        Len : Unsigned_64
+        I : Unsigned_64
+    Implements
+        Len = Program.Length
+        I = 1
+        Loop Until (I > Len)
+            PIO_Load_Instruction(Pio_Idx, Start_Slot + Cast[Signed_64](I - 1), Program[I])
+            I = I + 1
+        End Loop
+End PIO_Load_Program
+
+Block PIO_SM_Base Takes
+    Pio_Idx : Signed_64
+    Sm_Idx : Signed_64
+    Produces Signed_64
+    Declares
+        Base_Addr : Signed_64
+    Implements
+        Base_Addr = PIO_Base_Address(Pio_Idx)
+        # SM0 is at + 0xC8, each SM takes 0x18 (24 bytes)
+        Give Base_Addr + 0xC8 + ((Sm_Idx & 3) * 24)
+End PIO_SM_Base
+
+Block PIO_SM_Set_Clock_Div Takes
+    Pio_Idx : Signed_64
+    Sm_Idx : Signed_64
+    Int_Div : Signed_64
+    Frac_Div : Signed_64
+    Declares
+        Sm_Addr : Signed_64
+        Div_Val : Signed_64
+    Implements
+        Sm_Addr = PIO_SM_Base(Pio_Idx, Sm_Idx)
+        # INT in [31:16], FRAC in [15:8]
+        Div_Val = ((Int_Div & 0xFFFF) LSL 16) | ((Frac_Div & 0xFF) LSL 8)
+        Vol_Write_32(Sm_Addr + 0x00, Cast[Unsigned_32](Div_Val))
+End PIO_SM_Set_Clock_Div
+
+Block PIO_SM_Init Takes
+    Pio_Idx : Signed_64
+    Sm_Idx : Signed_64
+    Initial_PC : Signed_64
+    Pin_Base : Signed_64
+    Pin_Count : Signed_64
+    Declares
+        Sm_Addr : Signed_64
+        Pin_Ctrl : Signed_64
+        Exec_Ctrl : Signed_64
+        Shift_Ctrl : Signed_64
+        I : Signed_64
+    Implements
+        Sm_Addr = PIO_SM_Base(Pio_Idx, Sm_Idx)
+
+        # 1. Configure pins for PIO function (FUNC 6 for PIO0, FUNC 7 for PIO1)
+        I = 0
+        Loop Until (I >= Pin_Count)
+            If (Pio_Idx == 1)
+                Set_Function(Pin_Base + I, GPIO_FUNC_PIO1)
+            Else
+                Set_Function(Pin_Base + I, GPIO_FUNC_PIO0)
+            End If
+            I = I + 1
+        End Loop
+
+        # 2. Configure PINCTRL (offset 0x14):
+        # OUT_BASE [4:0], SET_BASE [9:5], OUT_COUNT [25:20], SET_COUNT [28:26]
+        Pin_Ctrl = (Pin_Base & 31) | ((Pin_Base & 31) LSL 5) | ((Pin_Count & 63) LSL 20) | ((Pin_Count & 7) LSL 26)
+        Vol_Write_32(Sm_Addr + 0x14, Cast[Unsigned_32](Pin_Ctrl))
+
+        # 3. Default EXECCTRL (offset 0x04): wrap_top=31 (bits 16:12 = 31 << 12 = 126976)
+        Exec_Ctrl = 31 LSL 12
+        Vol_Write_32(Sm_Addr + 0x04, Cast[Unsigned_32](Exec_Ctrl))
+
+        # 4. Default SHIFTCTRL (offset 0x08): 32-bit push/pull threshold
+        Shift_Ctrl = 0
+        Vol_Write_32(Sm_Addr + 0x08, Cast[Unsigned_32](Shift_Ctrl))
+
+        # 5. Jump to initial PC by executing a JMP instruction (0x0000 | PC)
+        Vol_Write_32(Sm_Addr + 0x10, Cast[Unsigned_32](Initial_PC & 31))
+End PIO_SM_Init
+
+Block PIO_SM_Set_Enabled Takes
+    Pio_Idx : Signed_64
+    Sm_Idx : Signed_64
+    Enabled : Boolean
+    Declares
+        Base_Addr : Signed_64
+        Ctrl : Unsigned_32
+        Mask : Unsigned_32
+    Implements
+        Base_Addr = PIO_Base_Address(Pio_Idx)
+        Mask = 1 LSL (Sm_Idx & 3)
+        Ctrl = Vol_Read_32(Base_Addr + 0x00)
+        If (Enabled == True)
+            Ctrl = Ctrl | Mask
+        Else
+            Ctrl = Ctrl & (~Mask)
+        End If
+        Vol_Write_32(Base_Addr + 0x00, Ctrl)
+End PIO_SM_Set_Enabled
+
+Block PIO_SM_Is_TX_Full Takes
+    Pio_Idx : Signed_64
+    Sm_Idx : Signed_64
+    Produces Boolean
+    Declares
+        Base_Addr : Signed_64
+        Fstat : Unsigned_32
+        Mask : Unsigned_32
+    Implements
+        Base_Addr = PIO_Base_Address(Pio_Idx)
+        # TXFULL bits are [19:16]
+        Mask = 1 LSL (16 + (Sm_Idx & 3))
+        Fstat = Vol_Read_32(Base_Addr + 0x04)
+        Give ((Fstat & Mask) != 0)
+End PIO_SM_Is_TX_Full
+
+Block PIO_SM_Is_RX_Empty Takes
+    Pio_Idx : Signed_64
+    Sm_Idx : Signed_64
+    Produces Boolean
+    Declares
+        Base_Addr : Signed_64
+        Fstat : Unsigned_32
+        Mask : Unsigned_32
+    Implements
+        Base_Addr = PIO_Base_Address(Pio_Idx)
+        # RXEMPTY bits are [11:8]
+        Mask = 1 LSL (8 + (Sm_Idx & 3))
+        Fstat = Vol_Read_32(Base_Addr + 0x04)
+        Give ((Fstat & Mask) != 0)
+End PIO_SM_Is_RX_Empty
+
+Block PIO_SM_Put_Blocking Takes
+    Pio_Idx : Signed_64
+    Sm_Idx : Signed_64
+    Data : Unsigned_32
+    Declares
+        Base_Addr : Signed_64
+        Txf_Addr : Signed_64
+        Full : Boolean
+    Implements
+        Base_Addr = PIO_Base_Address(Pio_Idx)
+        Full = PIO_SM_Is_TX_Full(Pio_Idx, Sm_Idx)
+        Loop Until (Full == False)
+            Full = PIO_SM_Is_TX_Full(Pio_Idx, Sm_Idx)
+        End Loop
+        # TXF0 is at + 0x10 + sm * 4
+        Txf_Addr = Base_Addr + 0x10 + ((Sm_Idx & 3) * 4)
+        Vol_Write_32(Txf_Addr, Data)
+End PIO_SM_Put_Blocking
+
+Block PIO_SM_Get_Blocking Takes
+    Pio_Idx : Signed_64
+    Sm_Idx : Signed_64
+    Produces Unsigned_32
+    Declares
+        Base_Addr : Signed_64
+        Rxf_Addr : Signed_64
+        Empty : Boolean
+    Implements
+        Base_Addr = PIO_Base_Address(Pio_Idx)
+        Empty = PIO_SM_Is_RX_Empty(Pio_Idx, Sm_Idx)
+        Loop Until (Empty == False)
+            Empty = PIO_SM_Is_RX_Empty(Pio_Idx, Sm_Idx)
+        End Loop
+        # RXF0 is at + 0x20 + sm * 4
+        Rxf_Addr = Base_Addr + 0x20 + ((Sm_Idx & 3) * 4)
+        Give Vol_Read_32(Rxf_Addr)
+End PIO_SM_Get_Blocking
+

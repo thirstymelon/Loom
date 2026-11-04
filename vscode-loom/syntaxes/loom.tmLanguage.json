@@ -10,16 +10,22 @@
       "include": "#strings"
     },
     {
-      "include": "#functionDefinitions"
+      "include": "#blockDefinitions"
+    },
+    {
+      "include": "#endStatements"
     },
     {
       "include": "#typeDefinitions"
     },
     {
+      "include": "#sectionHeaders"
+    },
+    {
       "include": "#controlKeywords"
     },
     {
-      "include": "#storageKeywords"
+      "include": "#declarations"
     },
     {
       "include": "#builtinFunctions"
@@ -44,6 +50,9 @@
     },
     {
       "include": "#memberAccess"
+    },
+    {
+      "include": "#invalidKeywords"
     },
     {
       "include": "#variables"
@@ -71,7 +80,7 @@
           "patterns": [
             {
               "name": "meta.interpolation.loom",
-              "begin": "<(?=[A-Za-z_])",
+              "begin": "<(?=[A-Za-z_0-9])",
               "beginCaptures": {
                 "0": {
                   "name": "punctuation.definition.template-expression.begin.loom"
@@ -84,6 +93,14 @@
                 }
               },
               "patterns": [
+                {
+                  "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+                  "captures": {
+                    "1": {
+                      "name": "entity.name.function.loom"
+                    }
+                  }
+                },
                 {
                   "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b",
                   "name": "variable.other.interpolation.loom"
@@ -99,6 +116,10 @@
                       "name": "constant.numeric.integer.decimal.loom"
                     }
                   }
+                },
+                {
+                  "match": "\\b[0-9_]+\\b",
+                  "name": "constant.numeric.integer.loom"
                 }
               ]
             },
@@ -121,21 +142,35 @@
         }
       ]
     },
-    "functionDefinitions": {
+    "blockDefinitions": {
       "patterns": [
         {
-          "match": "\\b(Block)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(Extern)\\s+(Block)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
-              "name": "storage.type.function.loom"
+              "name": "storage.modifier.loom"
             },
             "2": {
+              "name": "storage.type.function.loom"
+            },
+            "3": {
               "name": "entity.name.function.loom"
             }
           }
         },
         {
-          "match": "\\b(End)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(Block)\\s+(Global)\\b",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.loom"
+            },
+            "2": {
+              "name": "keyword.other.global.loom"
+            }
+          }
+        },
+        {
+          "match": "\\b(Block)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
               "name": "storage.type.function.loom"
@@ -147,15 +182,70 @@
         }
       ]
     },
-    "functionCalls": {
+    "endStatements": {
       "patterns": [
         {
-          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "match": "\\b(End)\\s+(If|Loop|Match|Ensure)\\b",
           "captures": {
             "1": {
+              "name": "keyword.control.loom"
+            },
+            "2": {
+              "name": "keyword.control.loom"
+            }
+          }
+        },
+        {
+          "match": "\\b(End)\\s+(Record|Enum|Module|Extern)\\b(?:\\s+([A-Za-z_][A-Za-z0-9_]*))?",
+          "captures": {
+            "1": {
+              "name": "storage.type.loom"
+            },
+            "2": {
+              "name": "storage.type.loom"
+            },
+            "3": {
+              "name": "entity.name.type.loom"
+            }
+          }
+        },
+        {
+          "match": "\\b(End)\\s+(Global)\\b",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.loom"
+            },
+            "2": {
+              "name": "keyword.other.global.loom"
+            }
+          }
+        },
+        {
+          "match": "\\b(End)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.loom"
+            },
+            "2": {
               "name": "entity.name.function.loom"
             }
           }
+        }
+      ]
+    },
+    "sectionHeaders": {
+      "patterns": [
+        {
+          "name": "keyword.control.section.loom",
+          "match": "\\b(Takes|Produces|Declares|Implements)\\b"
+        }
+      ]
+    },
+    "controlKeywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.loom",
+          "match": "\\b(If|Else\\s+If|Else|Until|until|While|while|Loop|Exit|Skip|Give|Ensure|Match|match|When|when|Use|use)\\b"
         }
       ]
     },
@@ -207,35 +297,58 @@
         }
       ]
     },
-    "controlKeywords": {
+    "declarations": {
       "patterns": [
         {
-          "name": "keyword.control.loom",
-          "match": "\\b(If|Else|Until|until|While|while|Loop|Exit|Skip|Give|Ensure|Match|match|When|when|Use|use)\\b"
-        }
-      ]
-    },
-    "storageKeywords": {
-      "patterns": [
-        {
-          "name": "storage.type.loom",
-          "match": "\\b(Block|End|Record|Enum|Module)\\b"
-        },
-        {
-          "name": "storage.modifier.loom",
-          "match": "\\b(Takes|Produces|Declares|Implements|Constant|Extern|Import)\\b"
-        },
-        {
-          "name": "invalid.illegal.unsupported.loom",
-          "match": "\\b(Return|Collection|Call)\\b"
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*(Constant\\b)?",
+          "captures": {
+            "1": {
+              "name": "variable.other.declaration.loom"
+            },
+            "2": {
+              "name": "punctuation.separator.colon.loom"
+            },
+            "3": {
+              "name": "storage.modifier.constant.loom"
+            }
+          }
         }
       ]
     },
     "builtinFunctions": {
       "patterns": [
         {
+          "match": "\\b(Cast)\\s*(\\[)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(\\])",
+          "captures": {
+            "1": {
+              "name": "support.function.builtin.loom"
+            },
+            "2": {
+              "name": "punctuation.definition.bracket.begin.loom"
+            },
+            "3": {
+              "name": "support.type.primitive.loom"
+            },
+            "4": {
+              "name": "punctuation.definition.bracket.end.loom"
+            }
+          }
+        },
+        {
           "name": "support.function.builtin.loom",
-          "match": "\\b(Write|Address|Deref|Cast|Slice|Vol_Read_(8|16|32|64)|Vol_Write_(8|16|32|64)|Nop|WaitForInterrupt|MemoryBarrier)\\b"
+          "match": "\\b(Write|Write_UART|Address|Deref|Cast|Slice|Vol_Read_(8|16|32|64)|Vol_Write_(8|16|32|64)|Nop|WaitForInterrupt|MemoryBarrier)\\b"
+        }
+      ]
+    },
+    "functionCalls": {
+      "patterns": [
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.loom"
+            }
+          }
         }
       ]
     },
@@ -304,6 +417,14 @@
               "name": "variable.other.property.loom"
             }
           }
+        }
+      ]
+    },
+    "invalidKeywords": {
+      "patterns": [
+        {
+          "name": "invalid.illegal.unsupported.loom",
+          "match": "\\b(Return|Collection|Call)\\b"
         }
       ]
     },

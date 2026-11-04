@@ -35,4 +35,4 @@ npm test
 npm run package
 ```
 
-This packages version 1.0.0 as `Loom-1.0.0.vsix` in this folder. The root `Loom-0.1.3.vsix` is retained as a previous release artifact and is not overwritten.
+This packages version 1.1.0 as `Loom-1.1.0.vsix` in this folder.

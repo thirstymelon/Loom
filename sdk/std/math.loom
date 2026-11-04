@@ -3,71 +3,71 @@ Module Math
 Block Add Takes
     A : Signed_64
     B : Signed_64
-Produces (A + B)
+    Produces (A + B)
 End Add
 
 Block Sub Takes
     A : Signed_64
     B : Signed_64
-Produces (A - B)
+    Produces (A - B)
 End Sub
 
 Block Mul Takes
     A : Signed_64
     B : Signed_64
-Produces (A * B)
+    Produces (A * B)
 End Mul
 
 Block Div Takes
     A : Signed_64
     B : Signed_64
-Produces (A / B)
+    Produces (A / B)
 End Div
 
 Block Abs Takes
     Value : Signed_64
-Produces Signed_64
-Implements
-    If (Value < 0)
-        Give 0 - Value
-    End If
-    Give Value
+    Produces Signed_64
+    Implements
+        If (Value < 0)
+            Give 0 - Value
+        End If
+        Give Value
 End Abs
 
 Block Min Takes
     A : Signed_64
     B : Signed_64
-Produces Signed_64
-Implements
-    If (A < B)
-        Give A
-    End If
-    Give B
+    Produces Signed_64
+    Implements
+        If (A < B)
+            Give A
+        End If
+        Give B
 End Min
 
 Block Max Takes
     A : Signed_64
     B : Signed_64
-Produces Signed_64
-Implements
-    If (A > B)
-        Give A
-    End If
-    Give B
+    Produces Signed_64
+    Implements
+        If (A > B)
+            Give A
+        End If
+        Give B
 End Max
 
 Block Clamp Takes
     Val : Signed_64
     Low : Signed_64
     High : Signed_64
-Produces Signed_64
-Implements
-    If (Val < Low)
-        Give Low
-    End If
-    If (Val > High)
-        Give High
-    End If
-    Give Val
+    Produces Signed_64
+    Implements
+        If (Val < Low)
+            Give Low
+        End If
+        If (Val > High)
+            Give High
+        End If
+        Give Val
 End Clamp
 

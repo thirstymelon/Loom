@@ -1,69 +1,144 @@
 Module System
 
 Block Global
-Declares
-    SYS_CLOCK_12MHZ  : Constant Signed_64 = 12000000
-    SYS_CLOCK_125MHZ : Constant Signed_64 = 125000000
+    Declares
+        SYS_CLOCK_12MHZ  : Constant Signed_64 = 12000000
+        SYS_CLOCK_125MHZ : Constant Signed_64 = 125000000
+
+        # Subsystem Reset Masks (RESETS_BASE = 0x4000C000)
+        RESET_ADC        : Constant Unsigned_32 = 1          # Bit 0
+        RESET_BUSCTRL    : Constant Unsigned_32 = 2          # Bit 1
+        RESET_DMA        : Constant Unsigned_32 = 4          # Bit 2
+        RESET_I2C0       : Constant Unsigned_32 = 8          # Bit 3
+        RESET_I2C1       : Constant Unsigned_32 = 16         # Bit 4
+        RESET_IO_BANK0   : Constant Unsigned_32 = 32         # Bit 5
+        RESET_IO_QSPI    : Constant Unsigned_32 = 64         # Bit 6
+        RESET_JTAG       : Constant Unsigned_32 = 128        # Bit 7
+        RESET_PADS_BANK0 : Constant Unsigned_32 = 256        # Bit 8
+        RESET_PADS_QSPI  : Constant Unsigned_32 = 512        # Bit 9
+        RESET_PIO0       : Constant Unsigned_32 = 1024       # Bit 10
+        RESET_PIO1       : Constant Unsigned_32 = 2048       # Bit 11
+        RESET_PLL_SYS    : Constant Unsigned_32 = 4096       # Bit 12
+        RESET_PLL_USB    : Constant Unsigned_32 = 8192       # Bit 13
+        RESET_PWM        : Constant Unsigned_32 = 16384      # Bit 14
+        RESET_RTC        : Constant Unsigned_32 = 32768      # Bit 15
+        RESET_SPI0       : Constant Unsigned_32 = 65536      # Bit 16
+        RESET_SPI1       : Constant Unsigned_32 = 131072     # Bit 17
+        RESET_SYSCFG     : Constant Unsigned_32 = 262144     # Bit 18
+        RESET_SYSINFO    : Constant Unsigned_32 = 524288     # Bit 19
+        RESET_TBMAN      : Constant Unsigned_32 = 1048576    # Bit 20
+        RESET_TIMER      : Constant Unsigned_32 = 2097152    # Bit 21
+        RESET_UART0      : Constant Unsigned_32 = 4194304    # Bit 22
+        RESET_UART1      : Constant Unsigned_32 = 8388608    # Bit 23
+        RESET_USBCTRL    : Constant Unsigned_32 = 16777216   # Bit 24
 End Global
 
 Block Unreset_Peripherals Takes
     Mask : Unsigned_32
-Declares
-    Done : Unsigned_32
-    Timeout : Signed_64
-Implements
-    Vol_Write_32(0x4000F000, Mask)
-    Timeout = 10000
-    Done = Vol_Read_32(0x4000C008)
-    Loop Until (((Done & Mask) == Mask) Or (Timeout <= 0))
-        Done = Vol_Read_32(0x4000C008)
-        Timeout = Timeout - 1
-    End Loop
-End Unreset_Peripherals
-
-Block System_Init
-Declares
-    Status : Unsigned_32
-    Done : Unsigned_32
-    Timeout : Signed_64
-    Selected : Unsigned_32
-Implements
-    # 1. Start the 12 MHz External Crystal Oscillator (XOSC)
-    Status = Vol_Read_32(0x40024004)
-    If ((Status & 0x80000000) == 0)
-        Vol_Write_32(0x4002400C, 47)         # Startup delay ~1ms (47 * 256 / 12MHz)
-        Vol_Write_32(0x40024000, 0xFABAA0)   # 0xFAB enable password + 0xAA0 1-15MHz range
-        Status = Vol_Read_32(0x40024004)
+    Declares
+        Done : Unsigned_32
+        Timeout : Signed_64
+    Implements
+        # Clear reset bits (Atomic CLR at 0x4000C000 + 0x3000 = 0x4000F000)
+        Vol_Write_32(0x4000F000, Mask)
         Timeout = 100000
-        Loop Until (((Status & 0x80000000) != 0) Or (Timeout <= 0))
-            Status = Vol_Read_32(0x40024004)
+        Done = Vol_Read_32(0x4000C008)
+        Loop Until (((Done & Mask) == Mask) Or (Timeout <= 0))
+            Done = Vol_Read_32(0x4000C008)
             Timeout = Timeout - 1
         End Loop
+End Unreset_Peripherals
 
-        # If XOSC is stable, switch clk_ref and set exact 1.000000 MHz tick
-        If ((Status & 0x80000000) != 0)
-            # Switch clk_ref to XOSC (source 2 = xosc_clksrc at 12.000 MHz)
-            Vol_Write_32(0x40008030, 2)
-            Timeout = 10000
-            Selected = Vol_Read_32(0x40008038)
-            Loop Until (((Selected & 4) != 0) Or (Timeout <= 0))
-                Selected = Vol_Read_32(0x40008038)
+Block Reset_Peripherals Takes
+    Mask : Unsigned_32
+    Implements
+        # Assert reset bits (Atomic SET at 0x4000C000 + 0x2000 = 0x4000E000)
+        Vol_Write_32(0x4000E000, Mask)
+End Reset_Peripherals
+
+Block Is_Peripheral_Ready Takes
+    Mask : Unsigned_32
+    Produces Boolean
+    Declares
+        Done : Unsigned_32
+    Implements
+        Done = Vol_Read_32(0x4000C008)
+        Give ((Done & Mask) == Mask)
+End Is_Peripheral_Ready
+
+Block System_Init
+    Declares
+        Status : Unsigned_32
+        Done : Unsigned_32
+        Timeout : Signed_64
+        Selected : Unsigned_32
+    Implements
+        # 1. Start the 12 MHz External Crystal Oscillator (XOSC)
+        Status = Vol_Read_32(0x40024004)
+        If ((Status & 0x80000000) == 0)
+            Vol_Write_32(0x4002400C, 47)         # Startup delay ~1ms (47 * 256 / 12MHz)
+            Vol_Write_32(0x40024000, 0xFABAA0)   # 0xFAB enable password + 0xAA0 1-15MHz range
+            Status = Vol_Read_32(0x40024004)
+            Timeout = 100000
+            Loop Until (((Status & 0x80000000) != 0) Or (Timeout <= 0))
+                Status = Vol_Read_32(0x40024004)
                 Timeout = Timeout - 1
             End Loop
 
-            # Watchdog tick: 12 cycles of 12.000 MHz clk_ref = exact 1.000000 MHz tick (512 | 12 = 524)
-            Vol_Write_32(0x4005802C, 524)
-        End If
-    End If
+            # If XOSC is stable, switch clk_ref and set exact 1.000000 MHz tick
+            If ((Status & 0x80000000) != 0)
+                # Switch clk_ref to XOSC (source 2 = xosc_clksrc at 12.000 MHz)
+                Vol_Write_32(0x40008030, 2)
+                Timeout = 10000
+                Selected = Vol_Read_32(0x40008038)
+                Loop Until (((Selected & 4) != 0) Or (Timeout <= 0))
+                    Selected = Vol_Read_32(0x40008038)
+                    Timeout = Timeout - 1
+                End Loop
 
-    # 2. Unreset IO_BANK0 (bit 5), PADS_BANK0 (bit 8), and TIMER (bit 21)
-    # Total mask = 32 + 256 + 2097152 = 2097440 (0x200120)
-    Unreset_Peripherals(Cast[Unsigned_32](2097440))
+                # Watchdog tick: 12 cycles of 12.000 MHz clk_ref = exact 1.000000 MHz tick (512 | 12 = 524)
+                Vol_Write_32(0x4005802C, 524)
+            End If
+        End If
+
+        # 2. Unreset IO_BANK0 (bit 5), PADS_BANK0 (bit 8), and TIMER (bit 21)
+        # Total mask = 32 + 256 + 2097152 = 2097440 (0x200120)
+        Unreset_Peripherals(RESET_IO_BANK0 | RESET_PADS_BANK0 | RESET_TIMER)
 End System_Init
 
-Block System_Reset
-Implements
-    # Trigger watchdog software reset
-    Vol_Write_32(0x40058000, 0x00000000)
-End System_Reset
+Block Get_Chip_Revision
+    Produces Signed_64
+    Declares
+        ChipId : Unsigned_32
+    Implements
+        ChipId = Vol_Read_32(0x40000000)
+        Give Cast[Signed_64]((ChipId LSR 28) & 15)
+End Get_Chip_Revision
 
+Block Get_Chip_Part
+    Produces Signed_64
+    Declares
+        ChipId : Unsigned_32
+    Implements
+        ChipId = Vol_Read_32(0x40000000)
+        Give Cast[Signed_64]((ChipId LSR 12) & 0xFFFF)
+End Get_Chip_Part
+
+Block Is_ASIC_Platform
+    Produces Boolean
+    Declares
+        Plat : Unsigned_32
+    Implements
+        Plat = Vol_Read_32(0x40000004)
+        Give ((Plat & 1) != 0)
+End Is_ASIC_Platform
+
+Block System_Reset
+    Implements
+        # 1. ARM Cortex-M0+ standard AIRCR System Reset Request (0xE000ED0C)
+        # VECTKEY (0x05FA) in [31:16], SYSRESETREQ (bit 2 = 4)
+        Vol_Write_32(0xE000ED0C, 0x05FA0004)
+
+        # 2. RP2040 Hardware Watchdog Trigger (bit 31 = 0x80000000)
+        Vol_Write_32(0x40058000, 0x80000000)
+End System_Reset

@@ -3,47 +3,152 @@ Module Time
 Import System
 use System
 
+Block Global
+    Declares
+        ALARM_0 : Constant Signed_64 = 0
+        ALARM_1 : Constant Signed_64 = 1
+        ALARM_2 : Constant Signed_64 = 2
+        ALARM_3 : Constant Signed_64 = 3
+End Global
+
 Block Get_Time_Microseconds
-Produces Signed_64
-Declares
-    Micros : Unsigned_32
-Implements
-    # Read RP2040 1 MHz hardware timer (TIMER_TIMELR: 0x4005400C)
-    Micros = Vol_Read_32(0x4005400C)
-    Give Cast[Signed_64](Micros)
+    Produces Signed_64
+    Declares
+        Micros : Unsigned_32
+    Implements
+        # Non-latching, multi-core safe read from TIMERAWL (0x40054028)
+        Micros = Vol_Read_32(0x40054028)
+        Give Cast[Signed_64](Micros)
 End Get_Time_Microseconds
 
+Block Get_Time_64_Microseconds
+    Produces Signed_64
+    Declares
+        High1 : Unsigned_32
+        Low : Unsigned_32
+        High2 : Unsigned_32
+    Implements
+        # Non-latching, multi-core safe read from TIMERAWH (0x40054024) and TIMERAWL (0x40054028)
+        High1 = Vol_Read_32(0x40054024)
+        Low = Vol_Read_32(0x40054028)
+        High2 = Vol_Read_32(0x40054024)
+        Loop Until (High1 == High2)
+            High1 = High2
+            Low = Vol_Read_32(0x40054028)
+            High2 = Vol_Read_32(0x40054024)
+        End Loop
+        Give (Cast[Signed_64](High1) LSL 32) | Cast[Signed_64](Low)
+End Get_Time_64_Microseconds
+
 Block Get_Time
-Produces Signed_64
-Declares
-    Micros : Signed_64
-Implements
-    Micros = Get_Time_Microseconds()
-    Give Micros / 1000
+    Produces Signed_64
+    Declares
+        Micros : Signed_64
+    Implements
+        Micros = Get_Time_Microseconds()
+        Give Micros / 1000
 End Get_Time
 
 Block Delay_Microseconds Takes
     Microseconds : Signed_64
-Declares
-    Start : Signed_64
-    Current : Signed_64
-    Elapsed : Signed_64
-Implements
-    Start = Get_Time_Microseconds()
-    Current = Start
-    Elapsed = 0
-    Loop Until (Elapsed >= Microseconds)
-        Current = Get_Time_Microseconds()
-        Elapsed = Current - Start
-        If (Elapsed < 0)
-            Elapsed = Elapsed + 4294967296
-        End If
-    End Loop
+    Declares
+        Start : Signed_64
+        Current : Signed_64
+        Elapsed : Signed_64
+    Implements
+        Start = Get_Time_Microseconds()
+        Current = Start
+        Elapsed = 0
+        Loop Until (Elapsed >= Microseconds)
+            Current = Get_Time_Microseconds()
+            Elapsed = Current - Start
+            If (Elapsed < 0)
+                Elapsed = Elapsed + 4294967296
+            End If
+        End Loop
 End Delay_Microseconds
 
 Block Delay Takes
     Milliseconds : Signed_64
-Implements
-    Delay_Microseconds(Milliseconds * 1000)
+    Implements
+        Delay_Microseconds(Milliseconds * 1000)
 End Delay
 
+Block SleepMs Takes
+    Milliseconds : Signed_64
+    Implements
+        Delay(Milliseconds)
+End SleepMs
+
+Block SleepUs Takes
+    Microseconds : Signed_64
+    Implements
+        Delay_Microseconds(Microseconds)
+End SleepUs
+
+# Hardware Alarms
+Block Set_Alarm_Target Takes
+    Alarm_Idx : Signed_64
+    Target_Us : Unsigned_32
+    Declares
+        Alarm_Addr : Signed_64
+    Implements
+        Alarm_Addr = 0x40054010 + ((Alarm_Idx & 3) * 4)
+        Vol_Write_32(Alarm_Addr, Target_Us)
+End Set_Alarm_Target
+
+Block Set_Alarm_Delay Takes
+    Alarm_Idx : Signed_64
+    Delay_Us : Unsigned_32
+    Declares
+        Now : Unsigned_32
+        Target : Unsigned_32
+    Implements
+        Now = Vol_Read_32(0x4005400C)
+        Target = Now + Delay_Us
+        Set_Alarm_Target(Alarm_Idx, Target)
+End Set_Alarm_Delay
+
+Block Is_Alarm_Armed Takes
+    Alarm_Idx : Signed_64
+    Produces Boolean
+    Declares
+        Armed : Unsigned_32
+        Mask : Unsigned_32
+    Implements
+        Armed = Vol_Read_32(0x40054020)
+        Mask = 1 LSL (Alarm_Idx & 3)
+        Give ((Armed & Mask) != 0)
+End Is_Alarm_Armed
+
+Block Disarm_Alarm Takes
+    Alarm_Idx : Signed_64
+    Declares
+        Mask : Unsigned_32
+    Implements
+        # Writing 1 to ARMED (0x40054020) immediately disarms the alarm
+        Mask = 1 LSL (Alarm_Idx & 3)
+        Vol_Write_32(0x40054020, Mask)
+End Disarm_Alarm
+
+Block Clear_Alarm_Interrupt Takes
+    Alarm_Idx : Signed_64
+    Declares
+        Mask : Unsigned_32
+    Implements
+        Mask = 1 LSL (Alarm_Idx & 3)
+        # TIMER_INTR: 0x40054034 (write 1 to clear)
+        Vol_Write_32(0x40054034, Mask)
+End Clear_Alarm_Interrupt
+
+Block Enable_Alarm_Interrupt Takes
+    Alarm_Idx : Signed_64
+    Declares
+        Mask : Unsigned_32
+        Inte : Unsigned_32
+    Implements
+        Mask = 1 LSL (Alarm_Idx & 3)
+        # TIMER_INTE: 0x40054038
+        Inte = Vol_Read_32(0x40054038)
+        Vol_Write_32(0x40054038, Inte | Mask)
+End Enable_Alarm_Interrupt

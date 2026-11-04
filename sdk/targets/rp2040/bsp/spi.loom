@@ -1,0 +1,310 @@
+Module SPI
+
+Import System
+Import GPIO
+use System
+use GPIO
+
+Block Global
+    Declares
+        SPI_0 : Constant Signed_64 = 0
+        SPI_1 : Constant Signed_64 = 1
+
+        # Clock Polarity (CPOL) and Phase (CPHA)
+        SPI_CPOL_0 : Constant Signed_64 = 0
+        SPI_CPOL_1 : Constant Signed_64 = 1
+        SPI_CPHA_0 : Constant Signed_64 = 0
+        SPI_CPHA_1 : Constant Signed_64 = 1
+End Global
+
+Block SPI_Base_Address Takes
+    Spi_Idx : Signed_64
+    Produces Signed_64
+    Implements
+        If (Spi_Idx == 1)
+            Give 0x40040000
+        Else
+            Give 0x4003C000
+        End If
+End SPI_Base_Address
+
+Block SPI_Set_Format Takes
+    Spi_Idx : Signed_64
+    Data_Bits : Signed_64
+    Cpol : Signed_64
+    Cpha : Signed_64
+    Declares
+        Base_Addr : Signed_64
+        Cr0 : Unsigned_32
+        Dss : Signed_64
+        Cpol_Bit : Signed_64
+        Cpha_Bit : Signed_64
+    Implements
+        Base_Addr = SPI_Base_Address(Spi_Idx)
+
+        # Disable SPI before changing format (SSPCR1 bit 1 = 0)
+        Vol_Write_32(Base_Addr + 0x04, 0)
+
+        # DSS = Data_Bits - 1 (e.g. 7 for 8-bit, 15 for 16-bit)
+        Dss = (Data_Bits - 1) & 0x0F
+        Cpol_Bit = (Cpol & 1) LSL 6
+        Cpha_Bit = (Cpha & 1) LSL 7
+
+        Cr0 = Vol_Read_32(Base_Addr + 0x00)
+        # Preserve SCR [15:8], update SPH [7], SPO [6], FRF [5:4]=0, DSS [3:0]
+        Cr0 = (Cr0 & 0xFF00) | Cast[Unsigned_32](Cpha_Bit | Cpol_Bit | Dss)
+        Vol_Write_32(Base_Addr + 0x00, Cr0)
+
+        # Re-enable SPI as master (SSPCR1 bit 1 = 2)
+        Vol_Write_32(Base_Addr + 0x04, 2)
+End SPI_Set_Format
+
+Block SPI_Set_Baud_Rate Takes
+    Spi_Idx : Signed_64
+    Baud_Hz : Signed_64
+    Peri_Clock_Hz : Signed_64
+    Declares
+        Base_Addr : Signed_64
+        Prescale : Signed_64
+        Postdiv : Signed_64
+        Cr0 : Unsigned_32
+    Implements
+        Base_Addr = SPI_Base_Address(Spi_Idx)
+
+        # Target baud = Peri_Clock_Hz / (Prescale * (1 + Postdiv))
+        # Choose even Prescale = 2
+        Prescale = 2
+        Postdiv = (Peri_Clock_Hz / (2 * Baud_Hz)) - 1
+        If (Postdiv < 0)
+            Postdiv = 0
+        Else If (Postdiv > 255)
+            Postdiv = 255
+        End If
+
+        Vol_Write_32(Base_Addr + 0x10, Prescale)
+
+        Cr0 = Vol_Read_32(Base_Addr + 0x00)
+        # Update SCR [15:8]
+        Cr0 = (Cr0 & 0x00FF) | Cast[Unsigned_32]((Postdiv & 255) LSL 8)
+        Vol_Write_32(Base_Addr + 0x00, Cr0)
+End SPI_Set_Baud_Rate
+
+Block SPI_Init_Channel_Freq Takes
+    Spi_Idx : Signed_64
+    Baud_Hz : Signed_64
+    Pin_Sck : Signed_64
+    Pin_Mosi : Signed_64
+    Pin_Miso : Signed_64
+    Peri_Clock_Hz : Signed_64
+    Declares
+        Base_Addr : Signed_64
+        Cr0_Val : Signed_64
+        Postdiv : Signed_64
+    Implements
+        Base_Addr = SPI_Base_Address(Spi_Idx)
+
+        # 1. Unreset SPI block
+        If (Spi_Idx == 1)
+            Unreset_Peripherals(RESET_SPI1)
+        Else
+            Unreset_Peripherals(RESET_SPI0)
+        End If
+
+        # 2. Configure GPIO pins for SPI function (FUNCSEL 1)
+        If (Pin_Sck >= 0)
+            Set_Function(Pin_Sck, GPIO_FUNC_SPI)
+        End If
+        If (Pin_Mosi >= 0)
+            Set_Function(Pin_Mosi, GPIO_FUNC_SPI)
+        End If
+        If (Pin_Miso >= 0)
+            Set_Function(Pin_Miso, GPIO_FUNC_SPI)
+        End If
+
+        # 3. Calculate clock prescaler
+        Postdiv = (Peri_Clock_Hz / (2 * Baud_Hz)) - 1
+        If (Postdiv < 0)
+            Postdiv = 0
+        Else If (Postdiv > 255)
+            Postdiv = 255
+        End If
+
+        # Even prescale divisor in CPSR (2)
+        Vol_Write_32(Base_Addr + 0x10, 2)
+
+        # 4. Set SSPCR0: SCR = Postdiv, 8-bit data (DSS = 7), Mode 0 (CPOL=0, CPHA=0)
+        Cr0_Val = ((Postdiv & 255) LSL 8) | 7
+        Vol_Write_32(Base_Addr + 0x00, Cr0_Val)
+
+        # 5. Enable SPI in master mode (SSE = 1, MS = 0 -> SSPCR1 = 2)
+        Vol_Write_32(Base_Addr + 0x04, 2)
+End SPI_Init_Channel_Freq
+
+Block SPI_Init_Channel Takes
+    Spi_Idx : Signed_64
+    Baud_Hz : Signed_64
+    Pin_Sck : Signed_64
+    Pin_Mosi : Signed_64
+    Pin_Miso : Signed_64
+    Declares
+        Peri_Clk : Signed_64
+        Pll_Sys_Cs : Unsigned_32
+    Implements
+        # Auto-detect peripheral clock: 125 MHz if PLL_SYS is locked, 12 MHz if running from crystal
+        Pll_Sys_Cs = Vol_Read_32(0x40028000)
+        If ((Pll_Sys_Cs & 0x80000000) != 0)
+            Peri_Clk = 125000000
+        Else
+            Peri_Clk = 12000000
+        End If
+        SPI_Init_Channel_Freq(Spi_Idx, Baud_Hz, Pin_Sck, Pin_Mosi, Pin_Miso, Peri_Clk)
+End SPI_Init_Channel
+
+Block SPI_Init Takes
+    Baud_Hz : Signed_64
+    Implements
+        # Default SPI0 on Pico: SCK=GP18, MOSI=GP19, MISO=GP16
+        SPI_Init_Channel(SPI_0, Baud_Hz, 18, 19, 16)
+End SPI_Init
+
+Block SPI_Is_Busy Takes
+    Spi_Idx : Signed_64
+    Produces Boolean
+    Declares
+        Base_Addr : Signed_64
+        Sr : Unsigned_32
+    Implements
+        Base_Addr = SPI_Base_Address(Spi_Idx)
+        # BSY is bit 4 (16) of SSPSR
+        Sr = Vol_Read_32(Base_Addr + 0x0C)
+        Give ((Sr & 16) != 0)
+End SPI_Is_Busy
+
+Block SPI_Is_Writable Takes
+    Spi_Idx : Signed_64
+    Produces Boolean
+    Declares
+        Base_Addr : Signed_64
+        Sr : Unsigned_32
+    Implements
+        Base_Addr = SPI_Base_Address(Spi_Idx)
+        # TNF (Transmit FIFO not full) is bit 1 (2) of SSPSR
+        Sr = Vol_Read_32(Base_Addr + 0x0C)
+        Give ((Sr & 2) != 0)
+End SPI_Is_Writable
+
+Block SPI_Is_Readable Takes
+    Spi_Idx : Signed_64
+    Produces Boolean
+    Declares
+        Base_Addr : Signed_64
+        Sr : Unsigned_32
+    Implements
+        Base_Addr = SPI_Base_Address(Spi_Idx)
+        # RNE (Receive FIFO not empty) is bit 2 (4) of SSPSR
+        Sr = Vol_Read_32(Base_Addr + 0x0C)
+        Give ((Sr & 4) != 0)
+End SPI_Is_Readable
+
+Block SPI_Transfer_Byte_Ch Takes
+    Spi_Idx : Signed_64
+    Out_Byte : Signed_64
+    Produces Signed_64
+    Declares
+        Base_Addr : Signed_64
+        Sr : Unsigned_32
+        In_Data : Unsigned_32
+    Implements
+        Base_Addr = SPI_Base_Address(Spi_Idx)
+
+        # 1. Wait until TX FIFO is not full (TNF bit 1 == 2)
+        Sr = Vol_Read_32(Base_Addr + 0x0C)
+        Loop Until ((Sr & 2) != 0)
+            Sr = Vol_Read_32(Base_Addr + 0x0C)
+        End Loop
+
+        # 2. Write byte to SSPDR
+        Vol_Write_32(Base_Addr + 0x08, Out_Byte & 0xFF)
+
+        # 3. Wait until RX FIFO has data (RNE bit 2 == 4)
+        Sr = Vol_Read_32(Base_Addr + 0x0C)
+        Loop Until ((Sr & 4) != 0)
+            Sr = Vol_Read_32(Base_Addr + 0x0C)
+        End Loop
+
+        # 4. Read received byte from SSPDR
+        In_Data = Vol_Read_32(Base_Addr + 0x08)
+        Give Cast[Signed_64](In_Data & 0xFF)
+End SPI_Transfer_Byte_Ch
+
+Block SPI_Write_Byte_Ch Takes
+    Spi_Idx : Signed_64
+    Out_Byte : Signed_64
+    Declares
+        Dummy : Signed_64
+    Implements
+        Dummy = SPI_Transfer_Byte_Ch(Spi_Idx, Out_Byte)
+End SPI_Write_Byte_Ch
+
+Block SPI_Read_Byte_Ch Takes
+    Spi_Idx : Signed_64
+    Produces Signed_64
+    Implements
+        # Send dummy 0xFF byte to clock in received byte
+        Give SPI_Transfer_Byte_Ch(Spi_Idx, 0xFF)
+End SPI_Read_Byte_Ch
+
+Block SPI_Write_Slice Takes
+    Spi_Idx : Signed_64
+    Buf : Unsigned_8 Slice
+    Declares
+        Len : Unsigned_64
+        I : Unsigned_64
+    Implements
+        Len = Buf.Length
+        I = 1
+        Loop Until (I > Len)
+            SPI_Write_Byte_Ch(Spi_Idx, Cast[Signed_64](Buf[I]))
+            I = I + 1
+        End Loop
+End SPI_Write_Slice
+
+Block SPI_Read_Slice Takes
+    Spi_Idx : Signed_64
+    Buf : Unsigned_8 Slice
+    Dummy_Byte : Signed_64
+    Declares
+        Len : Unsigned_64
+        I : Unsigned_64
+        B : Signed_64
+    Implements
+        Len = Buf.Length
+        I = 1
+        Loop Until (I > Len)
+            B = SPI_Transfer_Byte_Ch(Spi_Idx, Dummy_Byte)
+            Buf[I] = Cast[Unsigned_8](B & 0xFF)
+            I = I + 1
+        End Loop
+End SPI_Read_Slice
+
+Block SPI_Transfer_Slices Takes
+    Spi_Idx : Signed_64
+    Tx_Buf : Unsigned_8 Slice
+    Rx_Buf : Unsigned_8 Slice
+    Declares
+        Len : Unsigned_64
+        I : Unsigned_64
+        B : Signed_64
+    Implements
+        Len = Tx_Buf.Length
+        If (Rx_Buf.Length < Len)
+            Len = Rx_Buf.Length
+        End If
+        I = 1
+        Loop Until (I > Len)
+            B = SPI_Transfer_Byte_Ch(Spi_Idx, Cast[Signed_64](Tx_Buf[I]))
+            Rx_Buf[I] = Cast[Unsigned_8](B & 0xFF)
+            I = I + 1
+        End Loop
+End SPI_Transfer_Slices
+

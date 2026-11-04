@@ -1,0 +1,146 @@
+Module Multicore
+
+Import System
+use System
+
+Block Global
+    Declares
+        CORE_0 : Constant Signed_64 = 0
+        CORE_1 : Constant Signed_64 = 1
+End Global
+
+Block Get_Core_Num
+    Produces Signed_64
+    Declares
+        Id : Unsigned_32
+    Implements
+        # SIO_CPUID at 0xD0000000
+        Id = Vol_Read_32(0xD0000000)
+        Give Cast[Signed_64](Id & 1)
+End Get_Core_Num
+
+# Hardware Spinlocks (32 Atomic Spinlocks: 0xD0000100 to 0xD000017C)
+Block Spinlock_Try_Claim Takes
+    Lock_Idx : Signed_64
+    Produces Boolean
+    Declares
+        Addr : Signed_64
+        Val : Unsigned_32
+    Implements
+        Addr = 0xD0000100 + ((Lock_Idx & 31) * 4)
+        # Reading performs atomic test-and-set: non-zero means lock acquired
+        Val = Vol_Read_32(Addr)
+        Give (Val != 0)
+End Spinlock_Try_Claim
+
+Block Spinlock_Claim Takes
+    Lock_Idx : Signed_64
+    Declares
+        Acquired : Boolean
+    Implements
+        Acquired = Spinlock_Try_Claim(Lock_Idx)
+        Loop Until (Acquired == True)
+            Acquired = Spinlock_Try_Claim(Lock_Idx)
+        End Loop
+End Spinlock_Claim
+
+Block Spinlock_Release Takes
+    Lock_Idx : Signed_64
+    Declares
+        Addr : Signed_64
+    Implements
+        Addr = 0xD0000100 + ((Lock_Idx & 31) * 4)
+        # Any 32-bit write unlocks the hardware spinlock
+        Vol_Write_32(Addr, 1)
+End Spinlock_Release
+
+# Inter-Core FIFO (Core 0 <-> Core 1)
+Block Multicore_FIFO_Is_Ready
+    Produces Boolean
+    Declares
+        St : Unsigned_32
+    Implements
+        # Bit 1 = RDY (space available in TX FIFO)
+        St = Vol_Read_32(0xD0000050)
+        Give ((St & 2) != 0)
+End Multicore_FIFO_Is_Ready
+
+Block Multicore_FIFO_Has_Data
+    Produces Boolean
+    Declares
+        St : Unsigned_32
+    Implements
+        # Bit 0 = VLD (valid data waiting in RX FIFO)
+        St = Vol_Read_32(0xD0000050)
+        Give ((St & 1) != 0)
+End Multicore_FIFO_Has_Data
+
+Block Multicore_FIFO_Push_Blocking Takes
+    Data : Unsigned_32
+    Declares
+        Ready : Boolean
+    Implements
+        Ready = Multicore_FIFO_Is_Ready()
+        Loop Until (Ready == True)
+            Ready = Multicore_FIFO_Is_Ready()
+        End Loop
+        Vol_Write_32(0xD0000054, Data)
+End Multicore_FIFO_Push_Blocking
+
+Block Multicore_FIFO_Pop_Blocking
+    Produces Unsigned_32
+    Declares
+        Has : Boolean
+    Implements
+        Has = Multicore_FIFO_Has_Data()
+        Loop Until (Has == True)
+            Has = Multicore_FIFO_Has_Data()
+        End Loop
+        Give Vol_Read_32(0xD0000058)
+End Multicore_FIFO_Pop_Blocking
+
+Block Multicore_FIFO_Drain
+    Declares
+        Has : Boolean
+        Dummy : Unsigned_32
+    Implements
+        Has = Multicore_FIFO_Has_Data()
+        Loop Until (Has == False)
+            Dummy = Vol_Read_32(0xD0000058)
+            Has = Multicore_FIFO_Has_Data()
+        End Loop
+End Multicore_FIFO_Drain
+
+# Launch Core 1 using standard RP2040 Bootrom protocol
+Block Multicore_Launch_Core1 Takes
+    Entry_Function_Addr : Signed_64
+    Stack_Pointer : Signed_64
+    Vector_Table_Addr : Signed_64
+    Declares
+        Ack : Unsigned_32
+    Implements
+        # 1. Drain any residual FIFO data
+        Multicore_FIFO_Drain()
+
+        # 2. Handshake sequence with Bootrom on Core 1:
+        # Send 0, expect 0
+        Multicore_FIFO_Push_Blocking(0)
+        Ack = Multicore_FIFO_Pop_Blocking()
+
+        # Send 1, expect 1
+        Multicore_FIFO_Push_Blocking(1)
+        Ack = Multicore_FIFO_Pop_Blocking()
+
+        # Send Vector Table address, expect echo
+        Multicore_FIFO_Push_Blocking(Cast[Unsigned_32](Vector_Table_Addr))
+        Ack = Multicore_FIFO_Pop_Blocking()
+
+        # Send Stack Pointer, expect echo
+        Multicore_FIFO_Push_Blocking(Cast[Unsigned_32](Stack_Pointer))
+        Ack = Multicore_FIFO_Pop_Blocking()
+
+        # Send Entry point, expect echo
+        Multicore_FIFO_Push_Blocking(Cast[Unsigned_32](Entry_Function_Addr))
+        Ack = Multicore_FIFO_Pop_Blocking()
+End Multicore_Launch_Core1
+
