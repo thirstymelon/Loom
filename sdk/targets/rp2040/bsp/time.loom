@@ -40,6 +40,22 @@ Block Get_Time_64_Microseconds
         Give (Cast[Signed_64](High1) LSL 32) | Cast[Signed_64](Low)
 End Get_Time_64_Microseconds
 
+# Return True after a real elapsed-time deadline. Start_Us should come from
+# Get_Time_64_Microseconds; this uses the free-running 64-bit RP2040 timer.
+Block Timeout_Expired Takes
+    Start_Us : Signed_64
+    Timeout_Us : Signed_64
+    Produces Boolean
+    Declares
+        Now_Us : Signed_64
+    Implements
+        If (Timeout_Us <= 0)
+            Give True
+        End If
+        Now_Us = Get_Time_64_Microseconds()
+        Give ((Now_Us - Start_Us) >= Timeout_Us)
+End Timeout_Expired
+
 Block Get_Time
     Produces Signed_64
     Declares

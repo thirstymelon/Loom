@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -209,11 +210,14 @@ void packageUF2(const fs::path& binPath, const fs::path& uf2Path, uint32_t flash
     }
 }
 
-fs::path findObjcopy() {
+fs::path loomHome();
+fs::path findObjcopy(const fs::path& toolchainRoot) {
     if (const char* envObjcopy = std::getenv("LLVM_OBJCOPY")) {
         if (*envObjcopy) return envObjcopy;
     }
     for (const auto& candidate : {
+        toolchainRoot / "bin" / "llvm-objcopy",
+        loomHome() / "toolchains" / "rp2040" / "bin" / "llvm-objcopy",
         fs::path("/opt/homebrew/opt/llvm/bin/llvm-objcopy"),
         fs::path("/usr/local/opt/llvm/bin/llvm-objcopy"),
         fs::path("/opt/homebrew/bin/llvm-objcopy"),
@@ -237,8 +241,13 @@ struct Config {
     bool baremetal = false;
     std::string linkerScript;
     std::vector<std::string> assemblySources;
+    std::vector<std::string> linkArgs;
+    std::string emulator;
+    std::vector<std::string> runArgs;
     bool uf2Output = false;
+    std::unordered_map<std::string, std::string> dependencies;
 };
+
 Config readConfig(const fs::path& file) {
     std::ifstream in(file);
     if (!in) throw Error("cannot read " + file.string());
@@ -253,6 +262,7 @@ Config readConfig(const fs::path& file) {
         const auto eq = line.find('=');
         if (eq == std::string::npos) throw Error("config.toml line " + std::to_string(lineNo) + ": expected key = value");
         std::string key = trim(line.substr(0, eq));
+        std::transform(key.begin(), key.end(), key.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
         std::replace(key.begin(), key.end(), '-', '_');
         const std::string value = trim(line.substr(eq + 1));
         if (section == "project" && key == "name") c.name = unquote(value, lineNo);
@@ -263,12 +273,32 @@ Config readConfig(const fs::path& file) {
         else if (section == "build" && (key == "executable" || key == "output")) c.executable = unquote(value, lineNo);
         else if (section == "build" && key == "target") c.target = unquote(value, lineNo);
         else if (section == "build" && key == "cpu") c.cpu = unquote(value, lineNo);
-        else if (section == "build" && key == "baremetal") c.baremetal = (value == "true");
+        else if (section == "build" && (key == "baremetal" || key == "bare_metal")) c.baremetal = (value == "true");
         else if (section == "build" && (key == "linker_script" || key == "linker")) c.linkerScript = unquote(value, lineNo);
         else if (section == "build" && (key == "assembly_sources" || key == "assembly")) c.assemblySources = parseStringArray(value, lineNo);
+        else if (section == "build" && (key == "link_args" || key == "linker_args")) c.linkArgs = parseStringArray(value, lineNo);
         else if (section == "build" && (key == "uf2_output" || key == "uf2")) c.uf2Output = (value == "true");
+        else if (section == "run" && (key == "emulator" || key == "qemu")) c.emulator = unquote(value, lineNo);
+        else if (section == "run" && key == "args") c.runArgs = parseStringArray(value, lineNo);
         else if (section == "toolchain" && (key == "name" || key == "toolchain")) c.toolchain = unquote(value, lineNo);
         else if (section == "toolchain" && key == "clang") c.clang = unquote(value, lineNo);
+        else if (section == "dependencies") {
+            if (!value.empty() && value.front() == '{' && value.back() == '}') {
+                auto gitPos = value.find("git");
+                if (gitPos != std::string::npos) {
+                    auto eqPos = value.find('=', gitPos);
+                    if (eqPos != std::string::npos) {
+                        auto q1 = value.find('"', eqPos);
+                        auto q2 = value.find('"', q1 + 1);
+                        if (q1 != std::string::npos && q2 != std::string::npos) {
+                            c.dependencies[key] = value.substr(q1 + 1, q2 - q1 - 1);
+                        }
+                    }
+                }
+            } else {
+                c.dependencies[key] = unquote(value, lineNo);
+            }
+        }
         else throw Error("config.toml line " + std::to_string(lineNo) + ": unknown key '" + key + "' in [" + section + "]");
     }
     if (c.name.empty()) c.name = file.parent_path().filename().string();
@@ -395,6 +425,19 @@ std::vector<fs::path> getSdkIncludeDirs(const char* argv0 = nullptr, const std::
                     addDir(t.path() / "bsp");
                     addDir(t.path());
                 }
+            }
+        }
+    }
+    // Libraries installed by `loom install` are user-scoped and are made
+    // available to every project without copying files into the SDK.
+    if (const char* home = std::getenv("HOME")) {
+        const fs::path libraryRoot = fs::path(home) / ".loom" / "libraries";
+        std::error_code ec;
+        if (fs::is_directory(libraryRoot, ec)) {
+            for (const auto& package : fs::directory_iterator(libraryRoot, ec)) {
+                if (!package.is_directory(ec)) continue;
+                addDir(package.path());
+                addDir(package.path() / "src");
             }
         }
     }
@@ -732,6 +775,18 @@ int runCommand(const std::vector<std::string>& args) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : 128;
 #endif
 }
+int runCommandToFile(const std::vector<std::string>& args, const fs::path& output) {
+    std::string command;
+    for (const auto& arg : args) { if (!command.empty()) command += ' '; command += shellQuote(arg); }
+    command += " > " + shellQuote(output.string());
+    const int status = std::system(command.c_str());
+#ifdef _WIN32
+    return status;
+#else
+    if (status == -1) return 127;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 128;
+#endif
+}
 fs::path loomcPath(const char* argv0) {
     if (const char* overridePath = std::getenv("LOOMC")) if (*overridePath) return overridePath;
     const fs::path arg(argv0);
@@ -756,10 +811,222 @@ inline void setEnvVar(const std::string& name, const std::string& value) {
 #endif
 }
 
+struct RegistryPackage { std::string kind, name, version, platform, url, sha256; };
+
+fs::path loomHome() {
+    if (const char* home = std::getenv("HOME")) return fs::path(home) / ".loom";
+#ifdef _WIN32
+    if (const char* profile = std::getenv("USERPROFILE")) return fs::path(profile) / ".loom";
+#endif
+    throw Error("cannot find your home directory; set HOME and try again");
+}
+
+std::string registryUrl() {
+    if (const char* custom = std::getenv("LOOM_REGISTRY_URL")) if (*custom) return custom;
+    return "https://github.com/thirstymelon/Loom/releases/latest/download/loom-catalog.tsv";
+}
+
+std::string hostPlatform() {
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+    return "macos-arm64";
+#elif defined(__APPLE__) && defined(__x86_64__)
+    return "macos-x64";
+#elif defined(__linux__) && defined(__aarch64__)
+    return "linux-arm64";
+#elif defined(__linux__) && defined(__x86_64__)
+    return "linux-x64";
+#elif defined(_WIN32) && defined(_M_X64)
+    return "windows-x64";
+#else
+    return "unsupported";
+#endif
+}
+
+std::string readTextFile(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw Error("cannot read " + path.string());
+    std::ostringstream text; text << in.rdbuf(); return text.str();
+}
+
+std::vector<std::string> splitTabs(const std::string& line) {
+    std::vector<std::string> fields;
+    std::size_t start = 0;
+    for (;;) {
+        const std::size_t tab = line.find('\t', start);
+        fields.push_back(line.substr(start, tab == std::string::npos ? tab : tab - start));
+        if (tab == std::string::npos) break;
+        start = tab + 1;
+    }
+    return fields;
+}
+
+std::vector<RegistryPackage> readRegistry() {
+    fs::path temp = fs::temp_directory_path() / ("loom-registry-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count()) + ".tsv");
+    if (runCommand({"curl", "--fail", "--location", "--silent", "--show-error", "--retry", "2",
+                    "--output", temp.string(), registryUrl()}) != 0)
+        throw Error("could not download the Loom package catalog; check your connection or set LOOM_REGISTRY_URL");
+    std::vector<RegistryPackage> packages;
+    std::istringstream input(readTextFile(temp));
+    std::error_code ec; fs::remove(temp, ec);
+    std::string line; std::size_t lineNo = 0;
+    while (std::getline(input, line)) {
+        ++lineNo;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line.front() == '#') continue;
+        auto f = splitTabs(line);
+        RegistryPackage p;
+        if (f.size() == 5 && f[0] == "library") p = {f[0], f[1], f[2], "any", f[3], f[4]};
+        else if (f.size() == 6 && f[0] == "toolchain") p = {f[0], f[1], f[2], f[3], f[4], f[5]};
+        else throw Error("invalid Loom package catalog row " + std::to_string(lineNo));
+        if (p.name.empty() || p.version.empty() || p.url.rfind("https://", 0) != 0 || p.sha256.size() != 64)
+            throw Error("invalid Loom package catalog data on row " + std::to_string(lineNo));
+        packages.push_back(std::move(p));
+    }
+    if (packages.empty()) throw Error("the Loom package catalog is empty");
+    return packages;
+}
+
+std::string sha256File(const fs::path& file) {
+    fs::path output = fs::temp_directory_path() / ("loom-sha-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count()) + ".txt");
+#ifdef _WIN32
+    const int status = runCommandToFile({"certutil", "-hashfile", file.string(), "SHA256"}, output);
+#else
+    int status = runCommandToFile({"shasum", "-a", "256", file.string()}, output);
+    if (status != 0) status = runCommandToFile({"sha256sum", file.string()}, output);
+#endif
+    if (status != 0) throw Error("SHA-256 utility not found (shasum, sha256sum, or certutil)");
+    std::istringstream parsed(readTextFile(output));
+    std::string digest, line;
+    while (std::getline(parsed, line)) {
+        std::istringstream words(line);
+        std::string candidate;
+        while (words >> candidate) {
+            if (candidate.size() != 64 || !std::all_of(candidate.begin(), candidate.end(), [](unsigned char c) { return std::isxdigit(c) != 0; })) continue;
+            std::transform(candidate.begin(), candidate.end(), candidate.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            digest = candidate;
+            break;
+        }
+        if (!digest.empty()) break;
+    }
+    std::error_code ec; fs::remove(output, ec);
+    if (digest.empty()) throw Error("could not read the SHA-256 digest");
+    return digest;
+}
+
+void installArchive(const RegistryPackage& package) {
+    const fs::path home = loomHome();
+    const fs::path temp = fs::temp_directory_path() / ("loom-install-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const fs::path archive = temp.string() + ".tar.gz";
+    fs::create_directories(temp);
+    std::error_code ec;
+    try {
+        if (runCommand({"curl", "--fail", "--location", "--silent", "--show-error", "--retry", "2",
+                        "--output", archive.string(), package.url}) != 0)
+            throw Error("download failed for " + package.name + " " + package.version);
+        if (sha256File(archive) != package.sha256)
+            throw Error("SHA-256 verification failed for " + package.name + " " + package.version);
+        const fs::path listing = temp / "contents.txt";
+        if (runCommandToFile({"tar", "-tzf", archive.string()}, listing) != 0)
+            throw Error("invalid package archive for " + package.name);
+        std::istringstream names(readTextFile(listing)); std::string item;
+        while (std::getline(names, item)) {
+            if (!item.empty() && item.back() == '/') item.pop_back();
+            fs::path relative(item);
+            if (relative.empty() || relative.is_absolute()) throw Error("unsafe path in package archive");
+            for (const auto& part : relative) if (part == "..") throw Error("unsafe path in package archive");
+        }
+        const fs::path verboseListing = temp / "details.txt";
+        if (runCommandToFile({"tar", "-tvzf", archive.string()}, verboseListing) != 0)
+            throw Error("could not inspect package archive for " + package.name);
+        std::istringstream details(readTextFile(verboseListing));
+        std::string detail;
+        while (std::getline(details, detail)) {
+            if (detail.empty()) continue;
+            if (detail.front() != '-' && detail.front() != 'd')
+                throw Error("links and special files are not allowed in Loom packages");
+        }
+        const fs::path unpacked = temp / "unpacked"; fs::create_directories(unpacked);
+        if (runCommand({"tar", "-xzf", archive.string(), "-C", unpacked.string()}) != 0)
+            throw Error("could not unpack " + package.name + " package");
+        const fs::path source = unpacked / package.name;
+        if (!fs::is_directory(source)) throw Error("package archive has no expected package directory");
+        const fs::path destination = package.kind == "library"
+            ? home / "libraries" / package.name
+            : home / "toolchains" / package.name;
+        fs::create_directories(destination.parent_path());
+        const fs::path staged = destination.string() + ".installing";
+        const fs::path backup = destination.string() + ".previous";
+        fs::remove_all(staged, ec);
+        fs::remove_all(backup, ec);
+        fs::copy(source, staged, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        if (package.kind == "library") {
+            std::ofstream versionFile(staged / "loom-package-version", std::ios::binary);
+            versionFile << package.version << "\n";
+            if (!versionFile) throw Error("could not record installed library version");
+        }
+        if (fs::exists(destination, ec)) fs::rename(destination, backup);
+        try {
+            fs::rename(staged, destination);
+        } catch (...) {
+            if (fs::exists(backup, ec)) fs::rename(backup, destination, ec);
+            throw;
+        }
+        fs::remove_all(backup, ec);
+        std::cout << "Installed " << package.kind << " '" << package.name << "' " << package.version
+                  << " to " << destination.string() << "\n";
+    } catch (...) { fs::remove_all(temp, ec); fs::remove(archive, ec); throw; }
+    fs::remove_all(temp, ec); fs::remove(archive, ec);
+}
+
+void installFromRegistry(const std::string& kind, const std::string& name, const std::string& version = "") {
+    const std::string allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+    if (name.empty() || name.find_first_not_of(allowed) != std::string::npos)
+        throw Error("invalid package name");
+    if (!version.empty() && version.find_first_not_of(allowed + ".+") != std::string::npos)
+        throw Error("invalid package version");
+    const std::string platform = kind == "toolchain" ? hostPlatform() : "any";
+    if (platform == "unsupported") throw Error("toolchain downloads are not yet published for this operating system and CPU");
+    auto packages = readRegistry();
+    for (const auto& p : packages) {
+        if (p.kind == kind && p.name == name && p.platform == platform && (version.empty() || p.version == version)) {
+            installArchive(p); return;
+        }
+    }
+    throw Error("no published " + kind + " package named '" + name + "'" +
+                (version.empty() ? "" : " at version " + version) +
+                (kind == "toolchain" ? " for " + platform : ""));
+}
+
+void listLibraries() {
+    const fs::path root = loomHome() / "libraries"; std::error_code ec;
+    if (!fs::is_directory(root, ec)) { std::cout << "No Loom libraries installed.\n"; return; }
+    bool any = false;
+    for (const auto& package : fs::directory_iterator(root, ec)) if (package.is_directory(ec)) {
+        const fs::path versionFile = package.path() / "loom-package-version";
+        std::string version = "unknown";
+        if (fs::is_regular_file(versionFile, ec)) version = trim(readTextFile(versionFile));
+        std::cout << package.path().filename().string() << " " << version << "\n"; any = true;
+    }
+    if (!any) std::cout << "No Loom libraries installed.\n";
+}
+
+void removeLibrary(const std::string& name) {
+    if (name.empty() || name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos)
+        throw Error("invalid library name");
+    const fs::path target = loomHome() / "libraries" / name; std::error_code ec;
+    if (!fs::exists(target, ec)) throw Error("library '" + name + "' is not installed");
+    fs::remove_all(target, ec);
+    if (ec) throw Error("could not remove library '" + name + "': " + ec.message());
+    std::cout << "Removed library '" << name << "'.\n";
+}
+
 struct ToolchainInfo {
     std::string name;
     std::string kind;
-    std::string version = "1.1.0";
+    std::string version = "1.2.0";
     std::string description;
     fs::path rootDir;
     fs::path loomcPath;
@@ -923,7 +1190,7 @@ inline std::vector<ToolchainInfo> listInstalledToolchains(const char* argv0 = nu
             ToolchainInfo nat;
             nat.name = "native";
             nat.kind = "native";
-            nat.version = "1.1.0";
+            nat.version = "1.2.0";
             nat.description = "Loom Native Desktop Toolchain (workspace development)";
             nat.rootDir = fs::current_path();
             nat.loomcPath = localLoomc;
@@ -934,7 +1201,7 @@ inline std::vector<ToolchainInfo> listInstalledToolchains(const char* argv0 = nu
             ToolchainInfo rp;
             rp.name = "rp2040";
             rp.kind = "rp2040";
-            rp.version = "1.1.0";
+            rp.version = "1.2.0";
             rp.description = "Loom RP2040 Embedded Bare-Metal Toolchain (workspace development)";
             rp.rootDir = fs::current_path();
             rp.loomcPath = localLoomc;
@@ -955,7 +1222,7 @@ inline void printInstalledToolchains(const char* argv0 = nullptr, bool verbose =
     std::cout << col.bold << "Installed Loom toolchains:" << col.reset << "\n";
     if (tcs.empty()) {
         std::cout << col.dim << "  (no toolchains installed)\n\n"
-                  << "Install a toolchain package (.pkg) from Loom releases.\n" << col.reset;
+                  << "Install a toolchain with 'loom install toolchain <name>'.\n" << col.reset;
         return;
     }
 
@@ -1020,7 +1287,7 @@ inline ToolchainInfo resolveActiveToolchain(
         if (fs::is_regular_file(fallbackLoomc, ec)) {
             activeTc.name = requested;
             activeTc.kind = (requested == "rp2040" || requested.find("cortex") != std::string::npos) ? "rp2040" : "native";
-            activeTc.version = "1.1.0";
+            activeTc.version = "1.2.0";
             activeTc.rootDir = fs::current_path();
             activeTc.loomcPath = fallbackLoomc;
             activeTc.sdkPath = fs::current_path() / "sdk";
@@ -1039,10 +1306,19 @@ inline ToolchainInfo resolveActiveToolchain(
                     (avail.empty() ? "" : ("  Installed: " + avail + "\n")));
     }
 
-    bool isRp2040Project = config.baremetal ||
-                           config.target.find("thumb") != std::string::npos ||
-                           config.target.find("none-eabi") != std::string::npos ||
-                           config.cpu == "cortex-m0plus";
+    const std::string targetLower = toLower(config.target);
+    const bool isRp2040Project = targetLower.find("thumb") != std::string::npos ||
+                                 targetLower.find("none-eabi") != std::string::npos ||
+                                 config.cpu == "cortex-m0plus" ||
+                                 (config.baremetal && config.target.empty() && config.cpu.empty() &&
+                                  (configToolchain == "rp2040" || activeTc.kind == "rp2040"));
+    const bool isNativeAArch64Baremetal = config.baremetal &&
+                                          targetLower.find("aarch64") != std::string::npos &&
+                                          (targetLower.find("none-elf") != std::string::npos ||
+                                           targetLower.find("unknown-elf") != std::string::npos);
+    if (config.baremetal && !isRp2040Project && !isNativeAArch64Baremetal) {
+        throw Error("bare-metal builds require either the RP2040 target or an explicit AArch64 ELF target such as 'aarch64-none-elf'");
+    }
 
     // If config.toml explicitly configured a toolchain name and it conflicts with active toolchain:
     if (!configToolchain.empty() && configToolchain != activeTc.name && configToolchain != activeTc.kind && cliOverride.empty()) {
@@ -1094,7 +1370,7 @@ void createProject(const std::string& name, bool rp2040 = false) {
             std::ofstream config(namePath / "config.toml");
             config << "[project]\n"
                    << "name = \"" << name << "\"\n"
-                   << "version = \"1.1.0\"\n\n"
+                   << "version = \"1.2.0\"\n\n"
                    << "[build]\n"
                    << "main = \"src/main.loom\"\n"
                    << "sources = [\"src/*.loom\"]\n"
@@ -1143,11 +1419,13 @@ void createProject(const std::string& name, bool rp2040 = false) {
                  << "    LED_PIN : Constant Signed_64 = 25\n"
                  << "End Global\n\n"
                  << "Block Main\n"
+                 << "Declares\n"
+                 << "    Serial : UART_Handle\n"
                  << "Implements\n"
                  << "    System_Init()\n"
                  << "    Init_Pin(LED_PIN)\n"
                  << "    Set_Direction(LED_PIN, PIN_OUTPUT)\n"
-                 << "    UART_Init(115200)\n\n"
+                 << "    Serial = UART_Init(0, 1)\n\n"
                  << "    Write_UART(\"=================================\\n\")\n"
                  << "    Write_UART(\"Raspberry Pi Pico initialized!\\n\")\n"
                  << "    Write_UART(\"=================================\\n\")\n\n"
@@ -1190,7 +1468,7 @@ void createProject(const std::string& name, bool rp2040 = false) {
         }
 
         std::ofstream config(namePath / "config.toml");
-        config << "[project]\nname = \"" << name << "\"\nversion = \"1.1.0\"\n\n[build]\nmain = \"src/main.loom\"\nsources = [\"src/*.loom\"]\ntarget-dir = \"target\"\nexecutable = \"" << name << "\"\n\n[toolchain]\nclang = \"clang\"\n";
+        config << "[project]\nname = \"" << name << "\"\nversion = \"1.2.0\"\n\n[build]\nmain = \"src/main.loom\"\nsources = [\"src/*.loom\"]\ntarget-dir = \"target\"\nexecutable = \"" << name << "\"\n\n[toolchain]\nclang = \"clang\"\n";
         if (!config) throw Error("failed to write config.toml");
         std::ofstream main(namePath / "src" / "main.loom");
         main << "Module Main\n\nBlock Main\n    Implements\n        Write(\"Hello, Loom!\\n\")\nEnd Main\n";
@@ -1240,6 +1518,9 @@ void buildProject(const fs::path& configFile, const char* argv0, bool release, b
     const fs::path configPath = weakCanonical(configFile);
     const fs::path root = weakCanonical(configPath.parent_path());
     const Config config = readConfig(configPath);
+    const std::string buildTarget = toLower(config.target);
+    const bool aarch64BareMetalTarget = config.baremetal && buildTarget.find("aarch64") != std::string::npos &&
+        (buildTarget.find("none-elf") != std::string::npos || buildTarget.find("unknown-elf") != std::string::npos);
     const ToolchainInfo activeTc = resolveActiveToolchain(cliToolchain, config.toolchain, config, argv0);
     setEnvVar("LOOM_TOOLCHAIN_KIND", activeTc.kind);
     const auto sdkDirs = getSdkIncludeDirs(argv0, activeTc.sdkPath.string());
@@ -1249,7 +1530,7 @@ void buildProject(const fs::path& configFile, const char* argv0, bool release, b
     const auto compiler = activeTc.loomcPath.empty() ? loomcPath(argv0) : activeTc.loomcPath;
     const Colors col = Colors::detect(false);
     if (!quiet) {
-        std::cout << col.bold << col.cyan << "Loom 1.1.0" << col.reset
+        std::cout << col.bold << col.cyan << "Loom 1.2.0" << col.reset
                   << col.dim << " | " << col.reset
                   << col.bold << "Building " << config.name << col.reset << "\n\n"
                   << col.bold << col.blue << "Configuration" << col.reset << "\n"
@@ -1401,6 +1682,7 @@ void buildProject(const fs::path& configFile, const char* argv0, bool release, b
     if (config.baremetal) {
         command.push_back("-nostdlib");
         command.push_back("-fuse-ld=lld");
+        if (aarch64BareMetalTarget) command.push_back("-Wl,-pie");
         if (!config.target.empty()) command.push_back("--target=" + config.target);
         if (!config.cpu.empty()) command.push_back("-mcpu=" + config.cpu);
         std::string linkerScript = config.linkerScript;
@@ -1455,6 +1737,9 @@ void buildProject(const fs::path& configFile, const char* argv0, bool release, b
     for (const auto& extraObj : extraObjects) {
         command.push_back(extraObj.string());
     }
+    for (const auto& linkArg : config.linkArgs) {
+        command.push_back(linkArg);
+    }
     command.push_back("-o"); command.push_back(stagedOutput.string());
     if (!quiet) {
         std::cout << "\n" << col.bold << col.blue << "Linking" << col.reset << "\n"
@@ -1483,7 +1768,7 @@ void buildProject(const fs::path& configFile, const char* argv0, bool release, b
     if (config.baremetal) {
         fs::path binPath = output;
         binPath.replace_extension(".bin");
-        fs::path objcopy = findObjcopy();
+        fs::path objcopy = findObjcopy(activeTc.rootDir);
         std::vector<std::string> objcopyCmd{objcopy.string(), "-O", "binary", output.string(), binPath.string()};
         if (verbose) {
             std::cout << "  Command: ";
@@ -1517,6 +1802,37 @@ void runProject(const fs::path& configFile, const char* argv0, bool release, boo
     const Config config = readConfig(configPath);
     const Colors col = Colors::detect(false);
     if (config.baremetal) {
+        const std::string targetLower = toLower(config.target);
+        const bool rp2040Target = targetLower.find("thumb") != std::string::npos ||
+                                  targetLower.find("none-eabi") != std::string::npos ||
+                                  config.cpu == "cortex-m0plus";
+        if (!rp2040Target && targetLower.find("aarch64") != std::string::npos &&
+            (targetLower.find("none-elf") != std::string::npos || targetLower.find("unknown-elf") != std::string::npos)) {
+            fs::path kernel = workspacePath(root, config.targetDir, "build.target-dir") / config.executable;
+            if (kernel.extension() != ".elf") kernel += ".elf";
+            const std::string emulator = config.emulator.empty() ? "qemu-system-aarch64" : config.emulator;
+            std::vector<std::string> command{emulator};
+            if (config.runArgs.empty()) {
+                command.insert(command.end(), {"-M", "virt", "-cpu", config.cpu.empty() ? "cortex-a72" : config.cpu,
+                                               "-smp", "1", "-m", "128M", "-nographic", "-monitor", "none",
+                                               "-serial", "stdio", "-device", "loader,file=" + kernel.string() + ",cpu-num=0"});
+            } else {
+                for (auto arg : config.runArgs) {
+                    std::size_t pos = 0;
+                    while ((pos = arg.find("{kernel}", pos)) != std::string::npos) {
+                        arg.replace(pos, 8, kernel.string());
+                        pos += kernel.string().size();
+                    }
+                    command.push_back(std::move(arg));
+                }
+            }
+            if (verbose) std::cout << "\n" << col.bold << col.cyan << "Running AArch64 bare-metal kernel in "
+                                   << col.reset << emulator << "\n" << std::flush;
+            const int status = runCommand(command);
+            if (status == 127) throw Error("cannot start emulator '" + emulator + "'; install QEMU or set [run].emulator");
+            if (status != 0) throw Error("bare-metal emulator exited with status " + std::to_string(status));
+            return;
+        }
         fs::path uf2 = workspacePath(root, config.targetDir, "build.target-dir") / config.executable;
         uf2.replace_extension(".uf2");
         std::cout << "\n" << col.bold << col.yellow << "Bare-metal target: " << col.reset
@@ -1592,11 +1908,199 @@ void cleanProject(const fs::path& configFile) {
         }
     }
 }
+
+std::string readFileContent(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw Error("cannot open file '" + path + "'");
+    std::ostringstream s;
+    s << in.rdbuf();
+    return s.str();
+}
+
+void fetchDependencies(const fs::path& configFile) {
+    const fs::path configPath = weakCanonical(configFile);
+    const fs::path root = weakCanonical(configPath.parent_path());
+    const Config config = readConfig(configPath);
+    const Colors col = Colors::detect(false);
+    if (config.dependencies.empty()) {
+        std::cout << col.dim << "No dependencies listed in config.toml" << col.reset << "\n";
+        return;
+    }
+    fs::path depsDir = root / ".loom" / "deps";
+    std::error_code ec;
+    fs::create_directories(depsDir, ec);
+
+    for (const auto& [depName, repoUrl] : config.dependencies) {
+        fs::path depPath = depsDir / depName;
+        if (fs::exists(depPath)) {
+            std::cout << "  " << col.bold << col.cyan << "[update]" << col.reset << " " << depName << "\n";
+            std::string cmd = "git -C " + shellQuote(depPath.string()) + " pull --quiet";
+            (void)std::system(cmd.c_str());
+        } else {
+            std::cout << "  " << col.bold << col.green << "[fetch]" << col.reset << " " << depName << " from " << repoUrl << "\n";
+            std::string cmd = "git clone --quiet " + shellQuote(repoUrl) + " " + shellQuote(depPath.string());
+            int status = std::system(cmd.c_str());
+            if (status != 0) {
+                throw Error("failed to fetch dependency '" + depName + "' from " + repoUrl);
+            }
+        }
+    }
+    std::cout << col.bold << col.green << "Dependencies up to date." << col.reset << "\n";
+}
+
+void formatFile(const fs::path& filePath, bool checkOnly) {
+    std::string content = readFileContent(filePath.string());
+    std::istringstream stream(content);
+    std::string line;
+    std::ostringstream formatted;
+    int indent = 0;
+    while (std::getline(stream, line)) {
+        std::string trimmed = trim(line);
+        if (trimmed.empty()) {
+            formatted << "\n";
+            continue;
+        }
+        bool isDedent = false;
+        if (trimmed.rfind("End", 0) == 0 || trimmed.rfind("Else", 0) == 0 || trimmed.rfind("When", 0) == 0) {
+            isDedent = true;
+        }
+        int curIndent = std::max(0, isDedent ? indent - 1 : indent);
+        for (int i = 0; i < curIndent; ++i) formatted << "    ";
+        formatted << trimmed << "\n";
+
+        if (trimmed.rfind("Block", 0) == 0 || trimmed.rfind("If", 0) == 0 || trimmed.rfind("Else", 0) == 0 ||
+            trimmed.rfind("Loop", 0) == 0 || trimmed.rfind("Match", 0) == 0 || trimmed.rfind("When", 0) == 0 ||
+            trimmed == "Declares" || trimmed == "Takes" || trimmed == "Implements" ||
+            trimmed.rfind("Record", 0) == 0 || trimmed.rfind("Enum", 0) == 0 || trimmed.rfind("Test", 0) == 0) {
+            if (trimmed.rfind("End", 0) != 0) {
+                indent = curIndent + 1;
+            }
+        } else if (trimmed.rfind("End", 0) == 0) {
+            indent = std::max(0, indent - 1);
+        }
+    }
+    std::string formattedStr = formatted.str();
+    if (checkOnly) {
+        if (content != formattedStr) {
+            throw Error("formatting differences in " + filePath.string());
+        }
+    } else if (content != formattedStr) {
+        std::ofstream out(filePath);
+        out << formattedStr;
+        std::cout << "Formatted " << filePath.string() << "\n";
+    }
+}
+
+void formatProject(const std::vector<std::string>& targets, bool checkOnly) {
+    const Colors col = Colors::detect(false);
+    for (const auto& t : targets) {
+        fs::path p(t);
+        if (fs::is_regular_file(p) && p.extension() == ".loom") {
+            formatFile(p, checkOnly);
+        } else if (fs::is_directory(p)) {
+            for (const auto& entry : fs::recursive_directory_iterator(p)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".loom") {
+                    formatFile(entry.path(), checkOnly);
+                }
+            }
+        }
+    }
+    std::cout << col.bold << col.green << (checkOnly ? "All files cleanly formatted." : "Formatting complete.") << col.reset << "\n";
+}
+
+void runTests(const fs::path& configFile, const char* argv0, const std::vector<std::string>& files,
+              const std::string& cliToolchain, bool verbose) {
+    (void)configFile;
+    (void)cliToolchain;
+    const Colors col = Colors::detect(false);
+    std::cout << col.bold << "Running Loom tests...\n" << col.reset;
+
+    std::vector<fs::path> testPaths;
+    if (!files.empty()) {
+        for (const auto& f : files) testPaths.push_back(fs::path(f));
+    } else {
+        std::error_code ec;
+        if (fs::exists("tests", ec)) {
+            for (const auto& e : fs::recursive_directory_iterator("tests", ec)) {
+                if (e.path().extension() == ".loom") testPaths.push_back(e.path());
+            }
+        }
+        if (testPaths.empty() && fs::exists("src", ec)) {
+            for (const auto& e : fs::recursive_directory_iterator("src", ec)) {
+                if (e.path().extension() == ".loom") testPaths.push_back(e.path());
+            }
+        }
+    }
+
+    if (testPaths.empty()) {
+        std::cout << col.yellow << "No test files found.\n" << col.reset;
+        return;
+    }
+
+    fs::path exeDir = getExecutablePath(argv0).parent_path();
+    fs::path loomc = exeDir / "loomc";
+    if (!fs::exists(loomc)) loomc = "loomc";
+
+    int passed = 0;
+    int failed = 0;
+    for (const auto& tp : testPaths) {
+        fs::path outBin = fs::temp_directory_path() / (tp.stem().string() + "_test_runner");
+#ifdef _WIN32
+        outBin += ".exe";
+#endif
+        std::vector<std::string> compileCmd{loomc.string(), "--test-runner", "--entry", tp.string(), "-o", outBin.string()};
+        if (verbose) {
+            std::cout << "  Compiling: ";
+            for (const auto& a : compileCmd) std::cout << a << " ";
+            std::cout << "\n";
+        }
+        int status = runCommand(compileCmd);
+        if (status != 0) {
+            std::cout << col.red << "[FAIL] Compilation failed: " << col.reset << tp.string() << "\n";
+            failed++;
+            continue;
+        }
+        std::vector<std::string> execCmd{outBin.string()};
+        int execStatus = runCommand(execCmd);
+        std::error_code rmEc;
+        fs::remove(outBin, rmEc);
+        if (execStatus == 0) {
+            passed++;
+        } else {
+            failed++;
+            std::cout << col.red << "[FAIL] Test failed: " << col.reset << tp.string() << "\n";
+        }
+    }
+
+    std::cout << "\nTest Results: "
+              << col.bold << col.green << passed << " passed" << col.reset << ", "
+              << (failed > 0 ? col.bold + col.red : col.reset) << failed << " failed" << col.reset << "\n";
+    if (failed > 0) throw ChildFailure(1);
+}
+
+void runLsp(const char* argv0) {
+    fs::path exeDir = getExecutablePath(argv0).parent_path();
+    fs::path lsp = exeDir / "loom-lsp";
+    if (!fs::exists(lsp)) lsp = "loom-lsp";
+    std::vector<std::string> cmd{lsp.string()};
+    int status = runCommand(cmd);
+    if (status != 0) throw ChildFailure(status);
+}
+
 void usage() {
-    std::cout << "Loom workspace tool 1.1.0\n\nUsage:\n"
+    std::cout << "Loom workspace tool 1.2.0\n\nUsage:\n"
                  "  loom new <name> [--rp2040]\n"
+                 "  loom install <library> [--version <version>]\n"
+                 "  loom install toolchain <name> [--version <version>]\n"
+                 "  loom toolchain install <name> [--version <version>]\n"
+                 "  loom libraries\n"
+                 "  loom uninstall <library>\n"
                  "  loom toolchains\n"
                  "  loom use <toolchain>\n"
+                 "  loom test [files...] [--config <path>] [--verbose]\n"
+                 "  loom fmt [files/dirs...] [--check]\n"
+                 "  loom fetch [--config <path>]\n"
+                 "  loom lsp\n"
                  "  loom build [--release] [--opt-report] [--verbose] [--config <path>] [--toolchain <name>]\n"
                  "  loom run [--release] [--verbose] [--config <path>] [--toolchain <name>]\n"
                  "  loom clean [--config <path>]\n"
@@ -1604,6 +2108,13 @@ void usage() {
                  "  loom --help | --version\n\n"
                  "Commands:\n"
                  "  new         Create a workspace (use --rp2040 for Raspberry Pi Pico bare-metal)\n"
+                 "  test        Execute unit and integration tests declared in Test blocks\n"
+                 "  fmt         Format source code with canonical Loom indentation and style\n"
+                 "  fetch       Fetch git dependencies specified in config.toml\n"
+                 "  lsp         Launch the native Loom Language Server (loom-lsp)\n"
+                 "  install     Install a library or toolchain from the Loom release catalog\n"
+                 "  libraries   List installed Loom libraries\n"
+                 "  uninstall   Remove a user-installed Loom library\n"
                  "  toolchains  List all installed toolchains and show the active default\n"
                  "  use         Switch the active default toolchain (e.g. 'loom use rp2040', 'loom use native')\n"
                  "  build       Analyze, compile Loom sources, and link a native or bare-metal binary\n"
@@ -1623,7 +2134,39 @@ int main(int argc, char** argv) {
     try {
         if (argc == 1 || std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h") { usage(); return 0; }
         const std::string command = argv[1];
-        if (command == "--version" || command == "-V") { std::cout << "loom 1.1.0\n"; return 0; }
+        if (command == "--version" || command == "-V") { std::cout << "loom 1.2.0\n"; return 0; }
+        if (command == "install") {
+            if (argc < 3) throw Error("usage: loom install <library> [--version <version>] or loom install toolchain <name>");
+            std::string kind = "library", name, version;
+            int i = 2;
+            if (std::string(argv[i]) == "toolchain") { kind = "toolchain"; ++i; }
+            else if (std::string(argv[i]) == "library") { ++i; }
+            if (i >= argc) throw Error("package name is required");
+            name = argv[i++];
+            while (i < argc) {
+                const std::string arg = argv[i++];
+                if (arg == "--version" && i < argc) version = argv[i++];
+                else throw Error("unknown install argument: " + arg);
+            }
+            installFromRegistry(kind, name, version);
+            return 0;
+        }
+        if (command == "libraries") { listLibraries(); return 0; }
+        if (command == "uninstall" || command == "remove") {
+            if (argc != 3) throw Error("usage: loom uninstall <library>");
+            removeLibrary(argv[2]);
+            return 0;
+        }
+        if (command == "toolchain" && argc >= 3 && std::string(argv[2]) == "install") {
+            if (argc < 4) throw Error("usage: loom toolchain install <name> [--version <version>]");
+            std::string version;
+            for (int i = 4; i < argc; ++i) {
+                if (std::string(argv[i]) == "--version" && i + 1 < argc) version = argv[++i];
+                else throw Error("unknown install argument: " + std::string(argv[i]));
+            }
+            installFromRegistry("toolchain", argv[3], version);
+            return 0;
+        }
         if (command == "toolchains" || command == "toolchain") {
             bool verbose = false;
             for (int i = 2; i < argc; ++i) {
@@ -1680,6 +2223,46 @@ int main(int argc, char** argv) {
             }
             if (name.empty()) throw Error("usage: loom new <name> [--rp2040]");
             createProject(name, rp2040); return 0;
+        }
+        if (command == "test") {
+            fs::path config = "config.toml";
+            std::string cliToolchain;
+            bool verbose = false;
+            std::vector<std::string> testFiles;
+            for (int i = 2; i < argc; ++i) {
+                std::string arg = argv[i];
+                if (arg == "--config" && i + 1 < argc) config = argv[++i];
+                else if (arg == "--toolchain" && i + 1 < argc) cliToolchain = argv[++i];
+                else if (arg == "--verbose" || arg == "-v") verbose = true;
+                else testFiles.push_back(arg);
+            }
+            runTests(config, argv[0], testFiles, cliToolchain, verbose);
+            return 0;
+        }
+        if (command == "fmt") {
+            bool check = false;
+            std::vector<std::string> targets;
+            for (int i = 2; i < argc; ++i) {
+                std::string arg = argv[i];
+                if (arg == "--check") check = true;
+                else targets.push_back(arg);
+            }
+            if (targets.empty()) targets.push_back(".");
+            formatProject(targets, check);
+            return 0;
+        }
+        if (command == "fetch") {
+            fs::path config = "config.toml";
+            for (int i = 2; i < argc; ++i) {
+                std::string arg = argv[i];
+                if (arg == "--config" && i + 1 < argc) config = argv[++i];
+            }
+            fetchDependencies(config);
+            return 0;
+        }
+        if (command == "lsp") {
+            runLsp(argv[0]);
+            return 0;
         }
         if (command == "build" || command == "clean" || command == "run" || command == "graph") {
             fs::path config = "config.toml";

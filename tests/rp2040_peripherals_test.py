@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -34,63 +35,39 @@ End Main
     ("Clock", """
 Module TestClock
 Import Clock
+Import RP2040
 use Clock
 Block Main Declares
-    Stable : Boolean
-    RandW : Unsigned_32
-    RandB : Signed_64
-    Khz : Signed_64
-    Mhz : Signed_64
-    Resussed : Boolean
-    Ok : Boolean
 Implements
-    XOSC_Init()
-    Stable = XOSC_Is_Stable()
-    ROSC_Set_Div(16)
-    RandB = ROSC_Get_Random_Bit()
-    RandW = ROSC_Get_Random_Word()
-    Clock_Init()
-    Clock_Set_Sys_Freq(125000000)
-    Clock_Gpio_Init(21, CLK_AUX_PLL_SYS, 10)
-    Khz = Clock_Frequency_Count_Khz(FC_SRC_CLK_SYS)
-    Mhz = Clock_Frequency_Count_Mhz(FC_SRC_CLK_SYS)
-    Clock_Resus_Enable(100)
-    Resussed = Clock_Resus_Has_Triggered()
-    Clock_Stop(CLK_ADC)
-    Clock_Start(CLK_ADC)
+    RP2040.Check(Clock_Init())
 End Main
 """),
     ("GPIO", """
 Module TestGPIO
 Import GPIO
+Import RP2040
 use GPIO
-Block Main Implements
-    Set_Function(16, GPIO_FUNC_SPI)
-    Init_Pin(25)
-    Set_Direction(25, PIN_OUTPUT)
-    Set_High(25)
-    Set_Low(25)
-    Toggle(25)
-    Put(25, True)
-    If (Read_Pin(25) == 1)
-        Set_Pull(25, PULL_UP)
-        Set_Drive_Strength(25, DRIVE_4MA)
-        Set_Slew_Rate(25, True)
-        Set_Schmitt_Trigger(25, True)
-        Set_Pins_Mask(0x02000000)
-        Clear_Pins_Mask(0x02000000)
-        XOR_Pins_Mask(0x02000000)
-        Write_Pins_Mask(0x02000000, 0x02000000)
-        Enable_Pin_Interrupt(25, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL)
-        Enable_Pin_Interrupt_Core(1, 25, GPIO_IRQ_EDGE_RISE)
-        Clear_Pin_Interrupt(25, GPIO_IRQ_EDGE_RISE)
-        If (Get_Pin_Interrupt_Status(25) != 0)
-            Set_Low(25)
-        End If
-        If (Get_Pin_Interrupt_Status_Core(1, 25) != 0)
-            Set_Low(25)
-        End If
+Block Run_GPIO_Demo Produces Boolean
+Declares
+    State : Signed_64
+Implements
+    If (GPIO_Is_Valid_Pin(25) == False)
+        Give False
     End If
+    GPIO_Init_Output(25, False)
+    GPIO_Write(25, True)
+    GPIO_Toggle(25)
+    GPIO_Init_Input(24, GPIO_PULL_UP)
+    If (GPIO_Read(24) == 1)
+        GPIO_Set_Pull(24, GPIO_PULL_DOWN)
+    End If
+    GPIO_Enable_Interrupt(25, GPIO_IRQ_EDGE_RISE)
+    State = GPIO_Interrupt_Status(25)
+    GPIO_Clear_Interrupt(25, GPIO_IRQ_EDGE_RISE)
+    Give True
+End Run_GPIO_Demo
+Block Main Implements
+    RP2040.Check(Run_GPIO_Demo())
 End Main
 """),
     ("Time", """
@@ -101,9 +78,11 @@ Block Main Declares
     Us : Signed_64
     Us64 : Signed_64
     Ms : Signed_64
+    Expired : Boolean
 Implements
     Us = Get_Time_Microseconds()
     Us64 = Get_Time_64_Microseconds()
+    Expired = Timeout_Expired(Us64, 10000)
     Ms = Get_Time()
     Delay(1)
     Delay_Microseconds(100)
@@ -118,86 +97,68 @@ Implements
     End If
 End Main
 """),
-    ("UART", r"""
+    ("UART", """
 Module TestUART
 Import UART
+Import RP2040
 use UART
+use RP2040
 Block Main Declares
-    Avail : Boolean
-    Writable : Boolean
-    Ch : Character
-    B : Signed_64
+    Serial : UART_Handle
+    Byte_Value : Signed_64
 Implements
-    UART_Init(BAUD_115200)
-    UART_Set_Baud_Rate(UART_0, 9600, 125000000)
-    UART_Init_Channel(UART_1, BAUD_9600, 4, 5)
-    Write_UART_Byte(65)
-    Write_UART("Hello UART!\n")
-    UART_Write_Byte_Ch(UART_1, 66)
-    UART_Write_String_Ch(UART_1, "UART1\n")
-    Avail = UART_Available()
-    Writable = UART_Is_Writable()
-    If (UART_Is_Available_Ch(UART_1) == True)
-        B = UART_Read_Byte_Ch(UART_1)
+    RP2040_Init()
+    Serial = UART_Init(0, 1)
+    UART_Write(Serial, "Hello from Loom!\\n")
+    UART_Write_Byte(Serial, 65)
+    If (UART_Byte_Available(Serial))
+        Byte_Value = UART_Read_Byte(Serial)
     End If
 End Main
 """),
     ("SPI", """
-Module TestSPI
+Module SimpleSPI
 Import SPI
+Import RP2040
 use SPI
+use RP2040
 Block Main Declares
-    Busy : Boolean
-    Writable : Boolean
-    Readable : Boolean
-    B : Signed_64
-    TxBuf : Unsigned_8 Array[4]
-    RxBuf : Unsigned_8 Array[4]
+    Bus : SPI_Handle
+    Tx : Unsigned_8 Array[2] = {0x06, 0x02}
+    Rx : Unsigned_8 Array[2]
 Implements
-    SPI_Init(1000000)
-    SPI_Set_Baud_Rate(SPI_0, 2000000, 125000000)
-    SPI_Init_Channel(SPI_1, 500000, 10, 11, 12)
-    SPI_Set_Format(SPI_0, 8, SPI_CPOL_0, SPI_CPHA_0)
-    Busy = SPI_Is_Busy(SPI_0)
-    Writable = SPI_Is_Writable(SPI_0)
-    Readable = SPI_Is_Readable(SPI_0)
-    SPI_Write_Byte_Ch(SPI_0, 0x9F)
-    B = SPI_Read_Byte_Ch(SPI_0)
-    B = SPI_Transfer_Byte_Ch(SPI_0, 0x00)
-    TxBuf[1] = 0x06
-    TxBuf[2] = 0x02
-    SPI_Write_Slice(SPI_0, Slice(TxBuf))
-    SPI_Read_Slice(SPI_0, Slice(RxBuf), 0x00)
-    SPI_Transfer_Slices(SPI_0, Slice(TxBuf), Slice(RxBuf))
+    RP2040_Init()
+    Bus = SPI_Init(18, 19, 16)
+    SPI_Transfer(Bus, Slice(Tx), Slice(Rx))
 End Main
 """),
     ("I2C", """
-Module TestI2C
+Module Read_Device
+Import RP2040
 Import I2C
+use RP2040
 use I2C
 Block Main Declares
-    Ok : Boolean
-    Val : Signed_64
-    Buf : Unsigned_8 Array[2]
+    Device_I2C : I2C_Handle
+    Value : Signed_64
+    Bytes : Unsigned_8 Array[2]
 Implements
-    I2C_Init(I2C_FAST_400K)
-    I2C_Init_Channel(I2C_1, I2C_STANDARD_100K, 2, 3)
-    I2C_Init_Channel_Freq(I2C_1, 100000, 2, 3, 125000000)
-    Ok = I2C_Write_Byte_Direct(I2C_0, 0x68, 0x6B, True)
-    Val = I2C_Read_Byte_Direct(I2C_0, 0x68, True)
-    Buf[1] = 0x1A
-    Buf[2] = 0x03
-    Ok = I2C_Write_Slice(I2C_0, 0x68, Slice(Buf), False)
-    Ok = I2C_Read_Slice(I2C_0, 0x68, Slice(Buf), False)
-    Ok = I2C_Write_Register_8(I2C_0, 0x68, 0x6B, 0x00)
-    Val = I2C_Read_Register_8(I2C_0, 0x68, 0x75)
+    RP2040_Init()
+    Device_I2C = I2C_Init(4, 5)
+    I2C_Write_Register(Device_I2C, 0x68, 0x6B, 0x00)
+    Value = I2C_Read_Register(Device_I2C, 0x68, 0x75)
+    Bytes[1] = 0x1A
+    Bytes[2] = 0x03
+    I2C_Write(Device_I2C, 0x68, Slice(Bytes))
 End Main
 """),
     ("ADC", """
 Module TestADC
 Import ADC
+Import RP2040
 use ADC
-Block Main Declares
+Block Read_ADC_Demo Produces Boolean
+Declares
     Raw : Signed_64
     Mv : Signed_64
     TempC : Signed_64
@@ -207,9 +168,22 @@ Implements
     ADC_Init_Pin(26)
     ADC_Select_Input(ADC_GPIO_26)
     Raw = Read_ADC_Raw(ADC_GPIO_26)
+    If (Raw < 0)
+        Give False
+    End If
     Mv = Read_ADC_Millivolts(ADC_GPIO_26)
+    If (Mv < 0)
+        Give False
+    End If
     TempC = Read_Temperature_Celsius()
+    If (TempC == ADC_ERROR)
+        Give False
+    End If
     TempMC = Read_Temperature_Millicelsius()
+    Give (TempMC != ADC_ERROR)
+End Read_ADC_Demo
+Block Main Implements
+    RP2040.Check(Read_ADC_Demo())
 End Main
 """),
     ("PWM", """
@@ -232,10 +206,14 @@ Import DMA
 use DMA
 Block Main Declares
     Busy : Boolean
+    Index : Signed_64
+    Base : Signed_64
     Src : Unsigned_32 Array[4]
     Dst : Unsigned_32 Array[4]
 Implements
     DMA_Init()
+    Index = DMA_Channel_Index(0)
+    Base = DMA_Channel_Base(0)
     DMA_Channel_Configure(0, 0x20000000, 0x20000010, 4, DMA_SIZE_32, True, True, DREQ_UNPACED, 0)
     DMA_Channel_Set_Read_Addr(0, 0x20000000)
     DMA_Channel_Set_Write_Addr(0, 0x20000010)
@@ -264,6 +242,7 @@ Implements
     Scratch = Watchdog_Get_Scratch(0)
     If (Caused == True)
         Watchdog_Reboot_To_Bootsel()
+        Watchdog_Reboot()
     End If
 End Main
 """),
@@ -287,7 +266,10 @@ Implements
     Spinlock_Release(1)
     Ready = Multicore_FIFO_Is_Ready()
     HasData = Multicore_FIFO_Has_Data()
+    Multicore_FIFO_Push_Blocking(0x1234)
+    Msg = Multicore_FIFO_Pop_Blocking()
     Multicore_FIFO_Drain()
+    Multicore_Launch_Core1(0, 0, 0)
 End Main
 """),
     ("PIO", """
@@ -299,18 +281,23 @@ Block Main Declares
     Empty : Boolean
     Data : Unsigned_32
     Prog : Unsigned_16 Array[2]
+    Base : Signed_64
 Implements
     PIO_Init(PIO_0)
     PIO_Init(PIO_1)
+    Base = PIO_Base_Address(PIO_0)
     PIO_Load_Instruction(PIO_0, 0, PIO_INSTR_NOP)
     Prog[1] = PIO_INSTR_NOP
     Prog[2] = PIO_INSTR_NOP
     PIO_Load_Program(PIO_0, 0, Slice(Prog))
     PIO_SM_Init(PIO_0, 0, 0, 16, 1)
+    Base = PIO_SM_Base(PIO_0, 0)
     PIO_SM_Set_Clock_Div(PIO_0, 0, 4, 0)
     PIO_SM_Set_Enabled(PIO_0, 0, True)
     Full = PIO_SM_Is_TX_Full(PIO_0, 0)
     Empty = PIO_SM_Is_RX_Empty(PIO_0, 0)
+    PIO_SM_Put_Blocking(PIO_0, 0, 0x55)
+    Data = PIO_SM_Get_Blocking(PIO_0, 0)
 End Main
 """),
     ("RTC", """
@@ -346,7 +333,9 @@ use Interp
 Block Main Declares
     Res : Unsigned_32
     Comb : Unsigned_32
+    Base : Signed_64
 Implements
+    Base = Interp_Base_Address(INTERP_0)
     Interp_Set_Accum(INTERP_0, LANE_0, 0)
     Interp_Add_Accum(INTERP_0, LANE_0, 10)
     Interp_Set_Base(INTERP_0, LANE_0, 100)
@@ -367,17 +356,18 @@ Block Main Declares
     Now : Signed_64
     Temp : Signed_64
     Core : Signed_64
+    SPI_Bus : SPI_Handle
+    I2C_Bus : I2C_Handle
+    UART_Bus : UART_Handle
 Implements
-    RP2040_Init()
-    RP2040_Init_Minimal()
+    RP2040.Check(RP2040_Init())
+    RP2040.Check(RP2040_Init_Minimal())
     Core = Get_Core_Num()
-    Init_Pin(25)
-    Set_Direction(25, PIN_OUTPUT)
-    Set_High(25)
-    UART_Init(BAUD_115200)
-    Write_UART("All RP2040 peripherals running!\n")
-    SPI_Init(1000000)
-    I2C_Init(I2C_FAST_400K)
+    GPIO_Init_Output(25, True)
+    UART_Bus = UART_Init(0, 1)
+    UART_Write(UART_Bus, "All RP2040 peripherals running!\n")
+    SPI_Bus = SPI_Init(18, 19, 16)
+    I2C_Bus = I2C_Init(4, 5)
     ADC_Init()
     Temp = Read_Temperature_Celsius()
     PWM_Init(15)
@@ -386,10 +376,69 @@ Implements
     RTC_Init()
     Now = Get_Time()
     Delay(10)
-    Set_Low(25)
+    GPIO_Write(25, False)
+End Main
+""")
+    ,("SPI_API_COVERAGE", """
+Module TestSPIAPI
+Import SPI
+use SPI
+Block Main Declares
+    B : Signed_64
+    Bus : SPI_Handle
+    Tx : Unsigned_8 Array[2]
+    Rx : Unsigned_8 Array[2]
+Implements
+    Bus = SPI_Init(18, 19, 16)
+    B = SPI_Transfer_Byte(Bus, 0x9F)
+    SPI_Write_Byte(Bus, 0x00)
+    B = SPI_Read_Byte(Bus)
+    SPI_Write(Bus, Slice(Tx))
+    SPI_Read(Bus, Slice(Rx))
+    SPI_Transfer(Bus, Slice(Tx), Slice(Rx))
+End Main
+"""),
+    ("I2C_API_COVERAGE", """
+Module TestI2CAPI
+Import I2C
+use I2C
+Block Main Declares
+    B : Signed_64
+    Bus : I2C_Handle
+    Bytes : Unsigned_8 Array[2]
+Implements
+    Bus = I2C_Init(4, 5)
+    I2C_Write(Bus, 0x68, Slice(Bytes))
+    I2C_Read(Bus, 0x68, Slice(Bytes))
+    I2C_Write_Register(Bus, 0x68, 0x6B, 0x00)
+    B = I2C_Read_Register(Bus, 0x68, 0x75)
+    I2C_Read_Register_Block(Bus, 0x68, 0x3B, Slice(Bytes))
 End Main
 """)
 ]
+
+# Every public function declared in the BSP must appear in a tutorial fixture.
+all_tutorial_code = "\n".join(code for _, code in modules)
+missing_tutorials = []
+for module_path in bsp_dir.glob("*.loom"):
+    if module_path.stem.endswith("_internal") or not re.fullmatch(r"[A-Za-z0-9_]+", module_path.stem):
+        continue
+    for function in re.findall(r"^Block\s+(\w+)(?:\s+Takes)?", module_path.read_text(), re.MULTILINE):
+        if function != "Global" and not function.endswith(("_Fail", "_Validate_Handle")) and not re.search(r"\b" + re.escape(function) + r"\s*\(", all_tutorial_code):
+            missing_tutorials.append(f"{module_path.stem}.{function}")
+if missing_tutorials:
+    raise SystemExit("missing tutorial calls for public BSP functions: " + ", ".join(missing_tutorials))
+
+fixture_map = {name: code for name, code in modules}
+for name in ("ADC",):
+    workflow = fixture_map[name]
+    if workflow.count("RP2040.Check(") != 1 or "Produces Boolean" not in workflow:
+        raise SystemExit(f"{name} legacy walkthrough must return one grouped status and handle it once")
+for name in ("UART", "SPI", "I2C"):
+    workflow = fixture_map[name]
+    handle = {"SPI": "SPI_Handle", "I2C": "I2C_Handle", "UART": "UART_Handle"}[name]
+    if handle not in workflow or " = " + name + "_Init(" not in workflow:
+        raise SystemExit(f"{name} walkthrough must initialize and use a typed peripheral handle")
 
 for name, code in modules:
     with tempfile.NamedTemporaryFile(suffix=".loom", mode="w", delete=False) as f:
@@ -402,4 +451,4 @@ for name, code in modules:
     else:
         print(f"[PASS] {name} peripheral driver compiled cleanly")
 
-print(f"\nAll {len(modules)} RP2040 peripheral test suites passed successfully!")
+print(f"\nAll {len(modules)} RP2040 walkthrough and API-coverage fixtures compiled (no hardware execution).")

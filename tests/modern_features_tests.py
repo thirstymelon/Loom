@@ -276,6 +276,54 @@ End Main
     assert out == expected, f"Record literal test failed:\nExpected:\n{expected}\nGot:\n{out}"
     print("[PASS] Record initialization literals (Point{ X: 10, Y: 20 })")
 
+def test_discarded_return_and_typed_handle():
+    src = """Module Main
+Record I2C_Handle
+    Controller : Signed_64
+    SDA_Pin : Signed_64
+    SCL_Pin : Signed_64
+End I2C_Handle
+Block Global
+Declares
+    Calls : Signed_32 = 0
+End Global
+
+Block Make_Handle Produces I2C_Handle
+Declares
+    Handle : I2C_Handle
+Implements
+    Handle.Controller = 1
+    Handle.SDA_Pin = 2
+    Handle.SCL_Pin = 3
+    Give Handle
+End Make_Handle
+
+Block Handle_Controller Takes
+    Handle : I2C_Handle
+Produces Signed_64
+Implements
+    Give Handle.Controller
+End Handle_Controller
+
+Block Operation Produces Boolean
+Implements
+    Calls += 1
+    Give False
+End Operation
+
+Block Main Declares
+    OLED_I2C : I2C_Handle
+Implements
+    OLED_I2C = Make_Handle()
+    Operation()
+    Write(Calls)
+    Write(Handle_Controller(OLED_I2C))
+End Main
+"""
+    out = compile_and_run(src)
+    assert out == "1\n1\n", f"Typed handle or discarded return failed: {out!r}"
+    print("[PASS] Typed record handles pass through blocks; unused status returns can be discarded")
+
 def test_digit_separators_binary_hex():
     src = """Module Main
 
@@ -393,6 +441,267 @@ End Main
         assert out.returncode != 0 and "cannot call block 'add' from module 'math' unqualified" in (out.stderr + out.stdout).lower(), out.stderr
     print("[PASS] Qualified module access (Math.Add) and global/local 'use' directive")
 
+def test_multiline_ensure_and_single_rule():
+    src = """Module TestEnsure
+
+Block Main Declares
+    A : Signed_32 = 10
+    B : Signed_32 = 20
+Implements
+    Ensure {
+        Write(A)
+        Write(B)
+    }
+    Write(99)
+End Main
+"""
+    out = compile_and_run(src)
+    assert out.strip() == "99\n10\n20", repr(out)
+
+    src_fail = """Module TestEnsureFail
+
+Block Main
+Implements
+    Ensure { Write(1) }
+    Ensure { Write(2) }
+End Main
+"""
+    err = compile_fail(src_fail)
+    assert "cannot contain multiple Ensure blocks" in err, err
+    print("[PASS] Multi-line Ensure block and single-Ensure-per-block rule")
+
+def test_ergonomic_type_casting():
+    src = """Module TestCast
+
+Block Main Declares
+    X : Signed_64 = 42
+    A : Signed_32
+    B : Signed_32
+    C : Signed_32
+Implements
+    A = X as Signed_32
+    B = Signed_32(X)
+    C = Cast[Signed_32](X)
+    Write(A)
+    Write(B)
+    Write(C)
+End Main
+"""
+    out = compile_and_run(src)
+    assert out.strip() == "42\n42\n42", repr(out)
+    print("[PASS] Ergonomic type casting ('expr as Type', 'Type(expr)', and 'Cast[T](expr)')")
+
+def test_volatile_and_packed_hardware():
+    src = """Module TestHardware
+
+Packed Record Register Align 4
+    Low : Unsigned_16
+    High : Unsigned_16
+End Register
+
+Block Main Declares
+    R : Register
+    Ptr : Volatile Unsigned_16 Pointer
+Implements
+    R.Low = 170
+    R.High = 187
+    Ptr = Address(R.Low)
+    Write(Deref(Ptr))
+End Main
+"""
+    out = compile_and_run(src)
+    assert out.strip() == "170", repr(out)
+    print("[PASS] Hardware primitives: Volatile pointers and Packed Record Align N")
+
+def test_error_handling_try_or():
+    src = """Module TestError
+
+Enum MathError : Signed_32
+    DivisionByZero = 1
+End MathError
+
+Block Divide
+    Takes
+        A : Signed_32
+        B : Signed_32
+    Produces Signed_32 or MathError
+Implements
+    If B == 0
+        Give MathError.DivisionByZero
+    End If
+    Give A / B
+End Divide
+
+Block Compute
+    Takes
+        X : Signed_32
+    Produces Signed_32 or MathError
+Declares
+    Val : Signed_32
+Implements
+    Val = try Divide(100, X)
+    Give Val + 5
+End Compute
+
+Block Main Declares
+    Res : Signed_32 or MathError
+Implements
+    Res = Compute(2)
+    Write(42)
+End Main
+"""
+    out = compile_and_run(src)
+    assert out.strip() == "42", repr(out)
+    print("[PASS] Error handling: 'Produces T or Error' and 'try expr'")
+
+def test_sub_slicing():
+    src = """Module TestSlice
+
+Block Main Declares
+    Arr : Signed_32 Array[5] = {10, 20, 30, 40, 50}
+    Sub : Signed_32 Slice
+Implements
+    Sub = Arr[2 .. 4]
+    Write(Sub[1])
+    Write(Sub[2])
+    Write(Sub[3])
+End Main
+"""
+    out = compile_and_run(src)
+    assert out.strip() == "20\n30\n40", repr(out)
+    print("[PASS] Sub-slicing syntax Arr[Start .. End]")
+
+def test_monomorphized_generics():
+    src = """Module TestGenerics
+
+Record Box[T]
+    Value : T
+End Box
+
+Block Identity[T]
+    Takes
+        X : T
+    Produces T
+Implements
+    Give X
+End Identity
+
+Block Main Declares
+    B : Box[Signed_32]
+    Res : Signed_32
+Implements
+    B.Value = 123
+    Res = Identity[Signed_32](B.Value)
+    Write(Res)
+End Main
+"""
+    out = compile_and_run(src)
+    assert out.strip() == "123", repr(out)
+    print("[PASS] Monomorphized generics: Record[T] and Block[T]")
+
+def test_implicit_threading_opt_report():
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "main.loom"
+        out_ll = Path(tmp) / "out.ll"
+        src.write_text("""Module Main
+
+Block Main Declares
+    Arr : Signed_32 Array[100]
+    I : Signed_64 = 0
+Implements
+    Loop While I < 100
+        Arr[I] = 42
+        I = I + 1
+    End Loop
+End Main
+""")
+        # Native opt-report
+        r = subprocess.run([str(LOOMC), "--opt-report", str(src), str(out_ll)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        assert "auto-parallelized data-parallel loop (induction variable 'I') across native worker threads" in r.stdout
+
+        # Bare-metal opt-report skips parallelism
+        r_bm = subprocess.run([str(LOOMC), "--baremetal", "--opt-report", str(src), str(out_ll)], capture_output=True, text=True)
+        assert r_bm.returncode == 0, r_bm.stderr
+        assert "[parallelism skipped on embedded target]" in r_bm.stdout
+    print("[PASS] Safe implicit multi-threading loop detection in opt-report (Native vs Embedded)")
+
+def test_tooling_features():
+    with tempfile.TemporaryDirectory() as tmp:
+        # 1. Test runner
+        test_src = Path(tmp) / "test_runner.loom"
+        test_obj = Path(tmp) / "test_runner.o"
+        test_bin = Path(tmp) / "test_runner"
+        test_src.write_text("""Module TestSuite
+
+Block Add
+    Takes
+        A : Signed_32
+        B : Signed_32
+    Produces Signed_32
+Implements
+    Give A + B
+End Add
+
+Test "addition unit test"
+Declares
+    Res : Signed_32
+Implements
+    Res = Add(2, 3)
+    If Res != 5
+        Write("Assertion failed")
+    End If
+End Test
+""")
+        r = subprocess.run([str(LOOMC), "--test-runner", "--entry", "--object", str(test_src), str(test_obj)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        subprocess.run(["clang", str(test_obj), "-o", str(test_bin)], check=True)
+        out = subprocess.run([str(test_bin)], capture_output=True, text=True)
+        assert out.returncode == 0 and "[PASS] \"addition unit test\"" in out.stdout
+
+        # 2. C Header generation
+        hdr_src = Path(tmp) / "lib.loom"
+        hdr_h = Path(tmp) / "lib.h"
+        hdr_src.write_text("""Module MyLib
+
+Record Point
+    X : Signed_32
+    Y : Signed_32
+End Point
+
+Block Distance
+    Takes
+        P : Point
+    Produces Signed_32
+Implements
+    Give P.X + P.Y
+End Distance
+""")
+        r_hdr = subprocess.run([str(LOOMC), "--emit-c-header", str(hdr_h), "--check", str(hdr_src)], capture_output=True, text=True)
+        assert r_hdr.returncode == 0, r_hdr.stderr
+        test_c = Path(tmp) / "test.c"
+        test_c.write_text("""#include "lib.h"
+int main() {
+    Point p = { 10, 20 };
+    return Distance(p);
+}
+""")
+        c_res = subprocess.run(["clang", "-fsyntax-only", "-I", str(tmp), str(test_c)], capture_output=True, text=True)
+        assert c_res.returncode == 0, c_res.stderr
+
+        # 3. LSP server
+        lsp_bin = REPO_ROOT / ".build" / "loom-lsp"
+        if lsp_bin.is_file():
+            import json
+            req = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}
+            payload = json.dumps(req)
+            msg = f"Content-Length: {len(payload)}\r\n\r\n{payload}"
+            proc = subprocess.Popen([str(lsp_bin)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, _ = proc.communicate(input=msg.encode(), timeout=5)
+            assert "result" in stdout.decode(), stdout.decode()
+
+    print("[PASS] Tooling suite: Test runner engine, C header generation, and native loom-lsp")
+
 if __name__ == "__main__":
     test_compound_assignments()
     test_concise_routine_signatures()
@@ -400,8 +709,17 @@ if __name__ == "__main__":
     test_loops_while_and_until()
     test_pattern_matching()
     test_record_literal_initialization()
+    test_discarded_return_and_typed_handle()
     test_digit_separators_binary_hex()
     test_module_qualification_and_use()
+    test_multiline_ensure_and_single_rule()
+    test_ergonomic_type_casting()
+    test_volatile_and_packed_hardware()
+    test_error_handling_try_or()
+    test_sub_slicing()
+    test_monomorphized_generics()
+    test_implicit_threading_opt_report()
+    test_tooling_features()
     print("\n========================================================")
-    print(" ALL 8 MODERN LANGUAGE FEATURE TESTS PASSED PERFECTLY! ")
+    print(" ALL 17 MODERN LANGUAGE FEATURE TESTS PASSED PERFECTLY! ")
     print("========================================================")

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Loom VERSION 1.1.0 LANGUAGES C CXX)
+project(Loom VERSION 1.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,10 +12,11 @@ message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION} from ${LLVM_DIR}")
 
 add_executable(loomc src/main.cpp)
 add_executable(loom src/driver.cpp)
-install(TARGETS loom loomc RUNTIME DESTINATION bin)
+add_executable(loom-lsp src/lsp.cpp)
+install(TARGETS loom loomc loom-lsp RUNTIME DESTINATION bin)
 target_include_directories(loomc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
-llvm_map_components_to_libnames(LLVM_LIBS Core Support Target CodeGen MC native armcodegen armasmparser armdesc arminfo Passes)
+llvm_map_components_to_libnames(LLVM_LIBS Core Support Target CodeGen MC native aarch64codegen aarch64asmparser aarch64desc aarch64info aarch64utils armcodegen armasmparser armdesc arminfo Passes)
 target_link_libraries(loomc PRIVATE ${LLVM_LIBS})
 
 # Toolchain-specific compiler targets
@@ -49,4 +50,11 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/modern_features_tests.py $<TARGET_FILE:loomc>)
   add_test(NAME rp2040_peripherals_suite
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/rp2040_peripherals_test.py $<TARGET_FILE:loomc>)
+  find_program(LOOM_QEMU_AARCH64_EXECUTABLE qemu-system-aarch64)
+  if(LOOM_QEMU_AARCH64_EXECUTABLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/native-kernel")
+    add_test(NAME native_baremetal_qemu
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/native_baremetal_test.py
+        $<TARGET_FILE:loom> $<TARGET_FILE:loomc-native>
+        ${CMAKE_CURRENT_SOURCE_DIR}/examples/native-kernel ${LOOM_QEMU_AARCH64_EXECUTABLE})
+  endif()
 endif()

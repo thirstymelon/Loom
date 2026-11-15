@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import pathlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -9,13 +10,27 @@ loom = pathlib.Path(sys.argv[1]).resolve()
 loomc = pathlib.Path(sys.argv[2]).resolve()
 
 def run(args, cwd, check=True):
-    result = subprocess.run([str(loom), *args], cwd=cwd, text=True, capture_output=True)
+    env = os.environ.copy()
+    env["HOME"] = str(test_home)
+    env["LOOM_SDK_PATH"] = str(pathlib.Path(__file__).resolve().parent.parent / "sdk")
+    test_home.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run([str(loom), *args], cwd=cwd, text=True, capture_output=True, env=env)
     if check and result.returncode:
         raise AssertionError(f"command failed: {args}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
     return result
 
 with tempfile.TemporaryDirectory(prefix="loom-cli-suite-") as tmp:
     parent = pathlib.Path(tmp)
+    test_home = parent / "home"
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    tc_nat = test_home / ".loom" / "toolchains" / "native"
+    (tc_nat / "bin").mkdir(parents=True, exist_ok=True)
+    (tc_nat / "bin" / "loomc").symlink_to(loomc)
+    (tc_nat / "toolchain.toml").write_text('name = "native"\nkind = "native"\nversion = "1.2.0"\ndescription = "Loom Native Desktop Toolchain"\n')
+    tc_rp = test_home / ".loom" / "toolchains" / "rp2040"
+    (tc_rp / "bin").mkdir(parents=True, exist_ok=True)
+    (tc_rp / "bin" / "loomc").symlink_to(loomc)
+    (tc_rp / "toolchain.toml").write_text('name = "rp2040"\nkind = "rp2040"\nversion = "1.2.0"\ndescription = "Loom RP2040 Embedded Bare-Metal Toolchain"\n')
     run(["new", "hello"], parent)
     project = parent / "hello"
     assert (project / "config.toml").exists()
@@ -132,7 +147,7 @@ End Add
     missing_config = run(["graph", "--config", "missing.toml"], project, check=False)
     assert missing_config.returncode != 0 and "missing.toml" in missing_config.stderr
     version = run(["--version"], project)
-    assert "1.1.0" in version.stdout
+    assert "1.2.0" in version.stdout
     help_text = run(["--help"], project)
     assert "loom graph" in help_text.stdout and "--verbose" in help_text.stdout
     unsupported_mode = run(["build", "--freestanding"], project, check=False)

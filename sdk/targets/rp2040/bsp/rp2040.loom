@@ -16,7 +16,6 @@ Import PIO
 Import RTC
 Import Interp
 
-use System
 use Clock
 use GPIO
 use Time
@@ -32,25 +31,52 @@ use PIO
 use RTC
 use Interp
 
+Block Global
+    Declares
+        RP2040_Last_Error_Code : Signed_64 = 0
+        RP2040_Last_Error_Message : String = ""
+End Global
+
 Block RP2040_Init
+    Produces Boolean
+    Declares
+        Clock_Ok : Boolean
     Implements
         # 1. Initialize full clock tree: XOSC 12 MHz, PLL_SYS 125 MHz, PLL_USB 48 MHz,
         # clk_sys 125 MHz, clk_peri 125 MHz, clk_usb 48 MHz, clk_adc 48 MHz, clk_rtc 46875 Hz
-        Clock_Init()
+        Clock_Ok = Clock_Init()
+        If (Clock_Ok == False)
+            RP2040_Last_Error_Code = 1
+            RP2040_Last_Error_Message = "RP2040: clock initialization failed"
+            Loop
+            End Loop
+        End If
+        RP2040_Last_Error_Code = 0
+        RP2040_Last_Error_Message = ""
 
         # 2. Unreset essential hardware peripherals: IO_BANK0, PADS_BANK0, TIMER
+        # 2. Unreset essential hardware peripherals: IO_BANK0, PADS_BANK0, TIMER
         Unreset_Peripherals(RESET_IO_BANK0 | RESET_PADS_BANK0 | RESET_TIMER)
-
-        # 3. Initialize hardware watchdog tick and arm watchdog with 5s timeout
-        Watchdog_Enable(5000, True)
-        Watchdog_Feed()
+        Give True
 End RP2040_Init
 
 Block RP2040_Init_Minimal
+    Produces Boolean
     Implements
-        # Minimal initialization running directly from 12 MHz XOSC without starting PLLs
-        System_Init()
-        Watchdog_Enable(5000, True)
-        Watchdog_Feed()
+        # Compatibility alias. Applications choose explicitly whether to arm watchdog.
+        Give RP2040_Init()
 End RP2040_Init_Minimal
+
+# Compatibility helper for Boolean-returning APIs. New peripheral setup and
+# device-library initialization handle failures internally and need no Check.
+Block Check Takes
+    Succeeded : Boolean
+    Implements
+        If (Succeeded == False)
+            RP2040_Last_Error_Code = 2
+            RP2040_Last_Error_Message = "RP2040: a checked legacy operation failed"
+            Loop
+            End Loop
+        End If
+End Check
 

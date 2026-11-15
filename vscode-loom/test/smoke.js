@@ -65,11 +65,11 @@ assert.equal(parsed[0].message, "Unsupported character '@'");
 
 const context = { subscriptions: [], extensionPath: path.resolve(__dirname, '..') };
 extension.activate(context);
-for (const command of ['loom.checkFile', 'loom.build', 'loom.clean', 'loom.run', 'loom.showDependencyGraph'])
+for (const command of ['loom.checkFile', 'loom.build', 'loom.clean', 'loom.run', 'loom.showDependencyGraph', 'loom.test', 'loom.fetch'])
   assert.ok(commands.has(command), `missing command registration: ${command}`);
 
 const packageJson = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8'));
-assert.equal(packageJson.version, '1.1.0');
+assert.equal(packageJson.version, '1.2.0');
 assert.ok(packageJson.contributes.languages[0].extensions.includes('.loom'));
 assert.equal(packageJson.contributes.languages[0].icon.light, './icons/Loom_Logo.png');
 assert.ok(packageJson.contributes.commands.some(command => command.command === 'loom.showDependencyGraph'));

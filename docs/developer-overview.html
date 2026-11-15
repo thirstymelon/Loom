@@ -1,6 +1,7 @@
-<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Developer overview · Loom 1.1.0</title><link rel=stylesheet href="styles.css"><link rel="icon" type="image/png" href="assets/logo.png"></head><body data-r=""><header><div class=w><a class=brand href="index.html"><img src="assets/logo.png" alt="Loom"><span>Loom<i>.</i><sup>1.1.0</sup></span></a><nav><a href="getting-started.html">Start</a><a href="tutorials/index.html">Tutorials</a><a href="developer-overview.html" class=on>Developer</a><a href="embedded-rp2040.html">Embedded</a><a href="reference.html">Reference</a></nav><button class=sb id=sk>Search <kbd>Ctrl K</kbd></button><button class=mb id=mb aria-label=Menu>≡</button></div></header><div class="w doc"><article>
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Developer overview · Loom 1.2.0</title><link rel=stylesheet href="styles.css"><link rel="icon" type="image/png" href="assets/logo.png"></head><body data-r=""><header><div class=w><a class=brand href="index.html"><img src="assets/logo.png" alt="Loom"><span>Loom<i>.</i><sup>1.2.0</sup></span></a><nav><a href="getting-started.html">Start</a><a href="tutorials/index.html">Tutorials</a><a href="developer-overview.html" class=on>Developer</a><a href="rp2040-reference.html">RP2040 BSP</a><a href="reference.html">Reference</a></nav><button class=sb id=sk>Search <kbd>Ctrl K</kbd></button><button class=mb id=mb aria-label=Menu>≡</button></div></header><div class="w doc"><article>
 <p class=eb>Systems Architecture & Internals</p><h1>Developer overview</h1>
-<p class=lead>A technical guide for systems engineers: memory layout, safety guarantees, deterministic cleanup, LLVM lowering, volatile hardware I/O, C FFI interop, and semantic graph generation.</p>
+<p class=lead>A technical guide to Loom’s types, memory behavior, compiler pipeline, hardware access, and module system. The RP2040 reference is part of this developer guide too.</p>
+<div class=note><p><b>Working with the Pico?</b> The <a href="rp2040-reference.html">RP2040 BSP handbook</a> lists every public function in all 16 modules, with exact signatures and compile-checked examples. The <a href="embedded-rp2040.html">beginner hardware guide</a> starts with GPIO and UART.</p></div>
 
 <h2 id="memory-model">Memory model & representation</h2>
 <p>Loom operates with an explicit, unabstracted memory model. There is no garbage collector, no reference counting, and no hidden heap allocator. Memory allocation is strictly under programmer control:</p>
@@ -12,9 +13,10 @@
 <tr><td><b>Pointers (<code>T Pointer</code>)</b><td>Direct 64-bit (or 32-bit on ARM Cortex-M) raw memory address. Uninitialized pointers default to <code>Null</code> (zero).</tr>
 <tr><td><b>Records</b><td>Contiguous struct layout matching target ABI alignment rules. Field order is preserved. Pass-by-value and return-by-value copy entire struct bytes.</tr>
 </table>
+<p>RP2040 peripheral handles are ordinary typed records. <code>I2C_Init</code>, <code>SPI_Init</code>, and <code>UART_Init</code> return handles containing the selected controller and pin configuration; pass that value to the operation or device-library initializer. GPIO, UART, I²C, and SPI operational failures are handled internally and leave diagnostic code/message globals for debugger inspection. Prefer the returned value over manually constructing or modifying its fields.</p>
 
-<h2 id="safety-rules">Safety guarantees & undefined behavior</h2>
-<p>Loom balances bare-metal hardware access with deterministic runtime safety bounds:</p>
+<h2 id="safety-rules">Safety behavior & undefined behavior</h2>
+<p>Loom provides runtime checks for several operations, while raw pointers and hardware access remain the programmer’s responsibility:</p>
 <ul>
 <li><b>Bounds Safety:</b> Array, slice, and string indexing are strictly bounds-checked at runtime. Accesses outside <code>[1, Length]</code> trigger an explicit processor trap instruction (e.g. <code>brk #1</code> on ARM64 or <code>ud2</code> on x86_64), preventing memory corruption or arbitrary code execution. When index ranges can be proven safe at compile time, the optimizer eliminates bounds checks entirely.</li>
 <li><b>Pointer Validity:</b> Raw pointers are unmanaged. The compiler proves type compatibility but cannot verify arbitrary runtime lifetime or alignment. Always verify <code>Ptr != Null</code> prior to calling <code>Deref(Ptr)</code>.</li>
@@ -23,11 +25,13 @@
 </ul>
 
 <h2 id="deterministic-cleanup">Deterministic cleanup with <code>Ensure</code></h2>
-<p>The <code>Ensure { &lt;statement&gt; }</code> construct guarantees that cleanup logic executes when exiting a scope or procedure. Statements execute in strict <b>Last-In, First-Out (LIFO)</b> reverse order of registration:</p>
+<p>The <code>Ensure { &lt;statements&gt; }</code> construct guarantees that cleanup logic executes when exiting a scope or procedure. A block contains a single multi-line Ensure block consolidating cleanup routines:</p>
 <pre><code>Block Open_Device
 Implements
-    Ensure { Release_Hardware() }
-    Ensure { Flush_Buffers() }
+    Ensure {
+        Flush_Buffers()
+        Release_Hardware()
+    }
     If (Fault_Detected())
         Exit              # Flush_Buffers() runs first, then Release_Hardware()
     End If
@@ -43,9 +47,37 @@ End Open_Device</code></pre>
 <li><b>Byte Strings:</b> String indexing selects the $k$-th UTF-8 byte as an <code>Unsigned_8</code> value, where <code>Str[1]</code> is the leading byte.</li>
 </ul>
 
+<h2 id="native-bare-metal">Native bare-metal mode</h2>
+<p>Loom Native can build a freestanding AArch64 ELF for systems that start without an operating system. This mode is independent of the RP2040 toolchain. Set <code>bare-metal = true</code> with an explicit target, CPU, linker script, and any required assembly entry source:</p>
+<pre><code>[build]
+target = "aarch64-none-elf"
+cpu = "cortex-a72"
+bare-metal = true
+linker = "src/linker.ld"
+assembly = ["src/boot.S"]</code></pre>
+<p>The driver passes the bare-metal setting and target triple to <code>loomc</code>, emits an ELF without a hosted entry wrapper, assembles the declared startup code, and links with no standard runtime. Native AArch64 output is a static PIE so Limine can relocate it into the required higher-half mapping. Your assembly entry must establish the stack and call the exported Loom <code>Main</code> block. Loom does not silently initialize device hardware or provide OS services.</p>
+<h3>Packaging an AArch64 VM image</h3>
+<p><code>loom build</code> produces a freestanding ELF and a flat <code>.bin</code>; it does not create disk or ISO images. A flat binary does not carry an entry point, load address, or segment layout, so use the ELF with a compatible bootloader such as Limine when making a bootable UEFI ISO. Loom includes a separate <code>examples/native-kernel/make-iso.sh</code> packaging helper that uses an installed Limine binary release and <code>xorriso</code>. Your entry code must include the Limine boot protocol base-revision request and perform the platform startup your kernel needs. The ISO still needs to be attached to an AArch64 VM configured for UEFI.</p>
+<p>The helper expects <code>limine-uefi-cd.bin</code> (or <code>limine-cd-efi.bin</code>) and <code>BOOTAA64.EFI</code> under <code>LOOM_LIMINE_DIR</code>. The kernel requests Limine base revision 6 and installs a minimal identity mapping for QEMU's PL011 device, because current Limine AArch64 boot no longer supplies the old identity map. The image was tested with Limine 11.4.1; older Limine UEFI releases have been associated with firmware exceptions in AArch64 VMs. RP2040 builds continue producing UF2 firmware.</p>
+<pre><code>loom build --release
+LOOM_LIMINE_DIR=/path/to/limine ./make-iso.sh
+# target/LoomKernel.elf  — kernel ELF
+# target/LoomKernel.bin  — flat binary
+# target/LoomKernel.iso  — separately packaged VM ISO</code></pre>
+<p><code>loom run</code> continues to launch the configured QEMU direct-ELF workflow for the example.</p>
+<p><a href="#native-bare-metal">Build and run the example AArch64 shell kernel in QEMU</a>. It demonstrates Loom-owned command handling with a small AArch64 boot and PL011 serial layer.</p>
+<div class=note><p><b>Current limits:</b> the example targets one QEMU AArch64 <code>virt</code> machine. It has no interrupt vectors, scheduler, virtual memory, storage, or general driver framework. Bounds checks and runtime traps have no recovery handler until a kernel installs one. RP2040 builds continue to use <code>thumbv6m-none-eabi</code> and the RP2040 toolchain.</p></div>
+
 <h2 id="compiler-pipeline">Compiler architecture & LLVM lowering</h2>
 <p>The Loom toolchain builds native binaries through a high-performance C++17 frontend and LLVM backend:</p>
 <div class=fl><span>Source (.loom)</span><span>Lexer & Parser</span><span>Semantic Type Checker</span><span>LLVM IR Generator</span><span>Optimization Passes (-O3)</span><span>Native Object (.o)</span><span>Clang Linker</span><span>Native Binary / ELF</span></div>
+<div class=note><p><b>Discarding an unused result.</b> A value-producing block may be called as a statement when its result is not needed. The compiler still checks the call's name, visibility, argument count, and argument types; it simply discards the returned value.</p><pre><code>Block Main Declares
+    OLED_I2C : I2C_Handle
+Implements
+    RP2040_Init() # Its Boolean result is intentionally unused.
+    OLED_I2C = I2C_Init(4, 5)
+    SSD1306_Init(OLED_I2C)
+End Main</code></pre></div>
 
 <h3>LLVM Optimization Passes</h3>
 <p>When compiling with <code>loom build --release</code>, the compiler runs an aggressive LLVM optimization pipeline:</p>
@@ -86,6 +118,15 @@ Implements
 End Main</code></pre>
 <p>When building, the Clang linker links external C object files or libraries automatically against your Loom executable.</p>
 
+<h2 id="rp2040-bsp">RP2040 board support package</h2>
+<p>Loom’s RP2040 target uses the Cortex-M0+ LLVM target and provides board startup, linker configuration, and peripheral modules. The starter clock setup assumes the Pico reference board’s 12 MHz crystal. Public GPIO, SPI, I2C, and Clock calls have beginner-oriented wrappers; other modules still expose lower-level operations.</p>
+<table><tr><th>Area</th><th>What it covers</th></tr>
+<tr><td><b>Core setup</b></td><td>RP2040 startup, reset control, chip information, and standard Pico clock setup.</td></tr>
+<tr><td><b>Everyday I/O</b></td><td>GPIO, UART, SPI, I2C, ADC, PWM, and timer functions.</td></tr>
+<tr><td><b>Advanced hardware</b></td><td>DMA, Watchdog, Multicore, PIO, RTC, and SIO Interp.</td></tr>
+<tr><td><b>Verification boundary</b></td><td>Current suite compiles usage examples. It does not run on hardware or validate signal timing, board wiring, or external devices.</td></tr></table>
+<p>Open the <a href="rp2040-reference.html">function-by-function RP2040 handbook</a> for the exact public signatures, constants, and tutorials.</p>
+
 <h2 id="module-graphs">Architectural dependency graphs</h2>
 <p>The Loom toolchain can inspect and visualize project architecture from compiler semantics without compiling native code:</p>
 <pre class=sh><code># Generate Mermaid call dependency graph
@@ -95,7 +136,7 @@ loom graph --view calls --format mermaid
 loom graph --view data --format json</code></pre>
 <p>Mermaid diagrams are written to <code>loom-deps.mmd</code>. You can preview these graphs directly in VS Code or render them in GitHub Flavored Markdown.</p>
 
-<div class=pn><a href="tutorials/beginner-guide.html"><small>← Previous</small>Beginner guide</a><a href="embedded-rp2040.html"><small>Next →</small>Embedded RP2040</a></div></article><aside id=toc></aside></div><footer><div class=w><span>Loom 1.1.0</span><span>loomc 1.1.0 (LLVM 23.1.4)</span></div></footer><div id=pal><div><input id=pi placeholder="Search the docs…"><div id=pl></div></div></div><script>const IDX=[["Overview", "index.html", "Page"], ["Getting started", "getting-started.html", "Page"], ["Tutorials", "tutorials/index.html", "Page"], ["Beginner guide", "tutorials/beginner-guide.html", "Page"], ["Developer overview", "developer-overview.html", "Page"], ["Embedded RP2040", "embedded-rp2040.html", "Page"], ["Reference", "reference.html", "Page"], ["Pillars", "index.html#pillars", "Overview"], ["Features", "index.html#features", "Overview"], ["Quick start", "index.html#quick-start", "Overview"], ["Explore", "index.html#explore", "Overview"], ["Install", "getting-started.html#install", "Getting started"], ["Toolchain", "getting-started.html#toolchain", "Getting started"], ["Editor setup", "getting-started.html#editor-setup", "Getting started"], ["Project anatomy", "getting-started.html#project-anatomy", "Getting started"], ["Your first project", "getting-started.html#your-first-project", "Getting started"], ["1. Hello, World", "tutorials/beginner-guide.html#l1", "Beginner guide"], ["2. Variables, types and literals", "tutorials/beginner-guide.html#l2", "Beginner guide"], ["3. Operators", "tutorials/beginner-guide.html#l3", "Beginner guide"], ["4. Decisions", "tutorials/beginner-guide.html#l4", "Beginner guide"], ["5. Loops", "tutorials/beginner-guide.html#l5", "Beginner guide"], ["6. Procedures", "tutorials/beginner-guide.html#l6", "Beginner guide"], ["7. Records, enums and Match", "tutorials/beginner-guide.html#l7", "Beginner guide"], ["8. Arrays and slices", "tutorials/beginner-guide.html#l8", "Beginner guide"], ["9. Pointers, Cast and Ensure", "tutorials/beginner-guide.html#l9", "Beginner guide"], ["10. Modules", "tutorials/beginner-guide.html#l10", "Beginner guide"], ["Memory model", "developer-overview.html#memory-model", "Developer overview"], ["Safety rules", "developer-overview.html#safety-rules", "Developer overview"], ["Deterministic cleanup", "developer-overview.html#deterministic-cleanup", "Developer overview"], ["Why one-based indexing", "developer-overview.html#why-one-based-indexing", "Developer overview"], ["Compiler pipeline", "developer-overview.html#compiler-pipeline", "Developer overview"], ["Volatile I/O", "developer-overview.html#volatile-i-o", "Developer overview"], ["C FFI", "developer-overview.html#c-ffi", "Developer overview"], ["Module graphs", "developer-overview.html#module-graphs", "Developer overview"], ["The chip", "embedded-rp2040.html#the-chip", "Embedded RP2040"], ["Create a project", "embedded-rp2040.html#create-a-project", "Embedded RP2040"], ["The SDK", "embedded-rp2040.html#the-sdk", "Embedded RP2040"], ["Hardware abstraction layer", "embedded-rp2040.html#hardware-abstraction-layer", "Embedded RP2040"], ["Blink firmware", "embedded-rp2040.html#blink-firmware", "Embedded RP2040"], ["Direct register access", "embedded-rp2040.html#direct-register-access", "Embedded RP2040"], ["Build and flash", "embedded-rp2040.html#build-and-flash", "Embedded RP2040"], ["Simulate with Wokwi", "embedded-rp2040.html#simulate-with-wokwi", "Embedded RP2040"], ["Types", "reference.html#types", "Reference"], ["Literals", "reference.html#literals", "Reference"], ["Keywords", "reference.html#keywords", "Reference"], ["Operators", "reference.html#operators", "Reference"], ["Volatile intrinsics", "reference.html#volatile-intrinsics", "Reference"], ["CLI", "reference.html#cli", "Reference"], ["Grammar", "reference.html#grammar", "Reference"]];
+<div class=pn><a href="tutorials/beginner-guide.html"><small>← Previous</small>Beginner guide</a><a href="rp2040-reference.html"><small>Next →</small>RP2040 BSP handbook</a></div></article><aside id=toc></aside></div><footer><div class=w><span>Loom 1.2.0</span><span>loomc 1.2.0 (LLVM 23.1.4)</span></div></footer><div id=pal><div><input id=pi placeholder="Search the docs…"><div id=pl></div></div></div><script>const IDX=[["Overview", "index.html", "Page"], ["Getting started", "getting-started.html", "Page"], ["Tutorials", "tutorials/index.html", "Page"], ["Beginner guide", "tutorials/beginner-guide.html", "Page"], ["Developer overview", "developer-overview.html", "Page"], ["Embedded RP2040", "embedded-rp2040.html", "Page"], ["RP2040 BSP reference", "rp2040-reference.html", "Page"], ["Reference", "reference.html", "Page"], ["Pillars", "index.html#pillars", "Overview"], ["Features", "index.html#features", "Overview"], ["Quick start", "index.html#quick-start", "Overview"], ["Explore", "index.html#explore", "Overview"], ["Install", "getting-started.html#install", "Getting started"], ["Toolchain", "getting-started.html#toolchain", "Getting started"], ["Editor setup", "getting-started.html#editor-setup", "Getting started"], ["Project anatomy", "getting-started.html#project-anatomy", "Getting started"], ["Your first project", "getting-started.html#your-first-project", "Getting started"], ["1. Hello, World", "tutorials/beginner-guide.html#l1", "Beginner guide"], ["2. Variables, types and literals", "tutorials/beginner-guide.html#l2", "Beginner guide"], ["3. Operators", "tutorials/beginner-guide.html#l3", "Beginner guide"], ["4. Decisions", "tutorials/beginner-guide.html#l4", "Beginner guide"], ["5. Loops", "tutorials/beginner-guide.html#l5", "Beginner guide"], ["6. Procedures", "tutorials/beginner-guide.html#l6", "Beginner guide"], ["7. Records, enums and Match", "tutorials/beginner-guide.html#l7", "Beginner guide"], ["8. Arrays and slices", "tutorials/beginner-guide.html#l8", "Beginner guide"], ["9. Pointers, Cast and Ensure", "tutorials/beginner-guide.html#l9", "Beginner guide"], ["10. Modules", "tutorials/beginner-guide.html#l10", "Beginner guide"], ["Memory model", "developer-overview.html#memory-model", "Developer overview"], ["Safety rules", "developer-overview.html#safety-rules", "Developer overview"], ["Deterministic cleanup", "developer-overview.html#deterministic-cleanup", "Developer overview"], ["Why one-based indexing", "developer-overview.html#why-one-based-indexing", "Developer overview"], ["Compiler pipeline", "developer-overview.html#compiler-pipeline", "Developer overview"], ["Volatile I/O", "developer-overview.html#volatile-i-o", "Developer overview"], ["C FFI", "developer-overview.html#c-ffi", "Developer overview"], ["Module graphs", "developer-overview.html#module-graphs", "Developer overview"], ["The chip", "embedded-rp2040.html#the-chip", "Embedded RP2040"], ["Create a project", "embedded-rp2040.html#create-a-project", "Embedded RP2040"], ["The SDK", "embedded-rp2040.html#the-sdk", "Embedded RP2040"], ["RP2040 function guide", "rp2040-reference.html", "RP2040 BSP"], ["Hardware abstraction layer", "embedded-rp2040.html#hardware-abstraction-layer", "Embedded RP2040"], ["Blink firmware", "embedded-rp2040.html#blink-firmware", "Embedded RP2040"], ["Direct register access", "embedded-rp2040.html#direct-register-access", "Embedded RP2040"], ["Build and flash", "embedded-rp2040.html#build-and-flash", "Embedded RP2040"], ["Simulate with Wokwi", "embedded-rp2040.html#simulate-with-wokwi", "Embedded RP2040"], ["Types", "reference.html#types", "Reference"], ["Literals", "reference.html#literals", "Reference"], ["Keywords", "reference.html#keywords", "Reference"], ["Operators", "reference.html#operators", "Reference"], ["Volatile intrinsics", "reference.html#volatile-intrinsics", "Reference"], ["CLI", "reference.html#cli", "Reference"], ["Grammar", "reference.html#grammar", "Reference"]];
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],R=document.body.dataset.r;
 const RE=/(#[^\n]*)|("(?:[^"\\]|\\.)*"|'[^'\n]*')|\b(0x[0-9a-fA-F_]+|0b[01_]+|\d[\d_]*(?:\.\d+)?)\b|\b(Module|Block|Global|Takes|Produces|Declares|Implements|End|Give|If|Else|Loop|While|Until|For|In|Exit|Skip|Ensure|Match|With|When|Import|Use|Constant|Record|Enum|Extern)\b|\b(Address|Deref|Cast|Slice|Null|True|False|And|Or|Not|Mod|LSL|LSR|ASR)\b|\b(Signed_\d+|Unsigned_\d+|Float_\d+|Boolean|Character|String|Pointer|Array|Int\d*|Uint\d*|Float\d*|Bool|Char|Byte|Word|Usize|Isize)\b|([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()|(\+=|-=|\*=|\/=|%=|:=|==|!=|<=|>=|->|=>|::|@|\^)/g;
 const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');

@@ -196,5 +196,47 @@
       "use ${1:ModuleName}"
     ],
     "description": "Unqualified module import directive"
+  },
+  "Type Cast As": {
+    "prefix": "as",
+    "body": [
+      "${1:Expression} as ${2:Type}"
+    ],
+    "description": "Explicit type cast"
+  },
+  "Try Expression": {
+    "prefix": "try",
+    "body": [
+      "try ${1:Expression}"
+    ],
+    "description": "Propagate error from fallible expression with Ensure cleanup unwinding"
+  },
+  "Ensure Multi-Line": {
+    "prefix": "ensure",
+    "body": [
+      "Ensure {",
+      "    ${1:CleanupStatement}",
+      "}"
+    ],
+    "description": "Multi-line cleanup block executed on scope exit"
+  },
+  "Test Block": {
+    "prefix": "test",
+    "body": [
+      "Test \"${1:test description}\"",
+      "    Implements",
+      "        $0",
+      "End Test"
+    ],
+    "description": "Executable unit or integration test block"
+  },
+  "Packed Record": {
+    "prefix": "packed",
+    "body": [
+      "Packed Record ${1:Name} Align ${2:1}",
+      "    ${3:Field} : ${4:Type}",
+      "End ${1:Name}"
+    ],
+    "description": "Packed record with explicit byte alignment"
   }
 }

@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$REPO_ROOT/.build"
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 TARGET_FILTER="${1:-all}"
 
@@ -21,12 +21,65 @@ cmake --build "$BUILD_DIR" -j8
 mkdir -p "$REPO_ROOT/bin"
 cp -f "$BUILD_DIR/loom" "$REPO_ROOT/bin/loom"
 cp -f "$BUILD_DIR/loomc" "$REPO_ROOT/bin/loomc"
+if [ -f "$BUILD_DIR/loom-lsp" ]; then
+    cp -f "$BUILD_DIR/loom-lsp" "$REPO_ROOT/bin/loom-lsp"
+    chmod 755 "$REPO_ROOT/bin/loom-lsp"
+fi
 chmod 755 "$REPO_ROOT/bin/loom" "$REPO_ROOT/bin/loomc"
 
 echo "=== Packaging VS Code extension ==="
-if [ ! -f "$REPO_ROOT/vscode-loom/Loom-1.1.0.vsix" ]; then
-    (cd "$REPO_ROOT/vscode-loom" && npx --yes @vscode/vsce package -o Loom-1.1.0.vsix --allow-missing-repository --no-git-tag-version)
+if [ ! -f "$REPO_ROOT/vscode-loom/Loom-1.2.0.vsix" ]; then
+    (cd "$REPO_ROOT/vscode-loom" && npx --yes @vscode/vsce package -o Loom-1.2.0.vsix --allow-missing-repository --no-git-tag-version)
 fi
+
+# The compilers link against Homebrew's Z3 and zstd dylibs. Bundle those
+# runtime dependencies beside each compiler so installed packages do not
+# depend on the build machine's Homebrew paths.
+bundle_runtime_dependencies() {
+    local binary="$1"
+    local lib_dir="$2"
+    local llvm_prefix
+    llvm_prefix="$(brew --prefix llvm)"
+    local queue=("$binary") seen=() cursor=0 current dependency base source search copied
+    mkdir -p "$lib_dir"
+
+    while (( cursor < ${#queue[@]} )); do
+        current="${queue[$cursor]}"
+        cursor=$((cursor + 1))
+        case " ${seen[*]-} " in *" $current "*) continue ;; esac
+        seen+=("$current")
+
+        while IFS= read -r dependency; do
+            [[ -z "$dependency" ]] && continue
+            source="$dependency"
+            base="$(basename "$dependency")"
+            if [[ "$dependency" == @rpath/* ]]; then
+                source=""
+                for search in "$llvm_prefix/lib" /opt/homebrew/opt/z3/lib /opt/homebrew/opt/zstd/lib; do
+                    if [[ -f "$search/$base" ]]; then source="$search/$base"; break; fi
+                done
+            fi
+            [[ -f "$source" ]] || { echo "Cannot bundle runtime dependency '$dependency' for $current" >&2; exit 1; }
+            copied="$lib_dir/$base"
+            if [[ ! -f "$copied" ]]; then
+                cp -L "$source" "$copied"
+                chmod 755 "$copied"
+                if [[ "$copied" == *.dylib ]]; then
+                    install_name_tool -id "@rpath/$base" "$copied"
+                    if ! otool -l "$copied" | grep -Fq 'path @loader_path (offset'; then
+                        install_name_tool -add_rpath '@loader_path' "$copied"
+                    fi
+                fi
+            fi
+            install_name_tool -change "$dependency" "@rpath/$base" "$current"
+            queue+=("$copied")
+        done < <(otool -L "$current" | awk 'NR > 1 && ($1 ~ /^@rpath\// || $1 ~ /^\//) && $1 !~ /^\/usr\/lib\// && $1 !~ /^\/System\// { print $1 }')
+    done
+
+    if ! otool -l "$binary" | grep -Fq 'path @loader_path/../lib (offset'; then
+        install_name_tool -add_rpath '@loader_path/../lib' "$binary"
+    fi
+}
 
 # ==============================================================================
 # 1. Desktop Native Toolchain: Loom-${VERSION}-macos-arm64-native.pkg
@@ -47,9 +100,13 @@ build_native_pkg() {
     mkdir -p "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/sdk/std"
     mkdir -p "$NATIVE_SCRIPTS_DIR"
 
-    # Universal build driver CLI
+    # Universal build driver CLI & Language Server
     cp -f "$REPO_ROOT/bin/loom" "$NATIVE_PKG_ROOT/usr/local/bin/loom"
     chmod 755 "$NATIVE_PKG_ROOT/usr/local/bin/loom"
+    if [ -f "$REPO_ROOT/bin/loom-lsp" ]; then
+        cp -f "$REPO_ROOT/bin/loom-lsp" "$NATIVE_PKG_ROOT/usr/local/bin/loom-lsp"
+        chmod 755 "$NATIVE_PKG_ROOT/usr/local/bin/loom-lsp"
+    fi
 
     # Native Toolchain compiler (compiled with native-only enforcement)
     if [ -f "$BUILD_DIR/loomc-native" ]; then
@@ -58,12 +115,15 @@ build_native_pkg() {
         cp -f "$REPO_ROOT/bin/loomc" "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/bin/loomc"
     fi
     chmod 755 "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/bin/loomc"
+    bundle_runtime_dependencies \
+        "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/bin/loomc" \
+        "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/lib"
 
     # Native Toolchain manifest
     cat << 'EOF' > "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/toolchain.toml"
 name = "native"
 kind = "native"
-version = "1.1.0"
+version = "1.2.0"
 description = "Loom Native Desktop Toolchain (macOS Apple Silicon arm64)"
 target = "arm64-apple-darwin"
 EOF
@@ -76,6 +136,7 @@ EOF
 #!/bin/sh
 set -e
 chmod 755 /usr/local/bin/loom 2>/dev/null || true
+chmod 755 /usr/local/bin/loom-lsp 2>/dev/null || true
 if [ -d "/usr/local/share/loom/toolchains/native/bin" ]; then
     chmod 755 /usr/local/share/loom/toolchains/native/bin/loomc 2>/dev/null || true
 fi
@@ -118,9 +179,13 @@ build_rp2040_pkg() {
     mkdir -p "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/sdk/targets/rp2040"
     mkdir -p "$RP_SCRIPTS_DIR"
 
-    # Universal build driver CLI
+    # Universal build driver CLI & Language Server
     cp -f "$REPO_ROOT/bin/loom" "$RP_PKG_ROOT/usr/local/bin/loom"
     chmod 755 "$RP_PKG_ROOT/usr/local/bin/loom"
+    if [ -f "$REPO_ROOT/bin/loom-lsp" ]; then
+        cp -f "$REPO_ROOT/bin/loom-lsp" "$RP_PKG_ROOT/usr/local/bin/loom-lsp"
+        chmod 755 "$RP_PKG_ROOT/usr/local/bin/loom-lsp"
+    fi
 
     # RP2040 Toolchain compiler (compiled with RP2040-only enforcement)
     if [ -f "$BUILD_DIR/loomc-rp2040" ]; then
@@ -129,12 +194,26 @@ build_rp2040_pkg() {
         cp -f "$REPO_ROOT/bin/loomc" "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/bin/loomc"
     fi
     chmod 755 "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/bin/loomc"
+    bundle_runtime_dependencies \
+        "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/bin/loomc" \
+        "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/lib"
+
+    local LLVM_OBJCOPY="$(brew --prefix llvm)/bin/llvm-objcopy"
+    if [ ! -f "$LLVM_OBJCOPY" ]; then
+        echo "Error: llvm-objcopy not found at $LLVM_OBJCOPY" >&2
+        exit 1
+    fi
+    cp -f "$LLVM_OBJCOPY" "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/bin/llvm-objcopy"
+    chmod 755 "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/bin/llvm-objcopy"
+    bundle_runtime_dependencies \
+        "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/bin/llvm-objcopy" \
+        "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/lib"
 
     # RP2040 Toolchain manifest
     cat << 'EOF' > "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/toolchain.toml"
 name = "rp2040"
 kind = "rp2040"
-version = "1.1.0"
+version = "1.2.0"
 description = "Loom RP2040 Embedded Bare-Metal Toolchain (ARM Cortex-M0+)"
 target = "thumbv6m-none-eabi"
 cpu = "cortex-m0plus"
@@ -149,6 +228,7 @@ EOF
 #!/bin/sh
 set -e
 chmod 755 /usr/local/bin/loom 2>/dev/null || true
+chmod 755 /usr/local/bin/loom-lsp 2>/dev/null || true
 if [ -d "/usr/local/share/loom/toolchains/rp2040/bin" ]; then
     chmod 755 /usr/local/share/loom/toolchains/rp2040/bin/loomc 2>/dev/null || true
 fi

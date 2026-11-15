@@ -1,4 +1,4 @@
-<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Beginner guide · Loom 1.1.0</title><link rel=stylesheet href="../styles.css"><link rel="icon" type="image/png" href="../assets/logo.png"></head><body data-r="../"><header><div class=w><a class=brand href="../index.html"><img src="../assets/logo.png" alt="Loom"><span>Loom<i>.</i><sup>1.1.0</sup></span></a><nav><a href="../getting-started.html">Start</a><a href="../tutorials/index.html" class=on>Tutorials</a><a href="../developer-overview.html">Developer</a><a href="../embedded-rp2040.html">Embedded</a><a href="../reference.html">Reference</a></nav><button class=sb id=sk>Search <kbd>Ctrl K</kbd></button><button class=mb id=mb aria-label=Menu>≡</button></div></header><div class="w doc"><article>
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Beginner guide · Loom 1.2.0</title><link rel=stylesheet href="../styles.css"><link rel="icon" type="image/png" href="../assets/logo.png"></head><body data-r="../"><header><div class=w><a class=brand href="../index.html"><img src="../assets/logo.png" alt="Loom"><span>Loom<i>.</i><sup>1.2.0</sup></span></a><nav><a href="../getting-started.html">Start</a><a href="../tutorials/index.html" class=on>Tutorials</a><a href="../developer-overview.html">Developer</a><a href="../rp2040-reference.html">RP2040 BSP</a><a href="../reference.html">Reference</a></nav><button class=sb id=sk>Search <kbd>Ctrl K</kbd></button><button class=mb id=mb aria-label=Menu>≡</button></div></header><div class="w doc"><article>
 <div class=prog><span id=pc></span><i><b id=pb></b></i></div>
 <p class=eb style="margin-top:36px">Interactive Beginner Course</p><h1>Beginner guide to Loom</h1>
 <p class=lead>A friendly, step-by-step introduction to systems programming in Loom. No prior low-level programming experience required. Every lesson introduces a core concept with clear analogies, a complete copy-pasteable program, line-by-line explanations, common beginner gotchas, and hands-on exercises.</p>
@@ -322,9 +322,35 @@ End Main</code></pre>
 
 <p><b>Key Concept: Concise One-Line Routines:</b> Notice <code>Block Add_Fast</code>. When a routine's entire body is simply computing and returning a value, Loom allows writing <code>Produces (&lt;Expr&gt;)</code> directly on the signature line! This eliminates boilerplate while retaining complete static type safety.</p>
 
+<h3>Return one result for a multi-step operation</h3>
+<p>A block can group several steps and return one success value. Return <code>False</code> at the first failed step; the caller then handles the overall operation once. This keeps a beginner-facing <code>Main</code> block short without ignoring errors.</p>
+<pre><code>Module Main
+
+# These two short blocks stand in for fallible application steps.
+Block Prepare_Report Produces (True)
+End Prepare_Report
+
+Block Send_Report_Data Produces (True)
+End Send_Report_Data
+
+Block Send_Report Produces Boolean
+Implements
+    If (Prepare_Report() == False)
+        Give False
+    End If
+    Give Send_Report_Data()
+End Send_Report
+
+Block Main Implements
+    If (Send_Report() == False)
+        Write("The report could not be sent.")
+    End If
+End Main</code></pre>
+<p>In your program, replace the sample blocks with the application's own steps. Boolean return values are useful for logical questions and decisions. Peripheral setup and I/O calls handle transport failures internally; call them directly and inspect the peripheral's diagnostic message in a debugger if execution stops. When any block returns a value that your program does not need, call it as a statement and Loom discards the result while still checking its arguments.</p>
+
 <div class=note><p><b>Beginner Gotchas:</b>
 <br>1. <b>Direct Calling:</b> Call blocks directly by their name: <code>Result = Double_Number(21)</code>. Do not write <code>Call Double_Number(...)</code>.
-<br>2. <b>Returning Values:</b> If a block specifies <code>Produces &lt;Type&gt;</code>, you must return a value using <code>Give &lt;Expr&gt;</code>.</p></div>
+<br>2. <b>Returning Values:</b> If a block specifies <code>Produces &lt;Type&gt;</code>, it returns a value using <code>Give &lt;Expr&gt;</code>. A caller may discard that value when it is not needed.</p></div>
 
 <details><summary>Exercise 6: Write a Multiply block</summary><div>
 <p>Create a block named <code>Multiply</code> that takes two <code>Signed_32</code> numbers and returns their product using concise syntax.</p>
@@ -483,7 +509,7 @@ End Main</code></pre>
 </ul>
 
 <p><b>The Kitchen Stove Analogy for Ensure:</b></p>
-<p>Imagine cooking dinner. Whether you finish the recipe normally or have to rush out of the house because an alarm went off, you must <b>always turn off the stove</b>. In Loom, <code>Ensure { ... }</code> guarantees that cleanup code runs automatically when leaving a block, in reverse order (LIFO: Last-In, First-Out).</p>
+<p>Imagine cooking dinner. Whether you finish the recipe normally or have to rush out of the house because an alarm went off, you must <b>always turn off the stove</b>. In Loom, <code>Ensure { ... }</code> guarantees that cleanup code runs automatically when leaving a block. A block contains a single multi-line Ensure block consolidating cleanup statements:</p>
 
 <pre><code>Module Main
 
@@ -492,8 +518,10 @@ Declares
     Val : Signed_32 = 10
     Ptr : Signed_32 Pointer = Address(Val)
 Implements
-    Ensure { Write("Cleanup: Powering down sensor (runs last)") }
-    Ensure { Write("Cleanup: Closing file handle (runs first)") }
+    Ensure {
+        Write("Cleanup: Closing file handle (runs first)")
+        Write("Cleanup: Powering down sensor (runs last)")
+    }
 
     Write("Initial value: <Val>")
     Deref(Ptr) = 99
@@ -514,7 +542,7 @@ Cleanup: Closing file handle (runs first)
 Cleanup: Powering down sensor (runs last)</code></pre>
 
 <div class=note><p><b>Beginner Gotchas:</b>
-<br>1. <b>Reverse LIFO order:</b> Notice that "Closing file handle" ran before "Powering down sensor". <code>Ensure</code> statements always unwind in reverse order of how you registered them.
+<br>1. <b>Consolidated Cleanup:</b> Each block has a single <code>Ensure { ... }</code> containing multiple cleanup statements executed in sequential order upon exit.
 <br>2. <b>Null Safety:</b> If a pointer is <code>Null</code>, it points to nowhere. Always verify <code>If (Ptr != Null)</code> before calling <code>Deref(Ptr)</code>.</p></div>
 
 <details><summary>Exercise 9: Safely double a number via a pointer</summary><div>
@@ -589,7 +617,7 @@ End Square_Area</code></pre>
 <br>• For systems internals, LLVM compiler passes, and C ABI interop: Read the <a href="../developer-overview.html">Developer Overview</a>.
 <br>• For complete language grammar and keyword index: Check the <a href="../reference.html">Language Reference</a>.</p>
 
-<div class=pn><a href="../tutorials/index.html"><small>← Previous</small>Tutorials</a><a href="../developer-overview.html"><small>Next →</small>Developer overview</a></div></article><aside id=toc></aside></div><footer><div class=w><span>Loom 1.1.0</span><span>loomc 1.1.0 (LLVM 23.1.4)</span></div></footer><div id=pal><div><input id=pi placeholder="Search the docs…"><div id=pl></div></div></div><script>const IDX=[["Overview", "index.html", "Page"], ["Getting started", "getting-started.html", "Page"], ["Tutorials", "tutorials/index.html", "Page"], ["Beginner guide", "tutorials/beginner-guide.html", "Page"], ["Developer overview", "developer-overview.html", "Page"], ["Embedded RP2040", "embedded-rp2040.html", "Page"], ["Reference", "reference.html", "Page"], ["Pillars", "index.html#pillars", "Overview"], ["Features", "index.html#features", "Overview"], ["Quick start", "index.html#quick-start", "Overview"], ["Explore", "index.html#explore", "Overview"], ["Install", "getting-started.html#install", "Getting started"], ["Toolchain", "getting-started.html#toolchain", "Getting started"], ["Editor setup", "getting-started.html#editor-setup", "Getting started"], ["Project anatomy", "getting-started.html#project-anatomy", "Getting started"], ["Your first project", "getting-started.html#your-first-project", "Getting started"], ["1. Hello, World", "tutorials/beginner-guide.html#l1", "Beginner guide"], ["2. Variables, types and literals", "tutorials/beginner-guide.html#l2", "Beginner guide"], ["3. Operators", "tutorials/beginner-guide.html#l3", "Beginner guide"], ["4. Decisions", "tutorials/beginner-guide.html#l4", "Beginner guide"], ["5. Loops", "tutorials/beginner-guide.html#l5", "Beginner guide"], ["6. Procedures", "tutorials/beginner-guide.html#l6", "Beginner guide"], ["7. Records, enums and Match", "tutorials/beginner-guide.html#l7", "Beginner guide"], ["8. Arrays and slices", "tutorials/beginner-guide.html#l8", "Beginner guide"], ["9. Pointers, Cast and Ensure", "tutorials/beginner-guide.html#l9", "Beginner guide"], ["10. Modules", "tutorials/beginner-guide.html#l10", "Beginner guide"], ["Memory model", "developer-overview.html#memory-model", "Developer overview"], ["Safety rules", "developer-overview.html#safety-rules", "Developer overview"], ["Deterministic cleanup", "developer-overview.html#deterministic-cleanup", "Developer overview"], ["Why one-based indexing", "developer-overview.html#why-one-based-indexing", "Developer overview"], ["Compiler pipeline", "developer-overview.html#compiler-pipeline", "Developer overview"], ["Volatile I/O", "developer-overview.html#volatile-i-o", "Developer overview"], ["C FFI", "developer-overview.html#c-ffi", "Developer overview"], ["Module graphs", "developer-overview.html#module-graphs", "Developer overview"], ["The chip", "embedded-rp2040.html#the-chip", "Embedded RP2040"], ["Create a project", "embedded-rp2040.html#create-a-project", "Embedded RP2040"], ["The SDK", "embedded-rp2040.html#the-sdk", "Embedded RP2040"], ["Hardware abstraction layer", "embedded-rp2040.html#hardware-abstraction-layer", "Embedded RP2040"], ["Blink firmware", "embedded-rp2040.html#blink-firmware", "Embedded RP2040"], ["Direct register access", "embedded-rp2040.html#direct-register-access", "Embedded RP2040"], ["Build and flash", "embedded-rp2040.html#build-and-flash", "Embedded RP2040"], ["Simulate with Wokwi", "embedded-rp2040.html#simulate-with-wokwi", "Embedded RP2040"], ["Types", "reference.html#types", "Reference"], ["Literals", "reference.html#literals", "Reference"], ["Keywords", "reference.html#keywords", "Reference"], ["Operators", "reference.html#operators", "Reference"], ["Volatile intrinsics", "reference.html#volatile-intrinsics", "Reference"], ["CLI", "reference.html#cli", "Reference"], ["Grammar", "reference.html#grammar", "Reference"]];
+<div class=pn><a href="../tutorials/index.html"><small>← Previous</small>Tutorials</a><a href="../developer-overview.html"><small>Next →</small>Developer overview</a></div></article><aside id=toc></aside></div><footer><div class=w><span>Loom 1.2.0</span><span>loomc 1.2.0 (LLVM 23.1.4)</span></div></footer><div id=pal><div><input id=pi placeholder="Search the docs…"><div id=pl></div></div></div><script>const IDX=[["Overview", "index.html", "Page"], ["Getting started", "getting-started.html", "Page"], ["Tutorials", "tutorials/index.html", "Page"], ["Beginner guide", "tutorials/beginner-guide.html", "Page"], ["Developer overview", "developer-overview.html", "Page"], ["Embedded RP2040", "embedded-rp2040.html", "Page"], ["RP2040 BSP reference", "rp2040-reference.html", "Page"], ["Reference", "reference.html", "Page"], ["Pillars", "index.html#pillars", "Overview"], ["Features", "index.html#features", "Overview"], ["Quick start", "index.html#quick-start", "Overview"], ["Explore", "index.html#explore", "Overview"], ["Install", "getting-started.html#install", "Getting started"], ["Toolchain", "getting-started.html#toolchain", "Getting started"], ["Editor setup", "getting-started.html#editor-setup", "Getting started"], ["Project anatomy", "getting-started.html#project-anatomy", "Getting started"], ["Your first project", "getting-started.html#your-first-project", "Getting started"], ["1. Hello, World", "tutorials/beginner-guide.html#l1", "Beginner guide"], ["2. Variables, types and literals", "tutorials/beginner-guide.html#l2", "Beginner guide"], ["3. Operators", "tutorials/beginner-guide.html#l3", "Beginner guide"], ["4. Decisions", "tutorials/beginner-guide.html#l4", "Beginner guide"], ["5. Loops", "tutorials/beginner-guide.html#l5", "Beginner guide"], ["6. Procedures", "tutorials/beginner-guide.html#l6", "Beginner guide"], ["7. Records, enums and Match", "tutorials/beginner-guide.html#l7", "Beginner guide"], ["8. Arrays and slices", "tutorials/beginner-guide.html#l8", "Beginner guide"], ["9. Pointers, Cast and Ensure", "tutorials/beginner-guide.html#l9", "Beginner guide"], ["10. Modules", "tutorials/beginner-guide.html#l10", "Beginner guide"], ["Memory model", "developer-overview.html#memory-model", "Developer overview"], ["Safety rules", "developer-overview.html#safety-rules", "Developer overview"], ["Deterministic cleanup", "developer-overview.html#deterministic-cleanup", "Developer overview"], ["Why one-based indexing", "developer-overview.html#why-one-based-indexing", "Developer overview"], ["Compiler pipeline", "developer-overview.html#compiler-pipeline", "Developer overview"], ["Volatile I/O", "developer-overview.html#volatile-i-o", "Developer overview"], ["C FFI", "developer-overview.html#c-ffi", "Developer overview"], ["Module graphs", "developer-overview.html#module-graphs", "Developer overview"], ["The chip", "embedded-rp2040.html#the-chip", "Embedded RP2040"], ["Create a project", "embedded-rp2040.html#create-a-project", "Embedded RP2040"], ["The SDK", "embedded-rp2040.html#the-sdk", "Embedded RP2040"], ["RP2040 function guide", "rp2040-reference.html", "RP2040 BSP"], ["Hardware abstraction layer", "embedded-rp2040.html#hardware-abstraction-layer", "Embedded RP2040"], ["Blink firmware", "embedded-rp2040.html#blink-firmware", "Embedded RP2040"], ["Direct register access", "embedded-rp2040.html#direct-register-access", "Embedded RP2040"], ["Build and flash", "embedded-rp2040.html#build-and-flash", "Embedded RP2040"], ["Simulate with Wokwi", "embedded-rp2040.html#simulate-with-wokwi", "Embedded RP2040"], ["Types", "reference.html#types", "Reference"], ["Literals", "reference.html#literals", "Reference"], ["Keywords", "reference.html#keywords", "Reference"], ["Operators", "reference.html#operators", "Reference"], ["Volatile intrinsics", "reference.html#volatile-intrinsics", "Reference"], ["CLI", "reference.html#cli", "Reference"], ["Grammar", "reference.html#grammar", "Reference"]];
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],R=document.body.dataset.r;
 const RE=/(#[^\n]*)|("(?:[^"\\]|\\.)*"|'[^'\n]*')|\b(0x[0-9a-fA-F_]+|0b[01_]+|\d[\d_]*(?:\.\d+)?)\b|\b(Module|Block|Global|Takes|Produces|Declares|Implements|End|Give|If|Else|Loop|While|Until|For|In|Exit|Skip|Ensure|Match|With|When|Import|Use|Constant|Record|Enum|Extern)\b|\b(Address|Deref|Cast|Slice|Null|True|False|And|Or|Not|Mod|LSL|LSR|ASR)\b|\b(Signed_\d+|Unsigned_\d+|Float_\d+|Boolean|Character|String|Pointer|Array|Int\d*|Uint\d*|Float\d*|Bool|Char|Byte|Word|Usize|Isize)\b|([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()|(\+=|-=|\*=|\/=|%=|:=|==|!=|<=|>=|->|=>|::|@|\^)/g;
 const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');

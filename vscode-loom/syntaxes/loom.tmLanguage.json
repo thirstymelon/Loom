@@ -179,13 +179,24 @@
               "name": "entity.name.function.loom"
             }
           }
+        },
+        {
+          "match": "\\b(Test)\\s+(\"[^\"]*\")",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.loom"
+            },
+            "2": {
+              "name": "string.quoted.double.loom"
+            }
+          }
         }
       ]
     },
     "endStatements": {
       "patterns": [
         {
-          "match": "\\b(End)\\s+(If|Loop|Match|Ensure)\\b",
+          "match": "\\b(End)\\s+(If|Loop|Match|Ensure|Test)\\b",
           "captures": {
             "1": {
               "name": "keyword.control.loom"
@@ -245,20 +256,29 @@
       "patterns": [
         {
           "name": "keyword.control.loom",
-          "match": "\\b(If|Else\\s+If|Else|Until|until|While|while|Loop|Exit|Skip|Give|Ensure|Match|match|When|when|Use|use)\\b"
+          "match": "\\b(If|Else\\s+If|Else|Until|until|While|while|Loop|Exit|Skip|Give|Ensure|Match|match|When|when|Use|use|try|Try|as)\\b"
         }
       ]
     },
     "typeDefinitions": {
       "patterns": [
         {
-          "match": "\\b(Record)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(Packed\\s+)?(Record)\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s+(Align)\\s+([0-9]+))?",
           "captures": {
             "1": {
-              "name": "storage.type.record.loom"
+              "name": "storage.modifier.loom"
             },
             "2": {
+              "name": "storage.type.record.loom"
+            },
+            "3": {
               "name": "entity.name.type.record.loom"
+            },
+            "4": {
+              "name": "storage.modifier.loom"
+            },
+            "5": {
+              "name": "constant.numeric.integer.decimal.loom"
             }
           }
         },
@@ -356,7 +376,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.loom",
-          "match": "\\b(Boolean|Signed_(8|16|32|64)|Unsigned_(8|16|32|64)|Float_(32|64)|String|Character|Integer|Int)\\b"
+          "match": "\\b(Volatile|Boolean|Signed_(8|16|32|64)|Unsigned_(8|16|32|64)|Float_(32|64)|String|Character|Integer|Int)\\b"
         },
         {
           "name": "support.type.constructor.loom",
@@ -376,7 +396,7 @@
       "patterns": [
         {
           "name": "keyword.operator.word.loom",
-          "match": "\\b(And|Or|Not|LSL|LSR|Mod)\\b"
+          "match": "\\b(And|and|Or|or|Not|not|LSL|LSR|Mod|as)\\b"
         }
       ]
     },

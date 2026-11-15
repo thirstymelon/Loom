@@ -1,0 +1,27 @@
+Module MPU6050_Basic
+Import RP2040
+Import I2C
+Import MPU6050
+Import MPU6050_Types
+Import MPU6050_Calibration
+use RP2040
+use I2C
+use MPU6050
+use MPU6050_Types
+use MPU6050_Calibration
+
+Block Main
+    Declares
+        Sensor_I2C : I2C_Handle
+        Sample : MPU6050_Sample
+    Implements
+        RP2040_Init()
+        Sensor_I2C = I2C_Init(4, 5)
+        MPU6050_Init(Sensor_I2C)
+        MPU6050_Calibrate(100)
+        Loop
+            Sample = MPU6050_Read()
+            # Sample contains a complete, valid sensor reading.
+            Delay(10)
+        End Loop
+End Main

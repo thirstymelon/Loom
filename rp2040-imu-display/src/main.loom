@@ -1,0 +1,142 @@
+Module Main
+Import Clock
+Import System
+Import I2C
+Import SSD1306
+Import SSD1306_Graphics
+Import SSD1306_Font
+Import MPU6050
+Import MPU6050_Types
+Import MPU6050_Calibration
+use Clock
+use System
+use I2C
+use SSD1306
+use SSD1306_Graphics
+use SSD1306_Font
+use MPU6050
+use MPU6050_Types
+use MPU6050_Calibration
+
+# Draw one signed, zero-padded decimal value using the bundled 5x7 font.
+Block Put_Char Takes
+    X : Signed_64
+    Y : Signed_64
+    Code : Signed_64
+    Declares
+        Drawn : Boolean
+    Implements
+        Drawn = SSD1306_Character(X, Y, Code, True)
+End Put_Char
+
+Block Draw_Signed_4 Takes
+    X : Signed_64
+    Y : Signed_64
+    Value : Signed_64
+    Declares
+        Magnitude : Signed_64
+        Digit : Signed_64
+        Position : Signed_64
+        Place : Signed_64
+    Implements
+        If (Value < 0)
+            Put_Char(X, Y, 45)
+            Magnitude = 0 - Value
+        Else
+            Put_Char(X, Y, 43)
+            Magnitude = Value
+        End If
+        Place = 1000
+        Position = 1
+        Loop while (Position <= 4)
+            Digit = (Magnitude / Place) Mod 10
+            Put_Char(X + (Position * 6), Y, 48 + Digit)
+            Place = Place / 10
+            Position = Position + 1
+        End Loop
+End Draw_Signed_4
+
+# Draw gyro centi-degrees-per-second as a signed ddd.dd value.
+Block Draw_Gyro Takes
+    X : Signed_64
+    Y : Signed_64
+    Value : Signed_64
+    Declares
+        Magnitude : Signed_64
+        Whole : Signed_64
+        Fraction : Signed_64
+    Implements
+        If (Value < 0)
+            Put_Char(X, Y, 45)
+            Magnitude = 0 - Value
+        Else
+            Put_Char(X, Y, 43)
+            Magnitude = Value
+        End If
+        Whole = Magnitude / 100
+        Fraction = Magnitude Mod 100
+        Put_Char(X + 6, Y, 48 + ((Whole / 100) Mod 10))
+        Put_Char(X + 12, Y, 48 + ((Whole / 10) Mod 10))
+        Put_Char(X + 18, Y, 48 + (Whole Mod 10))
+        Put_Char(X + 24, Y, 46)
+        Put_Char(X + 30, Y, 48 + (Fraction / 10))
+        Put_Char(X + 36, Y, 48 + (Fraction Mod 10))
+End Draw_Gyro
+
+Block Draw_Sample Takes
+    Sample : MPU6050_Sample
+    Declares
+        Drawn : Boolean
+    Implements
+        Drawn = SSD1306_Clear()
+        Drawn = SSD1306_Text(0, 0, "ACCEL (mg)", True)
+        Put_Char(0, 8, 88)
+        Put_Char(6, 8, 58)
+        Draw_Signed_4(12, 8, Cast[Signed_64](Sample.Accel_X_mg))
+        Put_Char(0, 16, 89)
+        Put_Char(6, 16, 58)
+        Draw_Signed_4(12, 16, Cast[Signed_64](Sample.Accel_Y_mg))
+        Put_Char(0, 24, 90)
+        Put_Char(6, 24, 58)
+        Draw_Signed_4(12, 24, Cast[Signed_64](Sample.Accel_Z_mg))
+        Drawn = SSD1306_Line(0, 32, 127, 32, True)
+        Drawn = SSD1306_Text(0, 34, "GYRO (dps)", True)
+        Put_Char(0, 42, 88)
+        Put_Char(6, 42, 58)
+        Draw_Gyro(12, 42, Cast[Signed_64](Sample.Gyro_X_centi_dps))
+        Put_Char(0, 50, 89)
+        Put_Char(6, 50, 58)
+        Draw_Gyro(12, 50, Cast[Signed_64](Sample.Gyro_Y_centi_dps))
+        Put_Char(0, 58, 90)
+        Put_Char(6, 58, 58)
+        Draw_Gyro(12, 58, Cast[Signed_64](Sample.Gyro_Z_centi_dps))
+        Drawn = SSD1306_Present()
+End Draw_Sample
+
+Block Main
+    Declares
+        OLED_I2C : I2C_Handle
+        IMU_I2C : I2C_Handle
+        Sample : MPU6050_Sample
+        Initialized : Boolean
+    Implements
+        System_Init()
+        Initialized = Clock_Init()
+        If (Initialized == False)
+            Loop
+            End Loop
+        End If
+        Unreset_Peripherals(RESET_IO_BANK0 | RESET_PADS_BANK0 | RESET_TIMER | RESET_I2C0 | RESET_I2C1)
+        # Pico GP4/GP5 -> OLED SDA/SCL (I2C0)
+        OLED_I2C = I2C_Init(4, 5)
+        SSD1306_Init(OLED_I2C)
+        # Pico GP2/GP3 -> MPU6050 SDA/SCL (I2C1)
+        IMU_I2C = I2C_Init(2, 3)
+        MPU6050_Init(IMU_I2C)
+        MPU6050_Calibrate(100)
+        Loop
+            Sample = MPU6050_Read()
+            Draw_Sample(Sample)
+            Delay(100)
+        End Loop
+End Main

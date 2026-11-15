@@ -1,0 +1,18 @@
+Module MPU6050_Types
+
+Record MPU6050_Sample
+    Accel_X_Raw : Signed_16
+    Accel_Y_Raw : Signed_16
+    Accel_Z_Raw : Signed_16
+    Temperature_Raw : Signed_16
+    Gyro_X_Raw : Signed_16
+    Gyro_Y_Raw : Signed_16
+    Gyro_Z_Raw : Signed_16
+    Accel_X_mg : Signed_32
+    Accel_Y_mg : Signed_32
+    Accel_Z_mg : Signed_32
+    Temperature_centi_C : Signed_32
+    Gyro_X_centi_dps : Signed_32
+    Gyro_Y_centi_dps : Signed_32
+    Gyro_Z_centi_dps : Signed_32
+End MPU6050_Sample

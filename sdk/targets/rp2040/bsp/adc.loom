@@ -1,9 +1,11 @@
 Module ADC
 
 Import System
-Import GPIO
+Import Time
+Import GPIO_Internal
 use System
-use GPIO
+use Time
+use GPIO_Internal
 
 Block Global
     Declares
@@ -12,6 +14,7 @@ Block Global
         ADC_GPIO_28     : Constant Signed_64 = 2
         ADC_GPIO_29     : Constant Signed_64 = 3
         ADC_TEMP_SENSOR : Constant Signed_64 = 4
+        ADC_ERROR : Constant Signed_64 = -2147483648
 End Global
 
 Block ADC_Init
@@ -83,16 +86,24 @@ Block Read_ADC_Raw Takes
         Cs_Val : Signed_64
         Status : Unsigned_32
         Raw : Unsigned_32
+        Start_Us : Signed_64
     Implements
+        If ((Channel < 0) Or (Channel > 4))
+            Give -1
+        End If
         # CS layout: [14:12] = AINSEL, [2] = START_ONCE, [1] = TS_EN, [0] = EN
         Cs_Val = ((Channel & 7) LSL 12) | 7
         Vol_Write_32(0x4004C000, Cast[Unsigned_32](Cs_Val))
 
-        # Wait for READY bit (bit 8 = 256)
+        # Bound the READY poll to 10 ms of hardware time.
+        Start_Us = Get_Time_64_Microseconds()
         Status = Vol_Read_32(0x4004C000)
-        Loop Until ((Status & 256) != 0)
+        Loop Until (((Status & 256) != 0) Or Timeout_Expired(Start_Us, 10000))
             Status = Vol_Read_32(0x4004C000)
         End Loop
+        If ((Status & 256) == 0)
+            Give -1
+        End If
 
         Raw = Vol_Read_32(0x4004C004)
         Give Cast[Signed_64](Raw & 0xFFF)
@@ -105,6 +116,9 @@ Block Read_ADC_Millivolts Takes
         Raw : Signed_64
     Implements
         Raw = Read_ADC_Raw(Channel)
+        If (Raw < 0)
+            Give -1
+        End If
         # (Raw * 3300) / 4095
         Give (Raw * 3300) / 4095
 End Read_ADC_Millivolts
@@ -116,6 +130,9 @@ Block Read_Temperature_Celsius
         Diff : Signed_64
     Implements
         Mv = Read_ADC_Millivolts(4)
+        If (Mv < 0)
+            Give ADC_ERROR
+        End If
         Diff = Mv - 706
         # RP2040 datasheet formula: T = 27 - (V - 0.706) / 0.001721
         # Scaled by 1000: 27 - (Diff * 1000) / 1721
@@ -129,6 +146,9 @@ Block Read_Temperature_Millicelsius
         Diff : Signed_64
     Implements
         Mv = Read_ADC_Millivolts(4)
+        If (Mv < 0)
+            Give ADC_ERROR
+        End If
         Diff = Mv - 706
         Give 27000 - ((Diff * 1000000) / 1721)
 End Read_Temperature_Millicelsius

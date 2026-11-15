@@ -1,0 +1,246 @@
+Module MPU6050
+
+Import I2C
+Import Time
+Import MPU6050_Types
+Import MPU6050_Registers
+use I2C
+use Time
+use MPU6050_Types
+use MPU6050_Registers
+
+Enum MPU6050_Accel_Range : Unsigned_8
+    Range_2G = 0
+    Range_4G = 1
+    Range_8G = 2
+    Range_16G = 3
+End MPU6050_Accel_Range
+
+Enum MPU6050_Gyro_Range : Unsigned_8
+    Range_250_DPS = 0
+    Range_500_DPS = 1
+    Range_1000_DPS = 2
+    Range_2000_DPS = 3
+End MPU6050_Gyro_Range
+
+
+Block Global
+    Declares
+        MPU6050_DEFAULT_ADDRESS : Constant Signed_64 = 0x68
+        MPU6050_ALT_ADDRESS : Constant Signed_64 = 0x69
+        MPU6050_WHO_AM_I : Constant Signed_64 = 0x68
+        MPU6050_Address : Signed_64 = 0x68
+        MPU6050_Bus : I2C_Handle
+        MPU6050_Accel_Scale : Signed_64 = 16384
+        MPU6050_Gyro_Numerator : Signed_64 = 100
+        MPU6050_Gyro_Denominator : Signed_64 = 131
+        MPU6050_Accel_Offset_X : Signed_64 = 0
+        MPU6050_Accel_Offset_Y : Signed_64 = 0
+        MPU6050_Accel_Offset_Z : Signed_64 = 0
+        MPU6050_Gyro_Offset_X : Signed_64 = 0
+        MPU6050_Gyro_Offset_Y : Signed_64 = 0
+        MPU6050_Gyro_Offset_Z : Signed_64 = 0
+        MPU6050_Ready : Boolean = False
+        MPU6050_Last_Error_Code : Signed_64 = 0
+        MPU6050_Last_Error_Message : String = ""
+End Global
+
+Block MPU6050_Internal_Fail Takes
+    Code : Signed_64
+    Implements
+        MPU6050_Last_Error_Code = Code
+        If (Code == 1)
+            MPU6050_Last_Error_Message = "MPU6050: invalid I2C address"
+        Else If (Code == 2)
+            MPU6050_Last_Error_Message = "MPU6050: device identity mismatch"
+        Else If (Code == 3)
+            MPU6050_Last_Error_Message = "MPU6050: call made before initialization"
+        Else
+            MPU6050_Last_Error_Message = "MPU6050: invalid calibration request"
+        End If
+        Loop
+        End Loop
+End MPU6050_Internal_Fail
+
+# Configure the common 1000 Hz output, 44 Hz DLPF, +/-2g and +/-250 dps defaults.
+Block MPU6050_Init Takes
+    Bus : I2C_Handle
+    Declares
+        Identity : Signed_64
+    Implements
+        MPU6050_Ready = False
+        MPU6050_Bus = Bus
+        MPU6050_Address = MPU6050_DEFAULT_ADDRESS
+        Identity = I2C_Read_Register(MPU6050_Bus, MPU6050_Address, MPU6050_REG_WHO_AM_I)
+        If (Identity != MPU6050_WHO_AM_I)
+            MPU6050_Internal_Fail(2)
+        End If
+        I2C_Write_Register(MPU6050_Bus, MPU6050_Address, MPU6050_REG_PWR_MGMT_1, 0x80)
+        Delay(100)
+        I2C_Write_Register(MPU6050_Bus, MPU6050_Address, MPU6050_REG_PWR_MGMT_1, 0x01)
+        I2C_Write_Register(MPU6050_Bus, MPU6050_Address, MPU6050_REG_CONFIG, 0x03)
+        I2C_Write_Register(MPU6050_Bus, MPU6050_Address, MPU6050_REG_SMPLRT_DIV, 0x00)
+        I2C_Write_Register(MPU6050_Bus, MPU6050_Address, MPU6050_REG_GYRO_CONFIG, 0x00)
+        I2C_Write_Register(MPU6050_Bus, MPU6050_Address, MPU6050_REG_ACCEL_CONFIG, 0x00)
+        MPU6050_Accel_Scale = 16384
+        MPU6050_Gyro_Numerator = 100
+        MPU6050_Gyro_Denominator = 131
+        MPU6050_Accel_Offset_X = 0
+        MPU6050_Accel_Offset_Y = 0
+        MPU6050_Accel_Offset_Z = 0
+        MPU6050_Gyro_Offset_X = 0
+        MPU6050_Gyro_Offset_Y = 0
+        MPU6050_Gyro_Offset_Z = 0
+        Delay(100)
+        MPU6050_Ready = True
+        MPU6050_Last_Error_Code = 0
+        MPU6050_Last_Error_Message = ""
+End MPU6050_Init
+
+Block MPU6050_Is_Ready Produces Boolean
+    Implements
+        Give MPU6050_Ready
+End MPU6050_Is_Ready
+
+# Change full-scale ranges. Device and driver's unit conversions stay in sync.
+Block MPU6050_Set_Accel_Range Takes
+    Range : MPU6050_Accel_Range
+    Declares
+        Setting : Signed_64
+    Implements
+        If (MPU6050_Ready == False)
+            MPU6050_Internal_Fail(3)
+        End If
+        If (Range == MPU6050_Accel_Range.Range_2G)
+            Setting = 0
+        Else If (Range == MPU6050_Accel_Range.Range_4G)
+            Setting = 8
+        Else If (Range == MPU6050_Accel_Range.Range_8G)
+            Setting = 16
+        Else If (Range == MPU6050_Accel_Range.Range_16G)
+            Setting = 24
+        Else
+            MPU6050_Internal_Fail(4)
+        End If
+        I2C_Write_Register(MPU6050_Bus, MPU6050_Address, MPU6050_REG_ACCEL_CONFIG, Setting)
+        If (Range == MPU6050_Accel_Range.Range_2G)
+            MPU6050_Accel_Scale = 16384
+        Else If (Range == MPU6050_Accel_Range.Range_4G)
+            MPU6050_Accel_Scale = 8192
+        Else If (Range == MPU6050_Accel_Range.Range_8G)
+            MPU6050_Accel_Scale = 4096
+        Else
+            MPU6050_Accel_Scale = 2048
+        End If
+End MPU6050_Set_Accel_Range
+
+Block MPU6050_Set_Gyro_Range Takes
+    Range : MPU6050_Gyro_Range
+    Declares
+        Setting : Signed_64
+    Implements
+        If (MPU6050_Ready == False)
+            MPU6050_Internal_Fail(3)
+        End If
+        If (Range == MPU6050_Gyro_Range.Range_250_DPS)
+            Setting = 0
+        Else If (Range == MPU6050_Gyro_Range.Range_500_DPS)
+            Setting = 8
+        Else If (Range == MPU6050_Gyro_Range.Range_1000_DPS)
+            Setting = 16
+        Else If (Range == MPU6050_Gyro_Range.Range_2000_DPS)
+            Setting = 24
+        Else
+            MPU6050_Internal_Fail(4)
+        End If
+        I2C_Write_Register(MPU6050_Bus, MPU6050_Address, MPU6050_REG_GYRO_CONFIG, Setting)
+        If (Range == MPU6050_Gyro_Range.Range_250_DPS)
+            MPU6050_Gyro_Numerator = 100
+            MPU6050_Gyro_Denominator = 131
+        Else If (Range == MPU6050_Gyro_Range.Range_500_DPS)
+            MPU6050_Gyro_Numerator = 200
+            MPU6050_Gyro_Denominator = 131
+        Else If (Range == MPU6050_Gyro_Range.Range_1000_DPS)
+            MPU6050_Gyro_Numerator = 250
+            MPU6050_Gyro_Denominator = 82
+        Else
+            MPU6050_Gyro_Numerator = 250
+            MPU6050_Gyro_Denominator = 41
+        End If
+End MPU6050_Set_Gyro_Range
+
+Block MPU6050_Internal_Decode_Int16 Takes
+    Bytes : Unsigned_8 Slice
+    High_Index : Signed_64
+    Produces Signed_64
+    Declares
+        Value : Signed_64
+    Implements
+        Value = (Cast[Signed_64](Bytes[High_Index]) * 256) + Cast[Signed_64](Bytes[High_Index + 1])
+        If (Value >= 32768)
+            Value = Value - 65536
+        End If
+        Give Value
+End MPU6050_Internal_Decode_Int16
+
+# One 14-byte burst keeps all seven measurements from one sensor update together.
+# This block returns complete sensor data. It stops internally on setup or I2C errors.
+Block MPU6050_Read Produces MPU6050_Sample
+    Declares
+        Sample : MPU6050_Sample
+        Bytes : Unsigned_8 Array[14]
+        Raw : Signed_64
+    Implements
+        Sample.Accel_X_Raw = 0
+        Sample.Accel_Y_Raw = 0
+        Sample.Accel_Z_Raw = 0
+        Sample.Temperature_Raw = 0
+        Sample.Gyro_X_Raw = 0
+        Sample.Gyro_Y_Raw = 0
+        Sample.Gyro_Z_Raw = 0
+        Sample.Accel_X_mg = 0
+        Sample.Accel_Y_mg = 0
+        Sample.Accel_Z_mg = 0
+        Sample.Temperature_centi_C = 0
+        Sample.Gyro_X_centi_dps = 0
+        Sample.Gyro_Y_centi_dps = 0
+        Sample.Gyro_Z_centi_dps = 0
+        If (MPU6050_Ready == False)
+            MPU6050_Internal_Fail(3)
+        End If
+        I2C_Read_Register_Block(MPU6050_Bus, MPU6050_Address, 0x3B, Slice(Bytes))
+        Raw = MPU6050_Internal_Decode_Int16(Slice(Bytes), 1)
+        Sample.Accel_X_Raw = Cast[Signed_16](Raw)
+        Sample.Accel_X_mg = Cast[Signed_32](((Raw - MPU6050_Accel_Offset_X) * 1000) / MPU6050_Accel_Scale)
+        Raw = MPU6050_Internal_Decode_Int16(Slice(Bytes), 3)
+        Sample.Accel_Y_Raw = Cast[Signed_16](Raw)
+        Sample.Accel_Y_mg = Cast[Signed_32](((Raw - MPU6050_Accel_Offset_Y) * 1000) / MPU6050_Accel_Scale)
+        Raw = MPU6050_Internal_Decode_Int16(Slice(Bytes), 5)
+        Sample.Accel_Z_Raw = Cast[Signed_16](Raw)
+        Sample.Accel_Z_mg = Cast[Signed_32](((Raw - MPU6050_Accel_Offset_Z) * 1000) / MPU6050_Accel_Scale)
+        Raw = MPU6050_Internal_Decode_Int16(Slice(Bytes), 7)
+        Sample.Temperature_Raw = Cast[Signed_16](Raw)
+        Sample.Temperature_centi_C = Cast[Signed_32](((Raw * 100) / 340) + 3653)
+        Raw = MPU6050_Internal_Decode_Int16(Slice(Bytes), 9)
+        Sample.Gyro_X_Raw = Cast[Signed_16](Raw)
+        Sample.Gyro_X_centi_dps = Cast[Signed_32](((Raw - MPU6050_Gyro_Offset_X) * MPU6050_Gyro_Numerator) / MPU6050_Gyro_Denominator)
+        Raw = MPU6050_Internal_Decode_Int16(Slice(Bytes), 11)
+        Sample.Gyro_Y_Raw = Cast[Signed_16](Raw)
+        Sample.Gyro_Y_centi_dps = Cast[Signed_32](((Raw - MPU6050_Gyro_Offset_Y) * MPU6050_Gyro_Numerator) / MPU6050_Gyro_Denominator)
+        Raw = MPU6050_Internal_Decode_Int16(Slice(Bytes), 13)
+        Sample.Gyro_Z_Raw = Cast[Signed_16](Raw)
+        Sample.Gyro_Z_centi_dps = Cast[Signed_32](((Raw - MPU6050_Gyro_Offset_Z) * MPU6050_Gyro_Numerator) / MPU6050_Gyro_Denominator)
+        Give Sample
+End MPU6050_Read
+
+# Optional convenience operation for reading and clearing data-ready status.
+Block MPU6050_Data_Ready Produces Boolean
+    Declares
+        Status : Signed_64
+    Implements
+        If (MPU6050_Ready == False)
+            MPU6050_Internal_Fail(3)
+        End If
+        Status = I2C_Read_Register(MPU6050_Bus, MPU6050_Address, 0x3A)
+        Give ((Status & 1) != 0)
+End MPU6050_Data_Ready

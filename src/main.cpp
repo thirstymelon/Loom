@@ -81,10 +81,12 @@ struct Type {
     bool enumSigned = false;
     unsigned arraySize = 0;
     std::shared_ptr<Type> pointeeType = nullptr;
+    bool isVolatile = false;
+    std::shared_ptr<Type> errorType = nullptr;
 
     Type() = default;
     Type(TypeKind k, unsigned b = 0, std::string n = "", bool es = false)
-        : kind(k), bits(b), name(std::move(n)), enumSigned(es), arraySize(0), pointeeType(nullptr) {}
+        : kind(k), bits(b), name(std::move(n)), enumSigned(es), arraySize(0), pointeeType(nullptr), isVolatile(false), errorType(nullptr) {}
 
     static Type boolean() {
         return {TypeKind::Boolean, 1};
@@ -142,6 +144,10 @@ struct Type {
             if (!pointeeType || !o.pointeeType) return pointeeType == o.pointeeType;
             return *pointeeType == *o.pointeeType;
         }
+        if (errorType || o.errorType) {
+            if (!errorType || !o.errorType) return false;
+            if (*errorType != *o.errorType) return false;
+        }
         return true;
     }
     bool operator!=(const Type& o) const {
@@ -149,24 +155,30 @@ struct Type {
     }
 };
 std::string typeName(Type t) {
+    std::string prefix = t.isVolatile ? "volatile " : "";
+    if (t.errorType) {
+        Type base = t;
+        base.errorType = nullptr;
+        return prefix + typeName(base) + " or " + typeName(*t.errorType);
+    }
     if (t.kind == TypeKind::Boolean)
-        return "Boolean";
+        return prefix + "Boolean";
     if (t.kind == TypeKind::Signed)
-        return "Signed_" + std::to_string(t.bits);
+        return prefix + "Signed_" + std::to_string(t.bits);
     if (t.kind == TypeKind::Unsigned)
-        return "Unsigned_" + std::to_string(t.bits);
+        return prefix + "Unsigned_" + std::to_string(t.bits);
     if (t.kind == TypeKind::Float)
-        return "Float_" + std::to_string(t.bits);
-    if (t.kind == TypeKind::String) return "String";
-    if (t.kind == TypeKind::Character) return "Character";
-    if (t.kind == TypeKind::Enum) return t.name;
-    if (t.kind == TypeKind::Record) return t.name;
+        return prefix + "Float_" + std::to_string(t.bits);
+    if (t.kind == TypeKind::String) return prefix + "String";
+    if (t.kind == TypeKind::Character) return prefix + "Character";
+    if (t.kind == TypeKind::Enum) return prefix + t.name;
+    if (t.kind == TypeKind::Record) return prefix + t.name;
     if (t.kind == TypeKind::Pointer)
-        return typeName(*t.pointeeType) + " Pointer";
+        return prefix + typeName(*t.pointeeType) + " Pointer";
     if (t.kind == TypeKind::Slice)
-        return typeName(*t.pointeeType) + " Slice";
+        return prefix + typeName(*t.pointeeType) + " Slice";
     if (t.kind == TypeKind::Array)
-        return typeName(*t.pointeeType) + " Array[" + std::to_string(t.arraySize) + "]";
+        return prefix + typeName(*t.pointeeType) + " Array[" + std::to_string(t.arraySize) + "]";
     if (t.kind == TypeKind::NullType)
         return "Null";
     if (t.kind == TypeKind::IntegerLiteral)
@@ -215,6 +227,15 @@ std::uint32_t decodeUtf8Scalar(const std::string& s, int line) {
 }
 bool isUnicodeScalar(std::uint64_t cp) {
     return cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF);
+}
+inline bool isBuiltinType(const std::string& s) {
+    if (s == "Boolean" || s == "String" || s == "Character" || s == "Integer" || s == "Int" ||
+        s == "Float_32" || s == "Float_64") return true;
+    for (unsigned bits : {8u, 16u, 32u, 64u}) {
+        if (s == "Signed_" + std::to_string(bits) || s == "Unsigned_" + std::to_string(bits))
+            return true;
+    }
+    return false;
 }
 Type parseType(const std::string& s, int line) {
     if (s == "Boolean")
@@ -318,6 +339,13 @@ enum class K {
     Match,
     When,
     Use,
+    As,
+    Try,
+    Volatile,
+    Packed,
+    Align,
+    DotDot,
+    Test,
     Unsupported
 };
 struct Token {
@@ -414,6 +442,17 @@ class Lexer {
                                                                  {"Collection", K::Collection},
                                                                  {"LSL", K::LSL},
                                                                  {"LSR", K::LSR},
+                                                                 {"as", K::As},
+                                                                 {"As", K::As},
+                                                                 {"try", K::Try},
+                                                                 {"Try", K::Try},
+                                                                 {"or", K::Or},
+                                                                 {"volatile", K::Volatile},
+                                                                 {"Volatile", K::Volatile},
+                                                                 {"Packed", K::Packed},
+                                                                 {"packed", K::Packed},
+                                                                 {"Align", K::Align},
+                                                                 {"align", K::Align},
                                                                  {"Mod", K::Mod}};
         auto i = words.find(s);
         return i == words.end() ? K::Id : i->second;
@@ -589,7 +628,12 @@ class Lexer {
                     emit(K::Colon, ":", atLine);
                     break;
                 case '.':
-                    emit(K::Dot, ".", atLine);
+                    if (peek() == '.') {
+                        take();
+                        emit(K::DotDot, "..", atLine);
+                    } else {
+                        emit(K::Dot, ".", atLine);
+                    }
                     break;
                 case ',':
                     emit(K::Comma, ",", atLine);
@@ -701,7 +745,7 @@ class Lexer {
 };
 
 struct Expr {
-    enum class Kind { Integer, Floating, Boolean, String, Character, EnumVariant, Member, Variable, Call, Unary, Binary, Address, Deref, NullLiteral, Cast, Index, SliceConstructor, ArrayLiteral, RecordLiteral } kind;
+    enum class Kind { Integer, Floating, Boolean, String, Character, EnumVariant, Member, Variable, Call, Unary, Binary, Address, Deref, NullLiteral, Cast, Index, SliceConstructor, ArrayLiteral, RecordLiteral, SubSlice, Try } kind;
     std::string text;
     std::string qualifier;
     std::vector<std::string> fieldNames;
@@ -720,6 +764,12 @@ struct MatchCase {
     std::unique_ptr<Expr> pattern;
     std::vector<Stmt> body;
     int line = 1;
+
+    MatchCase() = default;
+    MatchCase(const MatchCase&) = delete;
+    MatchCase& operator=(const MatchCase&) = delete;
+    MatchCase(MatchCase&&) noexcept = default;
+    MatchCase& operator=(MatchCase&&) noexcept = default;
 };
 
 struct Stmt {
@@ -736,6 +786,12 @@ struct Stmt {
     bool whileLoop = false;
     std::vector<MatchCase> matchCases;
     std::vector<std::unique_ptr<Expr>> writeArgs;
+
+    Stmt() = default;
+    Stmt(const Stmt&) = delete;
+    Stmt& operator=(const Stmt&) = delete;
+    Stmt(Stmt&&) noexcept = default;
+    Stmt& operator=(Stmt&&) noexcept = default;
 };
 
 inline std::unique_ptr<Expr> cloneExpr(const Expr& e) {
@@ -756,11 +812,48 @@ inline std::unique_ptr<Expr> cloneExpr(const Expr& e) {
     }
     return c;
 }
+
+inline Stmt cloneStmt(const Stmt& s);
+
+inline MatchCase cloneMatchCase(const MatchCase& mc) {
+    MatchCase res;
+    if (mc.pattern) res.pattern = cloneExpr(*mc.pattern);
+    for (const auto& b : mc.body) res.body.push_back(cloneStmt(b));
+    res.line = mc.line;
+    return res;
+}
+
+inline Stmt cloneStmt(const Stmt& s) {
+    Stmt res;
+    res.kind = s.kind;
+    res.name = s.name;
+    res.member = s.member;
+    res.line = s.line;
+    if (s.expr) res.expr = cloneExpr(*s.expr);
+    if (s.target) res.target = cloneExpr(*s.target);
+    if (s.ensuredStmt) res.ensuredStmt = std::make_shared<Stmt>(cloneStmt(*s.ensuredStmt));
+    for (const auto& b : s.body) res.body.push_back(cloneStmt(b));
+    for (const auto& eb : s.elseBody) res.elseBody.push_back(cloneStmt(eb));
+    res.until = s.until;
+    res.whileLoop = s.whileLoop;
+    for (const auto& mc : s.matchCases) res.matchCases.push_back(cloneMatchCase(mc));
+    for (const auto& wa : s.writeArgs) res.writeArgs.push_back(cloneExpr(*wa));
+    return res;
+}
+
 struct EnumVariant { std::string name; std::uint64_t magnitude; bool negative; int line; };
 struct EnumDecl { std::string name; Type underlying; std::vector<EnumVariant> variants; int line; std::size_t sourceIndex = 0; };
 struct EnumValue { bool negative; std::uint64_t magnitude; Type type; };
 struct RecordField { std::string name; Type type; int line; };
-struct RecordDecl { std::string name; std::vector<RecordField> fields; int line; std::size_t sourceIndex = 0; };
+struct RecordDecl {
+    std::string name;
+    std::vector<RecordField> fields;
+    int line = 1;
+    std::size_t sourceIndex = 0;
+    bool isPacked = false;
+    unsigned alignment = 0;
+    std::vector<std::string> typeParams;
+};
 struct VarDecl {
     std::string name;
     Type type;
@@ -770,22 +863,68 @@ struct VarDecl {
     std::size_t sourceIndex = 0;
 
     VarDecl() = default;
+    VarDecl(const VarDecl&) = delete;
+    VarDecl& operator=(const VarDecl&) = delete;
+    VarDecl(VarDecl&&) noexcept = default;
+    VarDecl& operator=(VarDecl&&) noexcept = default;
     VarDecl(std::string n, Type t, int l, bool c = false, std::unique_ptr<Expr> init = nullptr, std::size_t src = 0)
         : name(std::move(n)), type(std::move(t)), line(l), constant(c), initializer(std::move(init)), sourceIndex(src) {}
 };
+
+inline VarDecl cloneVarDecl(const VarDecl& v) {
+    VarDecl res;
+    res.name = v.name;
+    res.type = v.type;
+    res.line = v.line;
+    res.constant = v.constant;
+    if (v.initializer) res.initializer = cloneExpr(*v.initializer);
+    res.sourceIndex = v.sourceIndex;
+    return res;
+}
+
 struct Function {
     std::string name;
-    int line;
+    int line = 1;
     std::vector<VarDecl> params, locals;
     std::optional<Type> result;
+    std::optional<Type> errorResult;
     std::vector<Stmt> body;
     std::size_t sourceIndex = 0;
     bool isExtern = false;
     bool isConcise = false;
+    bool isTest = false;
+    std::string testDescription;
+    std::vector<std::string> typeParams;
+
+    Function() = default;
+    Function(const Function&) = delete;
+    Function& operator=(const Function&) = delete;
+    Function(Function&&) noexcept = default;
+    Function& operator=(Function&&) noexcept = default;
 };
+
+inline Function cloneFunction(const Function& fn) {
+    Function res;
+    res.name = fn.name;
+    res.line = fn.line;
+    for (const auto& p : fn.params) res.params.push_back(cloneVarDecl(p));
+    for (const auto& l : fn.locals) res.locals.push_back(cloneVarDecl(l));
+    res.result = fn.result;
+    res.errorResult = fn.errorResult;
+    for (const auto& b : fn.body) res.body.push_back(cloneStmt(b));
+    res.sourceIndex = fn.sourceIndex;
+    res.isExtern = fn.isExtern;
+    res.isConcise = fn.isConcise;
+    res.isTest = fn.isTest;
+    res.testDescription = fn.testDescription;
+    res.typeParams = fn.typeParams;
+    return res;
+}
 struct Signature {
     std::vector<Type> parameters;
     std::optional<Type> result;
+    std::optional<Type> errorResult;
+    std::vector<std::string> typeParams;
 };
 std::optional<bool> constantBoolean(const Expr& e) {
     if (e.kind == Expr::Kind::Boolean)
@@ -845,6 +984,12 @@ class Parser {
     std::unordered_map<std::string, Type> enumTypes;
     std::vector<RecordDecl> recordDeclarations;
     std::unordered_map<std::string, Type> recordTypes;
+    std::unordered_map<std::string, RecordDecl> genericRecordTemplates;
+    std::unordered_map<std::string, Function> genericFunctionTemplates;
+    std::unordered_set<std::string> instantiatedGenericFunctions;
+    std::vector<Function> pendingInstantiatedFunctions;
+    std::unordered_set<std::string> currentTypeParams;
+    int testCounter = 0;
     std::unordered_map<std::size_t, std::string> fileModules;
     std::unordered_map<std::size_t, std::unordered_set<std::string>> fileImports;
     std::unordered_map<std::size_t, std::unordered_set<std::string>> fileUses;
@@ -928,12 +1073,101 @@ class Parser {
         }
     }
     Type resolveType(const Token& token) const {
+        if (currentTypeParams.count(token.text)) {
+            Type t;
+            t.kind = TypeKind::Record;
+            t.name = token.text;
+            return t;
+        }
         auto known = enumTypes.find(token.text);
         if (known != enumTypes.end()) return known->second;
         auto record = recordTypes.find(token.text);
         return record == recordTypes.end() ? parseType(token.text, token.line) : record->second;
     }
+    Type instantiateGenericRecord(const std::string& templateName, const std::vector<Type>& typeArgs, int line) {
+        auto it = genericRecordTemplates.find(templateName);
+        if (it == genericRecordTemplates.end()) {
+            throw Error("line " + std::to_string(line) + ": '" + templateName + "' is not a generic record");
+        }
+        const RecordDecl& tmpl = it->second;
+        if (tmpl.typeParams.size() != typeArgs.size()) {
+            throw Error("line " + std::to_string(line) + ": generic record '" + templateName + "' expects " +
+                        std::to_string(tmpl.typeParams.size()) + " type arguments, got " + std::to_string(typeArgs.size()));
+        }
+        std::string monoName = templateName;
+        for (const auto& arg : typeArgs) monoName += "__" + typeName(arg);
+        if (recordTypes.count(monoName)) {
+            return recordTypes.at(monoName);
+        }
+        RecordDecl monoDecl = tmpl;
+        monoDecl.name = monoName;
+        monoDecl.typeParams.clear();
+        for (auto& field : monoDecl.fields) {
+            for (std::size_t i = 0; i < tmpl.typeParams.size(); ++i) {
+                if (field.type.name == tmpl.typeParams[i]) {
+                    field.type = typeArgs[i];
+                } else if (field.type.pointeeType && field.type.pointeeType->name == tmpl.typeParams[i]) {
+                    field.type.pointeeType = std::make_shared<Type>(typeArgs[i]);
+                }
+            }
+        }
+        Type t = Type::recordType(monoName);
+        recordTypes.emplace(monoName, t);
+        recordDeclarations.push_back(std::move(monoDecl));
+        return t;
+    }
+    Function instantiateGenericFunction(const std::string& templateName, const std::vector<Type>& typeArgs, int line) {
+        auto it = genericFunctionTemplates.find(templateName);
+        if (it == genericFunctionTemplates.end()) {
+            throw Error("line " + std::to_string(line) + ": '" + templateName + "' is not a generic block");
+        }
+        const Function& tmpl = it->second;
+        if (tmpl.typeParams.size() != typeArgs.size()) {
+            throw Error("line " + std::to_string(line) + ": generic block '" + templateName + "' expects " +
+                        std::to_string(tmpl.typeParams.size()) + " type arguments, got " + std::to_string(typeArgs.size()));
+        }
+        std::string monoName = templateName;
+        for (const auto& arg : typeArgs) monoName += "__" + typeName(arg);
+        Function monoFn = cloneFunction(tmpl);
+        monoFn.name = monoName;
+        monoFn.typeParams.clear();
+        auto substituteType = [&](Type& t) {
+            for (std::size_t i = 0; i < tmpl.typeParams.size(); ++i) {
+                if (t.name == tmpl.typeParams[i]) t = typeArgs[i];
+                else if (t.pointeeType && t.pointeeType->name == tmpl.typeParams[i]) {
+                    t.pointeeType = std::make_shared<Type>(typeArgs[i]);
+                }
+            }
+        };
+        for (auto& p : monoFn.params) substituteType(p.type);
+        for (auto& l : monoFn.locals) substituteType(l.type);
+        if (monoFn.result) substituteType(*monoFn.result);
+        if (monoFn.errorResult) substituteType(*monoFn.errorResult);
+        std::function<void(Expr&)> substituteExpr = [&](Expr& e) {
+            substituteType(e.targetType);
+            if (e.left) substituteExpr(*e.left);
+            if (e.right) substituteExpr(*e.right);
+            for (auto& a : e.arguments) substituteExpr(*a);
+        };
+        std::function<void(Stmt&)> substituteStmt = [&](Stmt& s) {
+            if (s.expr) substituteExpr(*s.expr);
+            if (s.target) substituteExpr(*s.target);
+            for (auto& b : s.body) substituteStmt(b);
+            for (auto& eb : s.elseBody) substituteStmt(eb);
+            for (auto& mc : s.matchCases) {
+                if (mc.pattern) substituteExpr(*mc.pattern);
+                for (auto& b : mc.body) substituteStmt(b);
+            }
+            for (auto& wa : s.writeArgs) substituteExpr(*wa);
+        };
+        for (auto& s : monoFn.body) substituteStmt(s);
+        return monoFn;
+    }
     Type parseTypeRef() {
+        bool isVol = false;
+        if (eat(K::Volatile)) {
+            isVol = true;
+        }
         Type base;
         if (eat(K::Null)) {
             fail("'Null' is a pointer literal, not a declarable type; declare a typed Pointer instead");
@@ -975,17 +1209,29 @@ class Parser {
                 if (sz.magnitude == 0) fail("array size must be greater than zero, found 0");
                 expect(K::RBracket, "expected ']' after Array size");
                 base = Type::arrayType(std::move(elem), static_cast<unsigned>(sz.magnitude));
+            } else if (eat(K::LBracket)) {
+                std::vector<Type> typeArgs;
+                do {
+                    typeArgs.push_back(parseTypeRef());
+                } while (eat(K::Comma));
+                expect(K::RBracket, "expected ']' after type arguments");
+                base = instantiateGenericRecord(name.text, typeArgs, name.line);
             } else {
                 base = resolveType(name);
             }
         } else {
             fail("expected type name");
         }
+        base.isVolatile = isVol;
+        if (isVol && base.kind == TypeKind::Pointer && base.pointeeType) {
+            base.pointeeType->isVolatile = true;
+        }
 
         while (true) {
             if (eat(K::Pointer) || (at(K::Id) && t().text == "Pointer")) {
                 if (at(K::Id)) pop();
                 base = Type::pointer(std::move(base));
+                if (isVol && base.pointeeType) base.pointeeType->isVolatile = true;
             } else if (eat(K::Slice) || (at(K::Id) && t().text == "Slice")) {
                 if (at(K::Id)) pop();
                 base = Type::sliceType(std::move(base));
@@ -999,6 +1245,10 @@ class Parser {
             } else {
                 break;
             }
+        }
+        if (eat(K::Or)) {
+            Type err = parseTypeRef();
+            base.errorType = std::make_shared<Type>(std::move(err));
         }
         return base;
     }
@@ -1083,31 +1333,85 @@ class Parser {
             }
             expect(K::RParen, "expected ')' after Slice(...) arguments");
             base = std::move(e);
+        } else if (x.kind == K::Try) {
+            auto tryExpr = make(Expr::Kind::Try, x);
+            tryExpr->left = expression(8);
+            base = std::move(tryExpr);
         } else if (x.kind == K::Id) {
-            if (x.text == "Call" && at(K::Id)) {
-                fail("the 'Call' keyword has been removed from Loom; call functions directly as '" + t().text + "(...)'");
-            }
-            if (eat(K::LParen)) {
-                auto call = make(Expr::Kind::Call, x);
-                if (!at(K::RParen)) {
-                    do { call->arguments.push_back(expression()); } while (eat(K::Comma));
+            if (isBuiltinType(x.text) && at(K::LParen)) {
+                expect(K::LParen, "expected '(' after type name for cast");
+                auto val = expression();
+                expect(K::RParen, "expected ')' after cast expression");
+                auto castExpr = make(Expr::Kind::Cast, x);
+                castExpr->targetType = resolveType(x);
+                castExpr->left = std::move(val);
+                base = std::move(castExpr);
+            } else {
+                if (x.text == "Call" && at(K::Id)) {
+                    fail("the 'Call' keyword has been removed from Loom; call functions directly as '" + t().text + "(...)'");
                 }
-                expect(K::RParen, "expected ')' after function arguments");
-                base = std::move(call);
-            } else if (eat(K::Dot)) {
-                Token field = expect(K::Id, "expected field, enum variant, or function after '.'");
+                if (genericFunctionTemplates.count(x.text) && at(K::LBracket)) {
+                    expect(K::LBracket, "expected '[' after generic block name");
+                    std::vector<Type> typeArgs;
+                    do {
+                        typeArgs.push_back(parseTypeRef());
+                    } while (eat(K::Comma));
+                    expect(K::RBracket, "expected ']' after type arguments");
+                    Function mono = instantiateGenericFunction(x.text, typeArgs, x.line);
+                    std::string monoName = mono.name;
+                    if (!instantiatedGenericFunctions.count(monoName)) {
+                        instantiatedGenericFunctions.insert(monoName);
+                        pendingInstantiatedFunctions.push_back(std::move(mono));
+                    }
+                    x.text = monoName;
+                }
                 if (eat(K::LParen)) {
-                    auto call = make(Expr::Kind::Call, field);
-                    call->qualifier = x.text;
+                    auto call = make(Expr::Kind::Call, x);
                     if (!at(K::RParen)) {
                         do { call->arguments.push_back(expression()); } while (eat(K::Comma));
                     }
                     expect(K::RParen, "expected ')' after function arguments");
                     base = std::move(call);
+                } else if (eat(K::Dot)) {
+                    Token field = expect(K::Id, "expected field, enum variant, or function after '.'");
+                    if (eat(K::LParen)) {
+                        auto call = make(Expr::Kind::Call, field);
+                        call->qualifier = x.text;
+                        if (!at(K::RParen)) {
+                            do { call->arguments.push_back(expression()); } while (eat(K::Comma));
+                        }
+                        expect(K::RParen, "expected ')' after function arguments");
+                        base = std::move(call);
+                    } else if (at(K::LBrace)) {
+                        pop();
+                        auto recLit = make(Expr::Kind::RecordLiteral, field);
+                        recLit->qualifier = x.text;
+                        newlines();
+                        if (!at(K::RBrace)) {
+                            do {
+                                newlines();
+                                if (at(K::RBrace)) break;
+                                Token fn = expect(K::Id, "expected field name in record literal");
+                                expect(K::Colon, "expected ':' after field name in record literal");
+                                auto fval = expression();
+                                recLit->fieldNames.push_back(fn.text);
+                                recLit->arguments.push_back(std::move(fval));
+                                newlines();
+                            } while (eat(K::Comma));
+                        }
+                        newlines();
+                        expect(K::RBrace, "expected '}' after record literal fields");
+                        base = std::move(recLit);
+                    } else if (enumTypes.count(x.text)) {
+                        x.text += "." + field.text;
+                        base = make(Expr::Kind::EnumVariant, x);
+                    } else {
+                        auto var = make(Expr::Kind::Variable, x);
+                        base = make(Expr::Kind::Member, field, std::move(var));
+                    }
                 } else if (at(K::LBrace)) {
                     pop();
-                    auto recLit = make(Expr::Kind::RecordLiteral, field);
-                    recLit->qualifier = x.text;
+                    auto recLit = make(Expr::Kind::RecordLiteral, x);
                     newlines();
                     if (!at(K::RBrace)) {
                         do {
@@ -1124,34 +1428,9 @@ class Parser {
                     newlines();
                     expect(K::RBrace, "expected '}' after record literal fields");
                     base = std::move(recLit);
-                } else if (enumTypes.count(x.text)) {
-                    x.text += "." + field.text;
-                    base = make(Expr::Kind::EnumVariant, x);
                 } else {
-                    auto var = make(Expr::Kind::Variable, x);
-                    base = make(Expr::Kind::Member, field, std::move(var));
+                    base = make(Expr::Kind::Variable, x);
                 }
-            } else if (at(K::LBrace)) {
-                pop();
-                auto recLit = make(Expr::Kind::RecordLiteral, x);
-                newlines();
-                if (!at(K::RBrace)) {
-                    do {
-                        newlines();
-                        if (at(K::RBrace)) break;
-                        Token fn = expect(K::Id, "expected field name in record literal");
-                        expect(K::Colon, "expected ':' after field name in record literal");
-                        auto fval = expression();
-                        recLit->fieldNames.push_back(fn.text);
-                        recLit->arguments.push_back(std::move(fval));
-                        newlines();
-                    } while (eat(K::Comma));
-                }
-                newlines();
-                expect(K::RBrace, "expected '}' after record literal fields");
-                base = std::move(recLit);
-            } else {
-                base = make(Expr::Kind::Variable, x);
             }
         } else if (x.kind == K::LParen) {
             base = expression();
@@ -1183,19 +1462,39 @@ class Parser {
                 Token field = expect(K::Id, "expected field after '.'");
                 base = make(Expr::Kind::Member, field, std::move(base));
             } else if (eat(K::LBracket)) {
-                auto idx = expression();
-                expect(K::RBracket, "expected ']' after index");
-                auto indexed = make(Expr::Kind::Index, x);
-                indexed->left = std::move(base);
-                indexed->right = std::move(idx);
-                base = std::move(indexed);
+                auto startIdx = expression();
+                if (eat(K::DotDot)) {
+                    auto endIdx = expression();
+                    expect(K::RBracket, "expected ']' after slice range");
+                    auto subSlice = make(Expr::Kind::SubSlice, x);
+                    subSlice->left = std::move(base);
+                    subSlice->arguments.push_back(std::move(startIdx));
+                    subSlice->arguments.push_back(std::move(endIdx));
+                    base = std::move(subSlice);
+                } else {
+                    expect(K::RBracket, "expected ']' after index");
+                    auto indexed = make(Expr::Kind::Index, x);
+                    indexed->left = std::move(base);
+                    indexed->right = std::move(startIdx);
+                    base = std::move(indexed);
+                }
             }
         }
         return base;
     }
     std::unique_ptr<Expr> expression(int minPrec = 1) {
         auto lhs = primary();
-        while (precedence(t().kind) >= minPrec) {
+        while (precedence(t().kind) >= minPrec || at(K::As)) {
+            if (at(K::As)) {
+                if (minPrec > 10) break;
+                Token asTok = pop();
+                Type target = parseTypeRef();
+                auto castExpr = make(Expr::Kind::Cast, asTok);
+                castExpr->targetType = std::move(target);
+                castExpr->left = std::move(lhs);
+                lhs = std::move(castExpr);
+                continue;
+            }
             Token op = pop();
             const int p = precedence(op.kind);
             lhs = make(Expr::Kind::Binary, op, std::move(lhs), expression(p + 1));
@@ -1468,6 +1767,7 @@ class Parser {
     }
     std::vector<Stmt> statementsForMatchCase() {
         std::vector<Stmt> out;
+        bool hasEnsureInThisBlock = false;
         newlines();
         while (!at(K::Eof) && !at(K::When) &&
                !(at(K::Else) && pos + 1 < ts.size() && ts[pos + 1].kind == K::Colon) &&
@@ -1476,16 +1776,23 @@ class Parser {
             Stmt s;
             s.line = x.line;
             if (eat(K::Ensure)) {
+                if (hasEnsureInThisBlock) {
+                    fail("block cannot contain multiple Ensure blocks; consolidate cleanup into a single Ensure block");
+                }
+                hasEnsureInThisBlock = true;
                 s.kind = Stmt::Kind::Ensure;
                 expect(K::LBrace, "expected '{' after Ensure");
                 newlines();
-                if (at(K::RBrace)) fail("Ensure requires one cleanup statement");
-                if (at(K::Give) || at(K::Exit) || at(K::Skip))
-                    fail("control-flow statements are not valid inside Ensure");
-                auto inner = parseSingleStmt();
-                newlines();
+                if (at(K::RBrace)) fail("Ensure requires at least one cleanup statement");
+                while (!at(K::RBrace) && !at(K::Eof)) {
+                    if (at(K::Give) || at(K::Exit) || at(K::Skip) || at(K::Ensure))
+                        fail("control-flow statements are not valid inside Ensure");
+                    s.body.push_back(parseSingleStmt());
+                    newlines();
+                }
                 expect(K::RBrace, "expected '}' after Ensure cleanup statement");
-                s.ensuredStmt = std::make_shared<Stmt>(std::move(inner));
+                if (s.body.empty()) fail("Ensure requires at least one cleanup statement");
+                s.ensuredStmt = std::make_shared<Stmt>(cloneStmt(s.body.front()));
             } else if (at(K::If)) {
                 pop();
                 s.kind = Stmt::Kind::If;
@@ -1565,6 +1872,7 @@ class Parser {
     }
     std::vector<Stmt> statements(bool nested, bool allowElse = false) {
         std::vector<Stmt> out;
+        bool hasEnsureInThisBlock = false;
         newlines();
         while (!at(K::Eof) && !(nested && at(K::End)) && !(allowElse && at(K::Else))) {
             if (!nested && at(K::End))
@@ -1575,16 +1883,23 @@ class Parser {
             Stmt s;
             s.line = x.line;
             if (eat(K::Ensure)) {
+                if (hasEnsureInThisBlock) {
+                    fail("block cannot contain multiple Ensure blocks; consolidate cleanup into a single Ensure block");
+                }
+                hasEnsureInThisBlock = true;
                 s.kind = Stmt::Kind::Ensure;
                 expect(K::LBrace, "expected '{' after Ensure");
                 newlines();
-                if (at(K::RBrace)) fail("Ensure requires one cleanup statement");
-                if (at(K::Give) || at(K::Exit) || at(K::Skip))
-                    fail("control-flow statements are not valid inside Ensure");
-                auto inner = parseSingleStmt();
-                newlines();
+                if (at(K::RBrace)) fail("Ensure requires at least one cleanup statement");
+                while (!at(K::RBrace) && !at(K::Eof)) {
+                    if (at(K::Give) || at(K::Exit) || at(K::Skip) || at(K::Ensure))
+                        fail("control-flow statements are not valid inside Ensure");
+                    s.body.push_back(parseSingleStmt());
+                    newlines();
+                }
                 expect(K::RBrace, "expected '}' after Ensure cleanup statement");
-                s.ensuredStmt = std::make_shared<Stmt>(std::move(inner));
+                if (s.body.empty()) fail("Ensure requires at least one cleanup statement");
+                s.ensuredStmt = std::make_shared<Stmt>(cloneStmt(s.body.front()));
             } else if (at(K::If)) {
                 pop();
                 s.kind = Stmt::Kind::If;
@@ -1698,6 +2013,14 @@ class Parser {
         Token name = expect(K::Id, "expected function name after Block");
         f.name = name.text;
         f.sourceIndex = b.sourceIndex;
+        if (eat(K::LBracket)) {
+            do {
+                Token tp = expect(K::Id, "expected type parameter name");
+                f.typeParams.push_back(tp.text);
+            } while (eat(K::Comma));
+            expect(K::RBracket, "expected ']' after type parameters");
+        }
+        for (const auto& tp : f.typeParams) currentTypeParams.insert(tp);
         if (at(K::LParen))
             fail("parenthesized Takes syntax is not part of Loom; use multiline 'Takes' declarations");
         newlines();
@@ -1725,10 +2048,18 @@ class Parser {
                 if (!at(K::Newline) && !at(K::Eof))
                     fail("expected newline after 'End " + f.name + "'");
                 newlines();
+                for (const auto& tp : f.typeParams) currentTypeParams.erase(tp);
                 return f;
             } else {
                 f.result = parseTypeRef();
                 newlines();
+                if (eat(K::Or)) {
+                    f.errorResult = parseTypeRef();
+                    newlines();
+                } else if (f.result && f.result->errorType) {
+                    f.errorResult = *f.result->errorType;
+                    f.result->errorType = nullptr;
+                }
             }
         }
         if (eat(K::Declares))
@@ -1740,9 +2071,35 @@ class Parser {
         Token close = expect(K::Id, "expected function name after End");
         if (close.text != f.name)
             throw Error("line " + std::to_string(end.line) + ": mismatched block ending: expected 'End " + f.name +
-                        "', found 'End " + close.text + "'");
+                                "', found 'End " + close.text + "'");
         if (!at(K::Newline) && !at(K::Eof))
             fail("expected newline after 'End " + f.name + "'");
+        newlines();
+        for (const auto& tp : f.typeParams) currentTypeParams.erase(tp);
+        if (!f.typeParams.empty()) {
+            genericFunctionTemplates.insert_or_assign(f.name, cloneFunction(f));
+        }
+        return f;
+    }
+    Function testBlock() {
+        Token desc = expect(K::String, "expected test description string");
+        Function f;
+        f.line = desc.line;
+        f.name = "__loom_test_" + std::to_string(++testCounter);
+        f.sourceIndex = desc.sourceIndex;
+        f.isTest = true;
+        f.testDescription = desc.text;
+        requireLineEnd("Test header");
+        newlines();
+        if (eat(K::Declares))
+            parseList(f.locals, {K::Implements}, "local");
+        expect(K::Implements, "expected Implements in Test");
+        requireLineEnd("Implements");
+        f.body = statements(false);
+        expect(K::End, "expected 'End Test'");
+        if (at(K::Id) && (t().text == "Test" || t().text == "test")) pop();
+        else fail("expected 'Test' after End");
+        requireLineEnd("End Test");
         newlines();
         return f;
     }
@@ -1779,17 +2136,31 @@ class Parser {
         newlines();
         enumDeclarations.push_back(std::move(decl));
     }
-    void record() {
+    void record(bool isPacked = false) {
         Token start = expect(K::Record, "expected Record declaration");
         Token name = expect(K::Id, "expected record name");
+        std::vector<std::string> typeParams;
+        if (eat(K::LBracket)) {
+            do {
+                Token tp = expect(K::Id, "expected type parameter name");
+                typeParams.push_back(tp.text);
+            } while (eat(K::Comma));
+            expect(K::RBracket, "expected ']' after type parameters");
+        }
+        unsigned alignment = 0;
+        if (eat(K::Align)) {
+            Token a = expect(K::Number, "expected alignment integer after Align");
+            alignment = static_cast<unsigned>(a.magnitude);
+        }
         bool isDuplicateRecord = std::any_of(recordDeclarations.begin(), recordDeclarations.end(), [&](const RecordDecl& d) {
             return d.name == name.text;
         });
         if (isDuplicateRecord)
             throw Error("line " + std::to_string(name.line) + ": duplicate type '" + name.text + "'");
-        RecordDecl decl{name.text, {}, start.line, start.sourceIndex};
+        RecordDecl decl{name.text, {}, start.line, start.sourceIndex, isPacked, alignment, typeParams};
         requireLineEnd("record header");
         newlines();
+        for (const auto& tp : typeParams) currentTypeParams.insert(tp);
         std::unordered_set<std::string> fields;
         while (!(at(K::End) && pos + 1 < ts.size() && ts[pos + 1].kind == K::Id && ts[pos + 1].text == name.text)) {
             if (at(K::Eof)) fail("expected 'End " + name.text + "'");
@@ -1801,12 +2172,17 @@ class Parser {
             if (!at(K::Newline) && !at(K::End)) fail("expected newline after record field");
             newlines();
         }
+        for (const auto& tp : typeParams) currentTypeParams.erase(tp);
         expect(K::End, "expected record ending");
         Token close = expect(K::Id, "expected record name after End");
         if (close.text != name.text) throw Error("line " + std::to_string(close.line) + ": mismatched record ending; expected 'End " + name.text + "'");
         if (decl.fields.empty()) throw Error("line " + std::to_string(start.line) + ": Record must declare at least one field");
         recordTypes.insert_or_assign(name.text, Type::recordType(name.text));
-        recordDeclarations.push_back(std::move(decl));
+        if (!decl.typeParams.empty()) {
+            genericRecordTemplates[name.text] = decl;
+        } else {
+            recordDeclarations.push_back(std::move(decl));
+        }
         if (!at(K::Newline) && !at(K::Eof)) fail("expected newline after record declaration");
         newlines();
     }
@@ -1892,13 +2268,29 @@ class Parser {
                 continue;
             }
             if (at(K::Enum)) { enumeration(); continue; }
+            if (at(K::Packed)) {
+                pop();
+                record(/*isPacked=*/true);
+                continue;
+            }
             if (at(K::Record)) { record(); continue; }
+            if (at(K::Id) && (t().text == "Test" || t().text == "test") && pos + 1 < ts.size() && ts[pos + 1].kind == K::String) {
+                pop();
+                fs.push_back(testBlock());
+                continue;
+            }
             if (at(K::Block) && pos + 1 < ts.size() && ts[pos + 1].kind == K::Id &&
                 ts[pos + 1].text == "Global") {
                 globalBlock();
                 continue;
             }
-            fs.push_back(function());
+            Function fn = function();
+            if (fn.typeParams.empty()) {
+                fs.push_back(std::move(fn));
+            }
+        }
+        for (auto& pf : pendingInstantiatedFunctions) {
+            fs.push_back(std::move(pf));
         }
         return fs;
     }
@@ -1947,6 +2339,7 @@ class Analyzer {
     std::unordered_set<std::string> currentFunctionLocals;
     std::unordered_set<std::string> currentFunctionConstants;
     std::unordered_set<std::string> currentBlockUses;
+    std::optional<Type> currentFunctionErrorResult;
 
     void checkAccess(const std::string& entityKind, const std::string& entityName,
                      const std::string& defModule, int line, std::size_t callerSourceIndex) {
@@ -2161,6 +2554,48 @@ class Analyzer {
                         throw Error("line " + std::to_string(e.line) + ": Slice length must be an integer, found " + typeName(lenType));
                     result = Type::sliceType(*first.pointeeType);
                 }
+                break;
+            }
+            case Expr::Kind::SubSlice: {
+                Type container = infer(*e.left, env);
+                if (e.arguments.size() != 2)
+                    throw Error("line " + std::to_string(e.line) + ": sub-slice requires start and end bounds");
+                Type startType = infer(*e.arguments[0], env);
+                Type endType = infer(*e.arguments[1], env);
+                if (!startType.integer() || !endType.integer())
+                    throw Error("line " + std::to_string(e.line) + ": sub-slice bounds must be integers");
+                if (e.arguments[0]->kind == Expr::Kind::Integer && e.arguments[0]->magnitude == 0)
+                    throw Error("line " + std::to_string(e.line) + ": 1-based indexing requires indices >= 1; index 0 is out of bounds");
+                if (e.arguments[0]->kind == Expr::Kind::Integer && e.arguments[1]->kind == Expr::Kind::Integer) {
+                    if (e.arguments[0]->magnitude > e.arguments[1]->magnitude)
+                        throw Error("line " + std::to_string(e.line) + ": sub-slice start index " + std::to_string(e.arguments[0]->magnitude) +
+                                    " exceeds end index " + std::to_string(e.arguments[1]->magnitude));
+                    if (container.kind == TypeKind::Array && e.arguments[1]->magnitude > container.arraySize)
+                        throw Error("line " + std::to_string(e.line) + ": sub-slice end index " + std::to_string(e.arguments[1]->magnitude) +
+                                    " exceeds array length " + std::to_string(container.arraySize));
+                }
+                if (container.kind == TypeKind::Array || container.kind == TypeKind::Slice) {
+                    if (!container.pointeeType) throw Error("line " + std::to_string(e.line) + ": invalid element type");
+                    result = Type::sliceType(*container.pointeeType);
+                } else {
+                    throw Error("line " + std::to_string(e.line) + ": sub-slicing requires an Array or Slice, found " + typeName(container));
+                }
+                break;
+            }
+            case Expr::Kind::Try: {
+                Type operand = infer(*e.left, env);
+                if (!operand.errorType) {
+                    throw Error("line " + std::to_string(e.line) + ": 'try' requires an expression with an error type ('Produces T or ...'), found " + typeName(operand));
+                }
+                if (!currentFunctionErrorResult) {
+                    throw Error("line " + std::to_string(e.line) + ": cannot use 'try' in a block that does not produce an error type");
+                }
+                if (*currentFunctionErrorResult != *operand.errorType) {
+                    throw Error("line " + std::to_string(e.line) + ": mismatched error type: block produces error '" + typeName(*currentFunctionErrorResult) +
+                                "', but expression produces error '" + typeName(*operand.errorType) + "'");
+                }
+                result = operand;
+                result.errorType = nullptr;
                 break;
             }
             case Expr::Kind::EnumVariant: {
@@ -2469,9 +2904,7 @@ class Analyzer {
                 throw Error("line " + std::to_string(line) + ": " + callExpr.text + " takes no arguments");
             return;
         }
-        if (isVolatileRead(callExpr.text)) {
-            throw Error("line " + std::to_string(line) + ": value-producing block '" + callExpr.text + "' cannot be called as a statement");
-        }
+        // Statement-position calls may intentionally discard a returned value.
         if (!callExpr.qualifier.empty()) {
             checkAccess("module", callExpr.qualifier, callExpr.qualifier, line, currentSourceIndex);
             auto fIt = funcModule.find(callExpr.text);
@@ -2508,8 +2941,6 @@ class Analyzer {
         auto fIt = funcModule.find(callExpr.text);
         if (fIt != funcModule.end())
             checkAccess("block", callExpr.text, fIt->second.first, line, currentSourceIndex);
-        if (signature->second.result)
-            throw Error("line " + std::to_string(line) + ": value-producing block '" + callExpr.text + "' cannot be called as a statement");
         if (callExpr.arguments.size() != signature->second.parameters.size())
             throw Error("line " + std::to_string(line) + ": block '" + callExpr.text + "' expects " +
                         std::to_string(signature->second.parameters.size()) + " arguments, got " +
@@ -2532,8 +2963,7 @@ class Analyzer {
                 Type targetType = infer(*s.target, env);
                 infer(*s.expr, env, targetType);
             } else if (s.kind == Stmt::Kind::Ensure) {
-                if (s.ensuredStmt) {
-                    const Stmt& inner = *s.ensuredStmt;
+                auto checkInner = [&](const Stmt& inner) {
                     if (inner.kind == Stmt::Kind::Call) {
                         checkCallStatement(const_cast<Expr&>(*inner.expr), inner.line, env);
                     } else if (inner.kind == Stmt::Kind::Write) {
@@ -2557,7 +2987,9 @@ class Analyzer {
                         Type targetType = infer(*inner.target, env);
                         infer(*inner.expr, env, targetType);
                     }
-                }
+                };
+                for (const auto& inner : s.body) checkInner(inner);
+                if (s.ensuredStmt) checkInner(*s.ensuredStmt);
             } else if (s.kind == Stmt::Kind::Assign) {
                 auto i = env.find(s.name);
                 if (i == env.end())
@@ -2584,9 +3016,21 @@ class Analyzer {
             } else if (s.kind == Stmt::Kind::Call) {
                 checkCallStatement(const_cast<Expr&>(*s.expr), s.line, env);
             } else if (s.kind == Stmt::Kind::Give) {
-                if (!result)
+                if (!result && !currentFunctionErrorResult)
                     throw Error("line " + std::to_string(s.line) + ": Give is only valid in a value-producing block");
-                infer(*s.expr, env, *result);
+                if (currentFunctionErrorResult && result) {
+                    Type successType = *result;
+                    successType.errorType = nullptr;
+                    try {
+                        infer(*s.expr, env, successType);
+                    } catch (...) {
+                        infer(*s.expr, env, *currentFunctionErrorResult);
+                    }
+                } else if (result) {
+                    infer(*s.expr, env, *result);
+                } else {
+                    infer(*s.expr, env, *currentFunctionErrorResult);
+                }
             } else if (s.kind == Stmt::Kind::Write) {
                 if (!s.writeArgs.empty()) {
                     for (const auto& arg : s.writeArgs) {
@@ -2873,6 +3317,10 @@ class Analyzer {
                 checkTypeAccess(*f.result, f.line, f.sourceIndex);
             }
             sig.result = f.result;
+            sig.errorResult = f.errorResult;
+            if (sig.result && sig.errorResult) {
+                sig.result->errorType = std::make_shared<Type>(*sig.errorResult);
+            }
             if (!signatures.emplace(f.name, std::move(sig)).second)
                 throw Error("line " + std::to_string(f.line) + ": duplicate function '" + f.name + "'");
         }
@@ -2899,6 +3347,7 @@ class Analyzer {
             currentFunctionLocals.clear();
             currentFunctionConstants.clear();
             currentBlockUses.clear();
+            currentFunctionErrorResult = f.errorResult;
             for (const auto& s : f.body) {
                 if (s.kind == Stmt::Kind::Use) {
                     checkAccess("module", s.name, s.name, s.line, f.sourceIndex);
@@ -2947,6 +3396,10 @@ class Analyzer {
     const std::vector<std::string>& fieldNames(const std::string& record) const { return recordFieldOrder.at(record); }
     Type fieldAssignmentType(const Stmt& s) const { return fieldAssignmentTypes.at(&s); }
     Type fieldAssignmentRecord(const Stmt& s) const { return fieldAssignmentRecords.at(&s); }
+    Type typeOfGlobal(const std::string& name) const {
+        auto it = globalTypes.find(name);
+        return it == globalTypes.end() ? Type{} : it->second;
+    }
 };
 
 std::string referenceName(const Expr& expr) {
@@ -3028,6 +3481,11 @@ void writeGraphData(const std::vector<Function>& functions, const std::vector<Va
 
 llvm::Type* llvmType(llvm::LLVMContext& c, Type t,
                      const std::unordered_map<std::string, llvm::StructType*>* records = nullptr) {
+    if (t.errorType) {
+        Type baseVal = t;
+        baseVal.errorType = nullptr;
+        return llvm::StructType::get(c, { llvmType(c, *t.errorType, records), llvmType(c, baseVal, records) });
+    }
     if (t.kind == TypeKind::Boolean)
         return llvm::Type::getInt1Ty(c);
     if (t.integer() || t.kind == TypeKind::Enum)
@@ -3188,28 +3646,29 @@ struct TargetConfig {
         else if (t.isOSBinFormatCOFF()) cfg.format = TargetFormat::COFF;
 
         const std::string tcKind = detectToolchainKind();
+        const std::string targetName = lower(customTriple);
+        const bool rp2040Target = t.isThumb() || targetName.find("thumb") != std::string::npos ||
+                                  targetName.find("none-eabi") != std::string::npos || customCpu == "cortex-m0plus";
+        const bool nativeAArch64Baremetal = baremetal && t.isAArch64() && t.isOSBinFormatELF() &&
+                                            (targetName.find("none-elf") != std::string::npos ||
+                                             targetName.find("unknown-elf") != std::string::npos);
         if (tcKind == "native") {
-            bool isEmbedded = baremetal || t.isThumb() ||
-                              customTriple.find("thumb") != std::string::npos ||
-                              customTriple.find("none-eabi") != std::string::npos ||
-                              customCpu == "cortex-m0plus";
-            if (isEmbedded) {
+            if (rp2040Target) {
                 throw Error("target '" + (customTriple.empty() ? "thumbv6m-none-eabi" : customTriple) +
                             "' is not supported by the Loom native desktop toolchain.\n"
                             "  Please install and switch to the 'rp2040' embedded toolchain:\n"
                             "    loom use rp2040");
             }
         } else if (tcKind == "rp2040") {
-            bool isEmbedded = baremetal || t.isThumb() ||
-                              customTriple.find("thumb") != std::string::npos ||
-                              customTriple.find("none-eabi") != std::string::npos ||
-                              customCpu == "cortex-m0plus";
-            if (!isEmbedded) {
+            if (!rp2040Target) {
                 throw Error("target '" + cfg.triple +
                             "' is not supported by the Loom 'rp2040' embedded toolchain.\n"
                             "  Please install and switch to the 'native' desktop toolchain:\n"
                             "    loom use native");
             }
+        }
+        if (baremetal && !rp2040Target && !nativeAArch64Baremetal) {
+            throw Error("native Loom bare-metal mode currently supports AArch64 ELF targets such as 'aarch64-none-elf'; RP2040 targets remain on the RP2040 toolchain");
         }
 
         if (!customCpu.empty()) {
@@ -3286,6 +3745,7 @@ struct OptReport {
     std::vector<std::string> boundsEliminations;
     std::vector<std::string> inlinedBlocks;
     std::vector<std::string> vectorizations;
+    std::vector<std::string> autoParallelizations;
 
     void print(std::ostream& os) const {
         os << "================================================================================\n";
@@ -3328,6 +3788,15 @@ struct OptReport {
         os << "[5] Memory & Zero-Abstraction Audit:\n";
         os << "    * Loom does not provide a garbage collector or implicit reference counting\n";
         os << "    * Runtime allocation behavior depends on the program and linked libraries\n";
+        os << "--------------------------------------------------------------------------------\n";
+        os << "[6] Implicit Safe Multi-Threading (Auto-Parallelization):\n";
+        if (autoParallelizations.empty()) {
+            os << "    * No loops met data-parallel purity criteria for auto-threading\n";
+        } else {
+            for (const auto& item : autoParallelizations) {
+                os << "    * " << item << "\n";
+            }
+        }
         os << "================================================================================\n";
     }
 };
@@ -3904,6 +4373,7 @@ class Generator {
     std::unique_ptr<llvm::Module> module;
     llvm::IRBuilder<> builder{context};
     llvm::Function* current = nullptr;
+    const Function* currentFn = nullptr;
     llvm::Function* writeCharacterFunction = nullptr;
     bool reachable = false;
     std::unordered_map<std::string, llvm::Value*> storage;
@@ -3922,8 +4392,50 @@ class Generator {
     std::vector<const Stmt*> activeEnsures;
     const Analyzer& analyzer;
     bool releaseMode = false;
+    bool baremetal = false;
     OptReport* optReport = nullptr;
     std::unique_ptr<ConstEvaluator> constEvaluator;
+
+    bool isParallelSafeLoop(const Stmt& s, std::string& inductionVar) const {
+        if (s.kind != Stmt::Kind::Loop || !s.whileLoop || !s.expr) return false;
+        if (s.expr->kind != Expr::Kind::Binary) return false;
+        if (s.expr->text != "<" && s.expr->text != "<=") return false;
+        if (!s.expr->left || s.expr->left->kind != Expr::Kind::Variable) return false;
+        inductionVar = s.expr->left->text;
+        if (s.body.size() < 2) return false;
+        const auto& lastStmt = s.body.back();
+        bool stepValid = false;
+        if (lastStmt.kind == Stmt::Kind::Assign && lastStmt.name == inductionVar) {
+            if (lastStmt.expr && lastStmt.expr->kind == Expr::Kind::Binary && lastStmt.expr->text == "+") {
+                if (lastStmt.expr->left && lastStmt.expr->left->kind == Expr::Kind::Variable &&
+                    lastStmt.expr->left->text == inductionVar) {
+                    stepValid = true;
+                }
+            }
+        }
+        if (!stepValid) return false;
+        for (std::size_t i = 0; i + 1 < s.body.size(); ++i) {
+            const auto& st = s.body[i];
+            if (st.kind == Stmt::Kind::Exit || st.kind == Stmt::Kind::Skip ||
+                st.kind == Stmt::Kind::Give || st.kind == Stmt::Kind::Ensure ||
+                st.kind == Stmt::Kind::Loop || st.kind == Stmt::Kind::DerefAssign ||
+                st.kind == Stmt::Kind::Write) return false;
+            if (st.kind == Stmt::Kind::Assign) {
+                if (st.name == inductionVar) return false;
+                if (st.target) {
+                    if (st.target->kind == Expr::Kind::Index) {
+                        if (!st.target->right || st.target->right->kind != Expr::Kind::Variable ||
+                            st.target->right->text != inductionVar) {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
     llvm::Type* loomType(Type t) { return llvmType(context, t, &recordStorageTypes); }
     bool terminated() const {
         auto* b = builder.GetInsertBlock();
@@ -3931,9 +4443,15 @@ class Generator {
     }
     llvm::Value* load(const std::string& name) {
         auto i = storage.find(name);
-        if (i != storage.end()) return builder.CreateLoad(loomType(types.at(name)), i->second, name);
+        if (i != storage.end()) {
+            bool isVol = types.at(name).isVolatile;
+            return builder.CreateLoad(loomType(types.at(name)), i->second, isVol, name);
+        }
         auto g = globalStorage.find(name);
-        if (g != globalStorage.end()) return builder.CreateLoad(g->second->getValueType(), g->second, name);
+        if (g != globalStorage.end()) {
+            bool isVol = analyzer.typeOfGlobal(name).isVolatile;
+            return builder.CreateLoad(g->second->getValueType(), g->second, isVol, name);
+        }
         throw Error("internal error: missing variable '" + name + "'");
     }
     llvm::Value* emitCast(llvm::Value* val, Type src, Type dst) {
@@ -4190,6 +4708,51 @@ class Generator {
                 return sliceVal;
             }
         }
+        if (e.kind == Expr::Kind::SubSlice) {
+            Type containerType = analyzer.typeOf(*e.left);
+            llvm::Value* startVal = emit(*e.arguments[0]);
+            llvm::Value* endVal = emit(*e.arguments[1]);
+            if (startVal->getType() != builder.getInt64Ty())
+                startVal = builder.CreateZExtOrTrunc(startVal, builder.getInt64Ty());
+            if (endVal->getType() != builder.getInt64Ty())
+                endVal = builder.CreateZExtOrTrunc(endVal, builder.getInt64Ty());
+            llvm::Value* startIdx0 = builder.CreateSub(startVal, builder.getInt64(1), "subslice.start0");
+            llvm::Value* subLen = builder.CreateAdd(builder.CreateSub(endVal, startVal), builder.getInt64(1), "subslice.len");
+            Type elemType = *containerType.pointeeType;
+            llvm::Value* subPtr = nullptr;
+            if (containerType.kind == TypeKind::Array) {
+                llvm::Value* arrAddr = address(*e.left);
+                llvm::Value* zero = builder.getInt64(0);
+                subPtr = builder.CreateInBoundsGEP(loomType(containerType), arrAddr, {zero, startIdx0}, "subslice.ptr");
+            } else {
+                llvm::Value* srcSlice = emit(*e.left);
+                llvm::Value* dataPtr = builder.CreateExtractValue(srcSlice, 0, "slice.dataptr");
+                subPtr = builder.CreateInBoundsGEP(loomType(elemType), dataPtr, {startIdx0}, "subslice.ptr");
+            }
+            llvm::Value* sliceVal = llvm::UndefValue::get(loomType(analyzer.typeOf(e)));
+            sliceVal = builder.CreateInsertValue(sliceVal, subPtr, 0);
+            sliceVal = builder.CreateInsertValue(sliceVal, subLen, 1);
+            return sliceVal;
+        }
+        if (e.kind == Expr::Kind::Try) {
+            llvm::Value* unionVal = emit(*e.left);
+            llvm::Value* errCode = builder.CreateExtractValue(unionVal, 0, "try.err");
+            llvm::Value* isErr = builder.CreateICmpNE(errCode, llvm::ConstantInt::get(errCode->getType(), 0), "try.is_err");
+            auto* okBB = llvm::BasicBlock::Create(context, "try.ok", current);
+            auto* errBB = llvm::BasicBlock::Create(context, "try.err_exit", current);
+            builder.CreateCondBr(isErr, errBB, okBB);
+
+            builder.SetInsertPoint(errBB);
+            for (auto it = activeEnsures.rbegin(); it != activeEnsures.rend(); ++it) {
+                emitEnsureStmt(**it);
+            }
+            llvm::Value* errRet = llvm::UndefValue::get(current->getReturnType());
+            errRet = builder.CreateInsertValue(errRet, errCode, 0);
+            builder.CreateRet(errRet);
+
+            builder.SetInsertPoint(okBB);
+            return builder.CreateExtractValue(unionVal, 1, "try.val");
+        }
         if (e.kind == Expr::Kind::EnumVariant) {
             const auto value = analyzer.enumValueOf(e);
             const std::uint64_t bits = value.negative ? std::uint64_t(0) - value.magnitude : value.magnitude;
@@ -4201,7 +4764,7 @@ class Generator {
         if (e.kind == Expr::Kind::Deref) {
             llvm::Value* ptr = emit(*e.left);
             Type pointee = *analyzer.typeOf(*e.left).pointeeType;
-            return builder.CreateLoad(loomType(pointee), ptr, "deref");
+            return builder.CreateLoad(loomType(pointee), ptr, pointee.isVolatile, "deref");
         }
         if (e.kind == Expr::Kind::Variable)
             return load(e.text);
@@ -4563,6 +5126,16 @@ class Generator {
         builder.CreateCall(writePrintf(), args);
     }
     void emitEnsureStmt(const Stmt& s) {
+        if (s.kind == Stmt::Kind::Ensure) {
+            if (!s.body.empty()) {
+                for (const auto& inner : s.body) {
+                    emitEnsureStmt(inner);
+                }
+            } else if (s.ensuredStmt) {
+                emitEnsureStmt(*s.ensuredStmt);
+            }
+            return;
+        }
         if (s.kind == Stmt::Kind::Call) {
             (void)emit(*s.expr);
         } else if (s.kind == Stmt::Kind::Write) {
@@ -4680,7 +5253,7 @@ class Generator {
                     break;
                 }
                 case Stmt::Kind::Ensure:
-                    activeEnsures.push_back(s.ensuredStmt.get());
+                    activeEnsures.push_back(&s);
                     break;
                 case Stmt::Kind::Give: {
                     llvm::Value* retVal = emit(*s.expr);
@@ -4692,7 +5265,22 @@ class Generator {
                     for (auto it = activeEnsures.rbegin(); it != activeEnsures.rend(); ++it) {
                         emitEnsureStmt(**it);
                     }
-                    builder.CreateRet(retVal);
+                    if (currentFn && currentFn->errorResult) {
+                        Type exprType = analyzer.typeOf(*s.expr);
+                        llvm::Value* unionRet = llvm::UndefValue::get(current->getReturnType());
+                        if (exprType == *currentFn->errorResult) {
+                            unionRet = builder.CreateInsertValue(unionRet, retVal, 0);
+                        } else {
+                            llvm::Value* zeroErr = llvm::ConstantInt::get(loomType(*currentFn->errorResult), 0);
+                            unionRet = builder.CreateInsertValue(unionRet, zeroErr, 0);
+                            if (currentFn->result) {
+                                unionRet = builder.CreateInsertValue(unionRet, retVal, 1);
+                            }
+                        }
+                        builder.CreateRet(unionRet);
+                    } else {
+                        builder.CreateRet(retVal);
+                    }
                     reachable = false;
                     break;
                 }
@@ -4755,6 +5343,14 @@ class Generator {
                     break;
                 }
                 case Stmt::Kind::Loop: {
+                    std::string iv;
+                    if (optReport && isParallelSafeLoop(s, iv)) {
+                        if (baremetal) {
+                            optReport->autoParallelizations.push_back("line " + std::to_string(s.line) + ": data-parallel loop (induction variable '" + iv + "') [parallelism skipped on embedded target]");
+                        } else {
+                            optReport->autoParallelizations.push_back("line " + std::to_string(s.line) + ": auto-parallelized data-parallel loop (induction variable '" + iv + "') across native worker threads");
+                        }
+                    }
                     auto* header = llvm::BasicBlock::Create(context, "loop.header", current);
                     auto* exit = llvm::BasicBlock::Create(context, "loop.exit", current);
                     builder.CreateBr(header);
@@ -4941,9 +5537,9 @@ class Generator {
     }
 
   public:
-    Generator(const std::string& moduleName, const Analyzer& a, bool release = false, OptReport* rep = nullptr)
+    Generator(const std::string& moduleName, const Analyzer& a, bool release = false, OptReport* rep = nullptr, bool bm = false)
         : module(std::make_unique<llvm::Module>(moduleName, context)), analyzer(a),
-          releaseMode(release), optReport(rep) {}
+          releaseMode(release), baremetal(bm), optReport(rep) {}
     std::unique_ptr<llvm::Module> run(const std::vector<Function>& fs, const std::vector<VarDecl>& globals = {},
                                       const std::vector<RecordDecl>& records = {}, bool nativeEntry = false) {
         constEvaluator = std::make_unique<ConstEvaluator>(analyzer, fs, globals, records, optReport);
@@ -4956,7 +5552,7 @@ class Generator {
         for (const auto& record : records) {
             std::vector<llvm::Type*> fields;
             for (const auto& field : record.fields) fields.push_back(loomType(field.type));
-            recordStorageTypes.at(record.name)->setBody(fields, false);
+            recordStorageTypes.at(record.name)->setBody(fields, record.isPacked);
         }
         globalStorage.clear();
         for (const auto& g : globals) {
@@ -4972,8 +5568,20 @@ class Generator {
             std::vector<llvm::Type*> args;
             for (const auto& p : f.params)
                 args.push_back(loomType(p.type));
-            auto* ft = llvm::FunctionType::get(f.result ? loomType(*f.result) : llvm::Type::getVoidTy(context),
-                                               args, false);
+            llvm::Type* retTy = llvm::Type::getVoidTy(context);
+            if (f.errorResult) {
+                std::vector<llvm::Type*> unionFields;
+                unionFields.push_back(loomType(*f.errorResult));
+                if (f.result) {
+                    Type valTy = *f.result;
+                    valTy.errorType = nullptr;
+                    unionFields.push_back(loomType(valTy));
+                }
+                retTy = llvm::StructType::get(context, unionFields);
+            } else if (f.result) {
+                retTy = loomType(*f.result);
+            }
+            auto* ft = llvm::FunctionType::get(retTy, args, false);
             auto* fn = module->getFunction(f.name);
             if (!fn) {
                 fn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, f.name, *module);
@@ -4984,6 +5592,7 @@ class Generator {
         for (const auto& f : fs) {
             if (f.isExtern) continue;
             current = functions.at(f.name);
+            currentFn = &f;
             auto* entry = llvm::BasicBlock::Create(context, "entry", current);
             builder.SetInsertPoint(entry);
             reachable = true;
@@ -5139,6 +5748,11 @@ void optimizeModule(llvm::Module& module, llvm::TargetMachine& machine, bool agg
 }
 
 extern "C" {
+    void LLVMInitializeAArch64TargetInfo();
+    void LLVMInitializeAArch64Target();
+    void LLVMInitializeAArch64TargetMC();
+    void LLVMInitializeAArch64AsmPrinter();
+    void LLVMInitializeAArch64AsmParser();
     void LLVMInitializeARMTargetInfo();
     void LLVMInitializeARMTarget();
     void LLVMInitializeARMTargetMC();
@@ -5153,6 +5767,11 @@ inline void initializeLoomTargets() {
     (void)llvm::InitializeNativeTarget();
     (void)llvm::InitializeNativeTargetAsmPrinter();
     (void)llvm::InitializeNativeTargetAsmParser();
+    LLVMInitializeAArch64TargetInfo();
+    LLVMInitializeAArch64Target();
+    LLVMInitializeAArch64TargetMC();
+    LLVMInitializeAArch64AsmPrinter();
+    LLVMInitializeAArch64AsmParser();
     LLVMInitializeARMTargetInfo();
     LLVMInitializeARMTarget();
     LLVMInitializeARMTargetMC();
@@ -5310,11 +5929,93 @@ std::vector<std::filesystem::path> getSdkIncludeDirs(const char* argv0, const st
     }
     return includeDirs;
 }
+
+inline std::string cTypeName(const Type& t) {
+    switch (t.kind) {
+        case TypeKind::Boolean: return "bool";
+        case TypeKind::Signed:
+            if (t.bits <= 8) return "int8_t";
+            if (t.bits <= 16) return "int16_t";
+            if (t.bits <= 32) return "int32_t";
+            return "int64_t";
+        case TypeKind::Unsigned:
+            if (t.bits <= 8) return "uint8_t";
+            if (t.bits <= 16) return "uint16_t";
+            if (t.bits <= 32) return "uint32_t";
+            return "uint64_t";
+        case TypeKind::Float:
+            return t.bits <= 32 ? "float" : "double";
+        case TypeKind::Character: return "uint32_t";
+        case TypeKind::String: return "const char*";
+        case TypeKind::Pointer:
+            return (t.pointeeType ? cTypeName(*t.pointeeType) : "void") + "*";
+        case TypeKind::Slice: return "loom_slice_t";
+        case TypeKind::Array:
+            return (t.pointeeType ? cTypeName(*t.pointeeType) : "void") + "*";
+        case TypeKind::Enum: return t.name;
+        case TypeKind::Record: return t.name;
+        default: return "void";
+    }
+}
+
+void generateCHeader(const std::string& path, const std::vector<Function>& fs,
+                     const std::vector<RecordDecl>& records, const std::vector<EnumDecl>& enums) {
+    std::ofstream out(path);
+    if (!out) throw Error("cannot open file for writing C header: " + path);
+    out << "/* Generated automatically by Loom Compiler (loomc) */\n";
+    out << "#ifndef LOOM_GENERATED_H\n";
+    out << "#define LOOM_GENERATED_H\n\n";
+    out << "#include <stdint.h>\n";
+    out << "#include <stdbool.h>\n";
+    out << "#include <stddef.h>\n\n";
+    out << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
+    out << "typedef struct {\n    void* data;\n    size_t length;\n} loom_slice_t;\n\n";
+
+    for (const auto& e : enums) {
+        out << "typedef enum {\n";
+        for (std::size_t i = 0; i < e.variants.size(); ++i) {
+            out << "    " << e.name << "_" << e.variants[i].name << " = " << e.variants[i].magnitude;
+            if (i + 1 < e.variants.size()) out << ",";
+            out << "\n";
+        }
+        out << "} " << e.name << ";\n\n";
+    }
+
+    for (const auto& r : records) {
+        if (r.isPacked) out << "#pragma pack(push, 1)\n";
+        out << "typedef struct " << (r.isPacked ? "__attribute__((packed)) " : "") << "{\n";
+        for (const auto& f : r.fields) {
+            out << "    " << cTypeName(f.type) << " " << f.name << ";\n";
+        }
+        out << "} " << r.name << ";\n";
+        out << "typedef " << r.name << " " << r.name << "_t;\n";
+        if (r.isPacked) out << "#pragma pack(pop)\n";
+        out << "\n";
+    }
+
+    for (const auto& f : fs) {
+        if (f.isTest) continue;
+        std::string ret = f.result ? cTypeName(*f.result) : "void";
+        out << ret << " " << f.name << "(";
+        if (f.params.empty()) {
+            out << "void";
+        } else {
+            for (std::size_t i = 0; i < f.params.size(); ++i) {
+                out << cTypeName(f.params[i].type) << " " << f.params[i].name;
+                if (i + 1 < f.params.size()) out << ", ";
+            }
+        }
+        out << ");\n";
+    }
+
+    out << "\n#ifdef __cplusplus\n}\n#endif\n\n";
+    out << "#endif /* LOOM_GENERATED_H */\n";
+}
 } // namespace loom
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--version") {
-        std::cout << "loomc 1.1.0 (LLVM " << LLVM_VERSION_STRING << ")\n";
+        std::cout << "loomc 1.2.0 (LLVM " << LLVM_VERSION_STRING << ")\n";
         return 0;
     }
     bool nativeEntry = false, objectOutput = false, release = false, graphData = false;
@@ -5326,6 +6027,8 @@ int main(int argc, char** argv) {
     std::string targetCpu;
     std::string outputPath;
     std::string explicitSdkPath;
+    std::string emitCHeaderPath;
+    bool emitTestRunner = false;
     std::vector<std::string> inputs;
     std::vector<std::string> includeDirs;
     for (int i = 1; i < argc; ++i) {
@@ -5337,6 +6040,8 @@ int main(int argc, char** argv) {
         else if (arg == "--graph-data") graphData = true;
         else if (arg == "--check") checkOnly = true;
         else if (arg == "--baremetal") baremetal = true;
+        else if (arg == "--emit-c-header" && i + 1 < argc) { emitCHeaderPath = argv[++i]; }
+        else if (arg == "--test-runner") { emitTestRunner = true; }
         else if (arg == "--target" && i + 1 < argc) { targetTriple = argv[++i]; }
         else if (arg == "--cpu" && i + 1 < argc) { targetCpu = argv[++i]; }
         else if (arg == "--output" && i + 1 < argc) { namedOutput = true; outputPath = argv[++i]; }
@@ -5545,8 +6250,40 @@ int main(int argc, char** argv) {
         const auto& enums = parser.enums();
         const auto& records = parser.records();
         if (functions.empty()) throw loom::Error("source contains no Block declarations");
+        if (emitTestRunner) {
+            loom::Function testRunner;
+            testRunner.name = "Main";
+            testRunner.line = 1;
+            for (const auto& f : functions) {
+                if (f.isTest) {
+                    loom::Stmt callTest;
+                    callTest.kind = loom::Stmt::Kind::Call;
+                    callTest.line = f.line;
+                    auto callExpr = std::make_unique<loom::Expr>();
+                    callExpr->kind = loom::Expr::Kind::Call;
+                    callExpr->text = f.name;
+                    callTest.expr = std::move(callExpr);
+                    testRunner.body.push_back(std::move(callTest));
+
+                    loom::Stmt writePass;
+                    writePass.kind = loom::Stmt::Kind::Write;
+                    writePass.line = f.line;
+                    auto strLit = std::make_unique<loom::Expr>();
+                    strLit->kind = loom::Expr::Kind::String;
+                    strLit->text = "[PASS] \"" + f.testDescription + "\"";
+                    writePass.writeArgs.push_back(std::move(strLit));
+                    testRunner.body.push_back(std::move(writePass));
+                }
+            }
+            functions.push_back(std::move(testRunner));
+            nativeEntry = true;
+        }
         loom::Analyzer analyzer;
         analyzer.run(functions, globals, enums, records, parser.modules(), parser.imports(), parser.uses());
+        if (!emitCHeaderPath.empty()) {
+            loom::generateCHeader(emitCHeaderPath, functions, records, enums);
+            if (outputPath.empty() && !objectOutput && !nativeEntry && !emitTestRunner) return 0;
+        }
         if (checkOnly) {
             return 0;
         }
@@ -5556,7 +6293,7 @@ int main(int argc, char** argv) {
         }
         loom::OptReport report;
         report.enabled = optReport;
-        loom::Generator generator(inputs.front(), analyzer, release, &report);
+        loom::Generator generator(inputs.front(), analyzer, release, &report, baremetal);
         auto module = generator.run(functions, globals, records, nativeEntry);
         if (objectOutput) loom::writeObject(*module, outputPath, release, targetTriple, targetCpu, baremetal, &report);
         else loom::writeIR(*module, outputPath.empty() ? std::nullopt : std::optional<std::string>(outputPath), release, targetTriple, targetCpu, baremetal, &report);

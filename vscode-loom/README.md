@@ -12,7 +12,7 @@ Editor support for the implemented Loom syntax. The extension registers only the
 
 ## Compiler discovery
 
-`loom.compilerPath` selects the compiler. If unset, the extension checks `/usr/bin/loomc`, then workspace and parent `bin/loomc` locations, then `PATH`. `loom.toolPath` optionally selects the workspace tool; by default the extension checks `/usr/bin/loom`, project `bin/loom`, and `PATH`.
+`loom.compilerPath` selects the compiler. If unset, the extension selects native or RP2040 compiler paths from the workspace `config.toml` (or Loom's active default toolchain), then checks `~/.loom/toolchains/<name>/bin/loomc`, `/usr/local/share/loom/toolchains/<name>/bin/loomc`, `/usr/share/loom/toolchains/<name>/bin/loomc`, workspace `bin/loomc` locations, and finally `PATH`. `loom.toolPath` optionally selects the workspace tool; by default the extension checks `/usr/local/bin/loom`, Homebrew's `/opt/homebrew/bin/loom`, `/usr/bin/loom`, user/workspace locations, then `PATH`.
 
 The extension lint command compiles a temporary copy of the current file. Cross-file calls and globals therefore need whole-project validation with **Loom: Build Workspace**.
 
@@ -35,4 +35,4 @@ npm test
 npm run package
 ```
 
-This packages version 1.1.0 as `Loom-1.1.0.vsix` in this folder.
+This packages version 1.2.0 as `Loom-1.2.0.vsix` in this folder.

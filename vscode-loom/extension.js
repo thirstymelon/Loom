@@ -78,10 +78,56 @@ function activate(context) {
   context.subscriptions.push(diagnostics, output, status);
   status.show();
 
-  function compilerPath() {
+  function defaultToolchainKind() {
+    const candidates = [];
+    if (process.env.HOME) candidates.push(path.join(process.env.HOME, '.loom', 'default_toolchain'));
+    candidates.push('/usr/local/share/loom/default_toolchain', '/usr/share/loom/default_toolchain', '/opt/loom/default_toolchain');
+    for (const file of candidates) {
+      try {
+        const value = fs.readFileSync(file, 'utf8').trim().toLowerCase();
+        if (value === 'native' || value === 'rp2040') return value;
+      } catch (_) {}
+    }
+    return 'native';
+  }
+
+  function projectToolchainKind(document) {
+    const root = findWorkspaceRoot(document);
+    if (root) {
+      try {
+        const text = fs.readFileSync(path.join(root, 'config.toml'), 'utf8');
+        let section = '';
+        let target = '';
+        let cpu = '';
+        let selected = '';
+        for (const raw of text.split(/\r?\n/)) {
+          const line = raw.replace(/#.*/, '').trim();
+          const heading = /^\[([^\]]+)\]$/.exec(line);
+          if (heading) { section = heading[1].toLowerCase(); continue; }
+          const entry = /^([A-Za-z0-9_-]+)\s*=\s*"([^"]*)"/.exec(line);
+          if (!entry) continue;
+          const key = entry[1].toLowerCase();
+          if (section === 'build' && key === 'target') target = entry[2].toLowerCase();
+          if (section === 'build' && key === 'cpu') cpu = entry[2].toLowerCase();
+          if (section === 'toolchain' && (key === 'name' || key === 'toolchain')) selected = entry[2].toLowerCase();
+        }
+        if (selected === 'native' || selected === 'rp2040') return selected;
+        if (target.includes('thumbv6m') || cpu.includes('cortex-m0plus')) return 'rp2040';
+      } catch (_) {}
+    }
+    return defaultToolchainKind();
+  }
+
+  function compilerPath(document) {
     const configured = vscode.workspace.getConfiguration('loom').get('compilerPath', '').trim();
     if (configured) return configured;
-    const candidates = ['/usr/local/bin/loomc', '/usr/bin/loomc'];
+    const kind = projectToolchainKind(document);
+    const candidates = [];
+    if (process.env.HOME) candidates.push(path.join(process.env.HOME, '.loom', 'toolchains', kind, 'bin', 'loomc'));
+    for (const prefix of ['/usr/local/share/loom/toolchains', '/usr/share/loom/toolchains', '/opt/loom/toolchains']) {
+      candidates.push(path.join(prefix, kind, 'bin', 'loomc'));
+    }
+    candidates.push('/usr/local/bin/loomc', '/usr/bin/loomc');
     for (const folder of vscode.workspace.workspaceFolders || []) {
       let current = folder.uri.fsPath;
       for (let depth = 0; depth < 6; depth++) {
@@ -99,13 +145,21 @@ function activate(context) {
     return 'loomc';
   }
 
-  function findSdkPaths() {
+  function findSdkPaths(document) {
     const candidates = [];
     if (process.env.LOOM_SDK_PATH) candidates.push(process.env.LOOM_SDK_PATH);
     if (process.env.LOOM_SDK) candidates.push(process.env.LOOM_SDK);
     if (process.env.HOME) candidates.push(path.join(process.env.HOME, '.loom', 'sdk'));
     candidates.push('/usr/local/share/loom/sdk');
     candidates.push('/opt/loom/sdk');
+    const preferred = projectToolchainKind(document);
+    const kinds = [preferred, preferred === 'native' ? 'rp2040' : 'native'];
+    for (const kind of kinds) {
+      if (process.env.HOME) candidates.push(path.join(process.env.HOME, '.loom', 'toolchains', kind, 'sdk'));
+      for (const prefix of ['/usr/local/share/loom/toolchains', '/usr/share/loom/toolchains', '/opt/loom/toolchains']) {
+        candidates.push(path.join(prefix, kind, 'sdk'));
+      }
+    }
     for (const folder of vscode.workspace.workspaceFolders || []) {
       candidates.push(path.join(folder.uri.fsPath, 'sdk'));
     }
@@ -164,7 +218,7 @@ function activate(context) {
       }
 
       if (document.version !== version) { cleanup(); schedule(document); return; }
-      const executable = compilerPath();
+        const executable = compilerPath(document);
       const docDir = document.fileName ? path.dirname(document.fileName) : undefined;
       const root = findWorkspaceRoot(document);
       const cwd = root || docDir || (vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath) || process.cwd();
@@ -188,7 +242,7 @@ function activate(context) {
         const bspRoot = path.join(fPath, 'bsp');
         if (fs.existsSync(bspRoot)) args.push('-I', bspRoot);
       }
-      for (const sdkPath of findSdkPaths()) {
+      for (const sdkPath of findSdkPaths(document)) {
         args.push('-I', sdkPath);
       }
 
@@ -200,7 +254,7 @@ function activate(context) {
       proc.on('error', err => {
         if (processes.get(key) !== proc) return;
         processes.delete(key);
-        const message = `Cannot start loomc at '${executable}': ${err.message}. Set loom.compilerPath or install the compiler at /usr/bin/loomc.`;
+        const message = `Cannot start loomc at '${executable}': ${err.message}. Set loom.compilerPath or install the Loom toolchain for this project.`;
         const diagnostic = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), message, vscode.DiagnosticSeverity.Error);
         diagnostic.source = 'Loom';
         diagnostics.set(document.uri, [diagnostic]);
@@ -254,8 +308,9 @@ function activate(context) {
   function loomToolPath(root) {
     const configured = vscode.workspace.getConfiguration('loom').get('toolPath', '').trim();
     if (configured) return configured;
-    const selectedCompiler = compilerPath();
-    const candidates = ['/usr/bin/loom', path.join(path.dirname(selectedCompiler), 'loom'), path.join(root, 'bin', 'loom'), path.join(root, 'loom')];
+    const selectedCompiler = compilerPath(vscode.window.activeTextEditor?.document);
+    const candidates = ['/usr/local/bin/loom', '/opt/homebrew/bin/loom', '/usr/bin/loom', path.join(path.dirname(selectedCompiler), 'loom'), path.join(root, 'bin', 'loom'), path.join(root, 'loom')];
+    if (process.env.HOME) candidates.push(path.join(process.env.HOME, '.loom', 'bin', 'loom'));
     let current = root;
     for (let depth = 0; depth < 6; depth++) {
       candidates.push(path.join(current, 'bin', 'loom'));
@@ -367,6 +422,8 @@ function activate(context) {
     vscode.commands.registerCommand('loom.build', () => runWorkspaceCommand('build')),
     vscode.commands.registerCommand('loom.clean', () => runWorkspaceCommand('clean')),
     vscode.commands.registerCommand('loom.run', () => runWorkspaceCommand('run')),
+    vscode.commands.registerCommand('loom.test', () => runWorkspaceCommand('test')),
+    vscode.commands.registerCommand('loom.fetch', () => runWorkspaceCommand('fetch')),
     vscode.commands.registerCommand('loom.showDependencyGraph', openDependencyGraph),
     vscode.languages.registerDocumentFormattingEditProvider('loom', {
       provideDocumentFormattingEdits(document, options) {
@@ -511,8 +568,14 @@ function activate(context) {
           pointer:'`T Pointer` represents a typed raw memory pointer to type `T`.',
           slice:'`T Slice` represents a fat-pointer slice view containing a data pointer and 64-bit length (`Slice(Arr)`).',
           array:'`T Array[N]` represents a contiguous fixed-size array of `N` elements on stack or global storage.',
-          ensure:'`Ensure { statement }` registers one cleanup statement to execute in LIFO order upon scope exit.',
-          cast:'`Cast[Target_Type](Expression)` explicitly converts between types with compile-time narrowing warnings.',
+          ensure:'`Ensure { ... }` registers a single multi-line cleanup block that is guaranteed to execute upon block exit.',
+          as:'`expr as Type` performs an explicit type conversion with compile-time safety and range checks.',
+          try:'`try expr` unwinds on error, returning the error to the caller while executing active `Ensure` cleanup.',
+          or:'`Produces T or ErrorType` declares an error union return type.',
+          test:'`Test "description" ... End Test` defines an executable unit or integration test block executed by `loom test`.',
+          volatile:'`Volatile Type` qualifies a variable or field for atomic/volatile hardware load and store instructions without register caching.',
+          packed:'`Packed Record Align N` defines a byte-aligned packed memory layout with zero implicit padding.',
+          cast:'`expr as Target_Type` or constructor-style `Target_Type(expr)` explicitly converts between types.',
           null:'`Null` is the typed null pointer literal compatible with all pointer types.',
           extern:'`Extern Block Name ... End Name` declares an external C ABI function without a body.',
           import:'`Import ModuleName` automatically resolves and includes an external Loom file.',

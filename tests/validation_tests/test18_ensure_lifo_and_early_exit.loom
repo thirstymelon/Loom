@@ -9,8 +9,10 @@ End Produce
 
 Block Main
     Implements
-        Ensure { Write(1) }
-        Ensure { Write(2) }
+        Ensure {
+            Write(2)
+            Write(1)
+        }
         Write(3)
         Write(Produce())
 End Main

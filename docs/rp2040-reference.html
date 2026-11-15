@@ -1,0 +1,474 @@
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>RP2040 BSP handbook · Loom 1.2.0</title><link rel=stylesheet href="styles.css"><link rel="icon" type="image/png" href="assets/logo.png"></head><body data-r=""><header><div class=w><a class=brand href="index.html"><img src="assets/logo.png" alt="Loom"><span>Loom<i>.</i><sup>1.2.0</sup></span></a><nav><a href="getting-started.html">Start</a><a href="tutorials/index.html">Tutorials</a><a href="developer-overview.html">Developer</a><a href="rp2040-reference.html" class=on>RP2040 BSP</a><a href="reference.html">Reference</a></nav><button class=sb id=sk>Search <kbd>Ctrl K</kbd></button><button class=mb id=mb aria-label=Menu>≡</button></div></header><div class="w doc"><article><p class="eb">Developer · RP2040 BSP</p><h1>RP2040, one block at a time.</h1><p class="lead">Start with the guided examples, then open any function to see its exact Loom signature and a call drawn from the compile-checked walkthrough. This handbook covers all public blocks in the 16 RP2040 BSP modules.</p><div class="note"><p><b>Choose your path.</b> New to Loom? Begin with <a href="embedded-rp2040.html#blink-firmware">the blink tutorial</a>. Building a driver? Use this page as the function-by-function reference. The examples are compile checks; they do not prove MMIO behavior on a physical board.</p></div><h2 id="failure-behavior">Setup, handles, and failures</h2><p>Call <code>RP2040_Init()</code> before using peripherals that depend on the Pico clock tree. It configures the reference board's 12 MHz crystal and 125 MHz system/peripheral clocks. GPIO and bus pin assignments must match the board wiring; I²C also needs suitable external SDA/SCL pull-ups.</p><p><code>I2C_Init(SDA, SCL)</code> returns an <code>I2C_Handle</code>; <code>SPI_Init(SCK, MOSI, MISO)</code> returns an <code>SPI_Handle</code>. Pass that value to every operation or library initializer that uses the bus. I²C defaults to 100 kHz; SPI defaults to 1 MHz, eight-bit words, mode 0. Device libraries retain the handle they receive, so initializing a second controller does not silently change the first device's bus.</p><p>I²C, SPI, UART, GPIO, SSD1306, and MPU6050 operational failures are handled inside the call: each records a diagnostic code/message and stops at the failure. Inspect the matching <code>*_Last_Error_Message</code> and <code>*_Last_Error_Code</code> globals in a debugger. These messages are not currently emitted to UART. ADC, PWM, DMA, and several lower-level BSP modules retain their documented status/sentinel behavior.</p><h3>Before testing on a board</h3><ol><li>Confirm the exact RP2040 board, crystal frequency, power, ground, and logic voltage.</li><li>Check the selected UART/SPI/I²C GPIO function mapping against the board wiring and the RP2040 datasheet.</li><li>For I²C, confirm the 7-bit device address and suitable external SDA/SCL pull-ups.</li><li>Use a logic analyzer or oscilloscope to verify baud rate, SPI mode/clock, I²C START/repeated-START/STOP, and NACK handling under both normal and disconnected-device conditions.</li></ol><p>Repository checks compile Loom examples only. They do not execute MMIO or claim hardware timing/electrical validation.</p><h2 id="quick-map">Pick a peripheral</h2><div class="grid"><a class="card" href="#mod-adc"><small>RP2040 BSP</small><b>Analog input</b><span>Read analog voltage from GPIO26–29 or use the on-chip temperature sensor.</span></a><a class="card" href="#mod-clock"><small>RP2040 BSP</small><b>Clock setup</b><span>Start the standard Pico reference-board clock tree from its 12 MHz crystal.</span></a><a class="card" href="#mod-dma"><small>RP2040 BSP</small><b>Direct memory access</b><span>Move data between addresses without copying each word in the CPU loop.</span></a><a class="card" href="#mod-gpio"><small>RP2040 BSP</small><b>Digital pins</b><span>Set a pin to input or output, then read, write, or toggle its level.</span></a><a class="card" href="#mod-i2c"><small>RP2040 BSP</small><b>I²C bus</b><span>Connect to 7-bit devices using supported SDA/SCL pairs. The beginner API defaults to 100 kHz.</span></a><a class="card" href="#mod-interp"><small>RP2040 BSP</small><b>Hardware interpolators</b><span>Use RP2040 SIO arithmetic lanes for fixed-point shifts, masks, and accumulation.</span></a><a class="card" href="#mod-multicore"><small>RP2040 BSP</small><b>Two-core tools</b><span>Inspect core identity, use hardware spinlocks, and exchange FIFO words between cores.</span></a><a class="card" href="#mod-pio"><small>RP2040 BSP</small><b>Programmable I/O</b><span>Load PIO instructions and control a state machine and its FIFOs.</span></a><a class="card" href="#mod-pwm"><small>RP2040 BSP</small><b>PWM outputs</b><span>Set the slice divider and wrap value, then write a duty percentage or raw level.</span></a><a class="card" href="#mod-rp2040"><small>RP2040 BSP</small><b>Board startup</b><span>Initialize standard Pico clocks and release the timer and GPIO peripheral resets.</span></a><a class="card" href="#mod-rtc"><small>RP2040 BSP</small><b>Real-time clock</b><span>Set and read calendar date and time fields.</span></a><a class="card" href="#mod-spi"><small>RP2040 BSP</small><b>SPI bus</b><span>Create an SPI handle from the selected pins and exchange bytes or equal-length buffers.</span></a><a class="card" href="#mod-system"><small>RP2040 BSP</small><b>Reset and chip information</b><span>Manage peripheral reset state and read basic silicon identifiers.</span></a><a class="card" href="#mod-time"><small>RP2040 BSP</small><b>Timers and delays</b><span>Read the microsecond timer, delay, and use the four hardware alarm registers.</span></a><a class="card" href="#mod-uart"><small>RP2040 BSP</small><b>Serial communication</b><span>Configure UART0/UART1 and send or receive characters and strings.</span></a><a class="card" href="#mod-watchdog"><small>RP2040 BSP</small><b>Watchdog timer</b><span>Arm and feed the watchdog, retain scratch values, or request a reboot.</span></a></div><h2 id="how-to-read">How to use this handbook</h2><ol><li>Import a module and add <code>use Module</code> to make its blocks available.</li><li>Open a function name to read its signature and jump to its full module walkthrough.</li><li>Compile the example for the RP2040 target. Before connecting a device, check pin mapping, voltage, pull-ups, and the device datasheet.</li></ol><p>Values and constants are shown in each module's compiling fixture. Setup functions should be called before the peripheral is used. Blocking functions may wait for hardware; use them only after the peripheral and wiring are ready.</p><section class="bsp-module" id="mod-adc">
+<h2 id="title-adc">Analog input</h2>
+<p>Read analog voltage from GPIO26–29 or use the on-chip temperature sensor.</p>
+<h3>ADC API</h3><details class="api"><summary><code>ADC_Init()</code></summary><div><p>Call this block after importing and using <code>ADC</code>.</p><pre class="raw"><code>ADC_Init()</code></pre></div></details><details class="api"><summary><code>ADC_Select_Input(Channel: Signed_64)</code></summary><div><p>Call this block after importing and using <code>ADC</code>.</p><pre class="raw"><code>ADC_Select_Input(ADC_GPIO_26)</code></pre></div></details><details class="api"><summary><code>ADC_Init_Pin(Pin: Signed_64)</code></summary><div><p>Call this block after importing and using <code>ADC</code>.</p><pre class="raw"><code>ADC_Init_Pin(26)</code></pre></div></details><details class="api"><summary><code>Read_ADC_Raw(Channel: Signed_64) → Signed_64</code></summary><div><p>Check the documented sentinel before using this value; see <a href="#failure-behavior">failure behavior</a>.</p><pre class="raw"><code>Raw = Read_ADC_Raw(ADC_GPIO_26)
+RP2040.Check(Raw &gt;= 0)</code></pre></div></details><details class="api"><summary><code>Read_ADC_Millivolts(Channel: Signed_64) → Signed_64</code></summary><div><p>Check the documented sentinel before using this value; see <a href="#failure-behavior">failure behavior</a>.</p><pre class="raw"><code>Mv = Read_ADC_Millivolts(ADC_GPIO_26)
+RP2040.Check(Mv &gt;= 0)</code></pre></div></details><details class="api"><summary><code>Read_Temperature_Celsius() → Signed_64</code></summary><div><p>Check the documented sentinel before using this value; see <a href="#failure-behavior">failure behavior</a>.</p><pre class="raw"><code>TempC = Read_Temperature_Celsius()
+RP2040.Check(TempC != ADC_ERROR)</code></pre></div></details><details class="api"><summary><code>Read_Temperature_Millicelsius() → Signed_64</code></summary><div><p>Check the documented sentinel before using this value; see <a href="#failure-behavior">failure behavior</a>.</p><pre class="raw"><code>TempMC = Read_Temperature_Millicelsius()
+RP2040.Check(TempMC != ADC_ERROR)</code></pre></div></details><h3>Complete ADC walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestADC
+Import ADC
+Import RP2040
+use ADC
+Block Read_ADC_Demo Produces Boolean
+Declares
+    Raw : Signed_64
+    Mv : Signed_64
+    TempC : Signed_64
+    TempMC : Signed_64
+Implements
+    ADC_Init()
+    ADC_Init_Pin(26)
+    ADC_Select_Input(ADC_GPIO_26)
+    Raw = Read_ADC_Raw(ADC_GPIO_26)
+    If (Raw &lt; 0)
+        Give False
+    End If
+    Mv = Read_ADC_Millivolts(ADC_GPIO_26)
+    If (Mv &lt; 0)
+        Give False
+    End If
+    TempC = Read_Temperature_Celsius()
+    If (TempC == ADC_ERROR)
+        Give False
+    End If
+    TempMC = Read_Temperature_Millicelsius()
+    Give (TempMC != ADC_ERROR)
+End Read_ADC_Demo
+Block Main Implements
+    RP2040.Check(Read_ADC_Demo())
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-clock">
+<h2 id="title-clock">Clock setup</h2>
+<p>Start the standard Pico reference-board clock tree from its 12 MHz crystal.</p>
+<h3>CLOCK API</h3><details class="api"><summary><code>Clock_Init() → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(Clock_Init())</code></pre></div></details><h3>Complete CLOCK walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestClock
+Import Clock
+Import RP2040
+use Clock
+Block Main Declares
+Implements
+    RP2040.Check(Clock_Init())
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-dma">
+<h2 id="title-dma">Direct memory access</h2>
+<p>Move data between addresses without copying each word in the CPU loop.</p>
+<h3>DMA API</h3><details class="api"><summary><code>DMA_Init()</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>DMA_Init()</code></pre></div></details><details class="api"><summary><code>DMA_Channel_Index(Chan: Signed_64) → Signed_64</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>Index = DMA_Channel_Index(0)</code></pre></div></details><details class="api"><summary><code>DMA_Channel_Base(Chan: Signed_64) → Signed_64</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>Base = DMA_Channel_Base(0)</code></pre></div></details><details class="api"><summary><code>DMA_Channel_Configure(Chan: Signed_64, Read_Addr: Signed_64, Write_Addr: Signed_64, Transfer_Count: Signed_64, Data_Size: Signed_64, Inc_Read: Boolean, Inc_Write: Boolean, Treq: Signed_64, Chain_To: Signed_64)</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>DMA_Channel_Configure(0, 0x20000000, 0x20000010, 4, DMA_SIZE_32, True, True, DREQ_UNPACED, 0)</code></pre></div></details><details class="api"><summary><code>DMA_Channel_Set_Read_Addr(Chan: Signed_64, Read_Addr: Signed_64)</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>DMA_Channel_Set_Read_Addr(0, 0x20000000)</code></pre></div></details><details class="api"><summary><code>DMA_Channel_Set_Write_Addr(Chan: Signed_64, Write_Addr: Signed_64)</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>DMA_Channel_Set_Write_Addr(0, 0x20000010)</code></pre></div></details><details class="api"><summary><code>DMA_Channel_Set_Trans_Count(Chan: Signed_64, Transfer_Count: Signed_64)</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>DMA_Channel_Set_Trans_Count(0, 4)</code></pre></div></details><details class="api"><summary><code>DMA_Channel_Start(Chan: Signed_64)</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>DMA_Channel_Start(0)</code></pre></div></details><details class="api"><summary><code>DMA_Start_Multi_Channel(Mask: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>DMA_Start_Multi_Channel(1)</code></pre></div></details><details class="api"><summary><code>DMA_Channel_Is_Busy(Chan: Signed_64) → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(DMA_Channel_Is_Busy(0))</code></pre></div></details><details class="api"><summary><code>DMA_Channel_Wait_Blocking(Chan: Signed_64)</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>DMA_Channel_Wait_Blocking(0)</code></pre></div></details><details class="api"><summary><code>DMA_Channel_Abort(Chan: Signed_64)</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>DMA_Channel_Abort(0)</code></pre></div></details><details class="api"><summary><code>DMA_Memcpy_32(Dest_Addr: Signed_64, Src_Addr: Signed_64, Word_Count: Signed_64)</code></summary><div><p>Call this block after importing and using <code>DMA</code>.</p><pre class="raw"><code>DMA_Memcpy_32(Cast[Signed_64](Address(Dst[1])), Cast[Signed_64](Address(Src[1])), 4)</code></pre></div></details><h3>Complete DMA walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestDMA
+Import DMA
+use DMA
+Block Main Declares
+    Busy : Boolean
+    Index : Signed_64
+    Base : Signed_64
+    Src : Unsigned_32 Array[4]
+    Dst : Unsigned_32 Array[4]
+Implements
+    DMA_Init()
+    Index = DMA_Channel_Index(0)
+    Base = DMA_Channel_Base(0)
+    DMA_Channel_Configure(0, 0x20000000, 0x20000010, 4, DMA_SIZE_32, True, True, DREQ_UNPACED, 0)
+    DMA_Channel_Set_Read_Addr(0, 0x20000000)
+    DMA_Channel_Set_Write_Addr(0, 0x20000010)
+    DMA_Channel_Set_Trans_Count(0, 4)
+    DMA_Start_Multi_Channel(1)
+    DMA_Channel_Start(0)
+    Busy = DMA_Channel_Is_Busy(0)
+    DMA_Channel_Wait_Blocking(0)
+    DMA_Channel_Abort(0)
+    Src[1] = 100
+    DMA_Memcpy_32(Cast[Signed_64](Address(Dst[1])), Cast[Signed_64](Address(Src[1])), 4)
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-gpio">
+<h2 id="title-gpio">Digital pins</h2>
+<p>Set a pin to input or output, then read, write, or toggle its level.</p>
+<h3>GPIO API</h3><details class="api"><summary><code>GPIO_Is_Valid_Pin(Pin: Signed_64) → Boolean</code></summary><div><p>A non-failing predicate for checking whether the pin number is in range.</p><pre class="raw"><code>Valid = GPIO_Is_Valid_Pin(25)</code></pre></div></details><details class="api"><summary><code>GPIO_Init_Input(Pin: Signed_64, Pull: Signed_64)</code></summary><div><p>Configures an input with <code>GPIO_PULL_NONE</code>, <code>GPIO_PULL_UP</code>, or <code>GPIO_PULL_DOWN</code>. Invalid settings record a diagnostic and stop.</p><pre class="raw"><code>GPIO_Init_Input(24, GPIO_PULL_UP)</code></pre></div></details><details class="api"><summary><code>GPIO_Init_Output(Pin: Signed_64, Initial_High: Boolean)</code></summary><div><p>Configures output and its initial level. Invalid pins record a diagnostic and stop.</p><pre class="raw"><code>GPIO_Init_Output(25, False)</code></pre></div></details><details class="api"><summary><code>GPIO_Write(Pin: Signed_64, Value: Boolean)</code></summary><div><p>Writes the output level. Invalid pins record a diagnostic and stop.</p><pre class="raw"><code>GPIO_Write(25, True)</code></pre></div></details><details class="api"><summary><code>GPIO_Read(Pin: Signed_64) → Signed_64</code></summary><div><p>Returns the current digital level as 0 or 1.</p><pre class="raw"><code>State = GPIO_Read(24)</code></pre></div></details><details class="api"><summary><code>GPIO_Toggle(Pin: Signed_64)</code></summary><div><p>Toggles a configured output. Invalid pins record a diagnostic and stop.</p><pre class="raw"><code>GPIO_Toggle(25)</code></pre></div></details><details class="api"><summary><code>GPIO_Set_Pull(Pin: Signed_64, Pull: Signed_64)</code></summary><div><p>Changes an input pull configuration.</p><pre class="raw"><code>GPIO_Set_Pull(24, GPIO_PULL_DOWN)</code></pre></div></details><details class="api"><summary><code>GPIO_Enable_Interrupt(Pin: Signed_64, Events: Signed_64)</code></summary><div><p>Enables selected edge/level events; combine event constants with bitwise OR.</p><pre class="raw"><code>GPIO_Enable_Interrupt(25, GPIO_IRQ_EDGE_RISE)</code></pre></div></details><details class="api"><summary><code>GPIO_Interrupt_Status(Pin: Signed_64) → Signed_64</code></summary><div><p>Returns the pending event mask for this pin.</p><pre class="raw"><code>State = GPIO_Interrupt_Status(25)</code></pre></div></details><details class="api"><summary><code>GPIO_Clear_Interrupt(Pin: Signed_64, Events: Signed_64)</code></summary><div><p>Clears the selected pending events.</p><pre class="raw"><code>GPIO_Clear_Interrupt(25, GPIO_IRQ_EDGE_RISE)</code></pre></div></details><h3>Complete GPIO walkthrough</h3><p>This compact workflow is compile-checked; it does not run on hardware.</p><pre><code>Module TestGPIO
+Import GPIO
+Import RP2040
+use GPIO
+Block Run_GPIO_Demo Produces Boolean
+Declares
+    State : Signed_64
+Implements
+    If (GPIO_Is_Valid_Pin(25) == False)
+        Give False
+    End If
+    GPIO_Init_Output(25, False)
+    GPIO_Write(25, True)
+    GPIO_Toggle(25)
+    GPIO_Init_Input(24, GPIO_PULL_UP)
+    If (GPIO_Read(24) == 1)
+        GPIO_Set_Pull(24, GPIO_PULL_DOWN)
+    End If
+    GPIO_Enable_Interrupt(25, GPIO_IRQ_EDGE_RISE)
+    State = GPIO_Interrupt_Status(25)
+    GPIO_Clear_Interrupt(25, GPIO_IRQ_EDGE_RISE)
+    Give True
+End Run_GPIO_Demo
+Block Main Implements
+    RP2040.Check(Run_GPIO_Demo())
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-i2c">
+<h2 id="title-i2c">I²C bus</h2>
+<p>Choose the SDA and SCL pins. Loom selects the matching RP2040 controller and configures the beginner default speed of 100 kHz.</p>
+<h3>Simple I²C API</h3>
+<details class="api"><summary><code>I2C_Init(SDA_Pin: Signed_64, SCL_Pin: Signed_64) → I2C_Handle</code></summary><div><p>Initializes the matching controller with a 100 kHz default and returns a typed bus handle. Keep the handle and pass it to device-library initializers.</p><pre class="raw"><code>Device_I2C = I2C_Init(4, 5)</code></pre></div></details>
+<details class="api"><summary><code>I2C_Write(Handle: I2C_Handle, Device_Address: Signed_64, Bytes: Unsigned_8 Slice)</code></summary><div><p>Sends a byte slice to a 7-bit device address. Errors are retained in the I²C diagnostic globals and stop at the failed operation.</p><pre class="raw"><code>I2C_Write(Device_I2C, 0x68, Slice(Bytes))</code></pre></div></details>
+<details class="api"><summary><code>I2C_Read(Handle: I2C_Handle, Device_Address: Signed_64, Bytes: Unsigned_8 Slice)</code></summary><div><p>Reads into the provided byte slice using the supplied bus handle.</p><pre class="raw"><code>I2C_Read(Device_I2C, 0x68, Slice(Bytes))</code></pre></div></details>
+<details class="api"><summary><code>I2C_Write_Register(Handle: I2C_Handle, Device_Address: Signed_64, Register_Index: Signed_64, Value: Signed_64)</code></summary><div><p>Writes one byte to a device register.</p><pre class="raw"><code>I2C_Write_Register(Device_I2C, 0x68, 0x6B, 0x00)</code></pre></div></details>
+<details class="api"><summary><code>I2C_Read_Register(Handle: I2C_Handle, Device_Address: Signed_64, Register_Index: Signed_64) → Signed_64</code></summary><div><p>Reads one register byte. Transport failures are handled internally; the returned integer is register data.</p><pre class="raw"><code>Value = I2C_Read_Register(Device_I2C, 0x68, 0x75)</code></pre></div></details>
+<details class="api"><summary><code>I2C_Read_Register_Block(Handle: I2C_Handle, Device_Address: Signed_64, Start_Register: Signed_64, Bytes: Unsigned_8 Slice)</code></summary><div><p>Reads a consecutive register range in one transaction: a pointer write without STOP, a repeated START, then a read ending with STOP. An empty slice performs no bus operation.</p><pre class="raw"><code>I2C_Read_Register_Block(Device_I2C, 0x68, 0x3B, Slice(Bytes))</code></pre></div></details>
+<h3>Example</h3><pre><code>Module Read_Device
+Import RP2040
+Import I2C
+use RP2040
+use I2C
+Block Main Declares
+    Device_I2C : I2C_Handle
+    Value : Signed_64
+    Bytes : Unsigned_8 Array[2]
+Implements
+    RP2040_Init()
+    Device_I2C = I2C_Init(4, 5)
+    I2C_Write_Register(Device_I2C, 0x68, 0x6B, 0x00)
+    Value = I2C_Read_Register(Device_I2C, 0x68, 0x75)
+    Bytes[1] = 0x1A
+    Bytes[2] = 0x03
+    I2C_Write(Device_I2C, 0x68, Slice(Bytes))
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-interp">
+<h2 id="title-interp">Hardware interpolators</h2>
+<p>Use RP2040 SIO arithmetic lanes for fixed-point shifts, masks, and accumulation.</p>
+<h3>INTERP API</h3><details class="api"><summary><code>Interp_Base_Address(Interp_Idx: Signed_64) → Signed_64</code></summary><div><p>Call this block after importing and using <code>INTERP</code>.</p><pre class="raw"><code>Base = Interp_Base_Address(INTERP_0)</code></pre></div></details><details class="api"><summary><code>Interp_Set_Accum(Interp_Idx: Signed_64, Lane: Signed_64, Value: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>INTERP</code>.</p><pre class="raw"><code>Interp_Set_Accum(INTERP_0, LANE_0, 0)</code></pre></div></details><details class="api"><summary><code>Interp_Set_Base(Interp_Idx: Signed_64, Lane: Signed_64, Value: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>INTERP</code>.</p><pre class="raw"><code>Interp_Set_Base(INTERP_0, LANE_0, 100)</code></pre></div></details><details class="api"><summary><code>Interp_Set_Base_2(Interp_Idx: Signed_64, Value: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>INTERP</code>.</p><pre class="raw"><code>Interp_Set_Base_2(INTERP_0, 200)</code></pre></div></details><details class="api"><summary><code>Interp_Set_Base_1And0(Interp_Idx: Signed_64, Base0_16: Signed_64, Base1_16: Signed_64)</code></summary><div><p>Call this block after importing and using <code>INTERP</code>.</p><pre class="raw"><code>Interp_Set_Base_1And0(INTERP_0, 0x1234, 0x5678)</code></pre></div></details><details class="api"><summary><code>Interp_Add_Accum(Interp_Idx: Signed_64, Lane: Signed_64, Value: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>INTERP</code>.</p><pre class="raw"><code>Interp_Add_Accum(INTERP_0, LANE_0, 10)</code></pre></div></details><details class="api"><summary><code>Interp_Set_Config(Interp_Idx: Signed_64, Lane: Signed_64, Shift: Signed_64, Mask_Lsb: Signed_64, Mask_Msb: Signed_64, Signed_Flag: Boolean, Clamp_Flag: Boolean)</code></summary><div><p>Call this block after importing and using <code>INTERP</code>.</p><pre class="raw"><code>Interp_Set_Config(INTERP_0, LANE_0, 0, 0, 31, False, False)</code></pre></div></details><details class="api"><summary><code>Interp_Peek_Result(Interp_Idx: Signed_64, Lane: Signed_64) → Unsigned_32</code></summary><div><p>Call this block after importing and using <code>INTERP</code>.</p><pre class="raw"><code>Res = Interp_Peek_Result(INTERP_0, LANE_0)</code></pre></div></details><details class="api"><summary><code>Interp_Pop_Result(Interp_Idx: Signed_64, Lane: Signed_64) → Unsigned_32</code></summary><div><p>Call this block after importing and using <code>INTERP</code>.</p><pre class="raw"><code>Res = Interp_Pop_Result(INTERP_0, LANE_0)</code></pre></div></details><details class="api"><summary><code>Interp_Peek_Combined(Interp_Idx: Signed_64) → Unsigned_32</code></summary><div><p>Call this block after importing and using <code>INTERP</code>.</p><pre class="raw"><code>Comb = Interp_Peek_Combined(INTERP_0)</code></pre></div></details><details class="api"><summary><code>Interp_Pop_Combined(Interp_Idx: Signed_64) → Unsigned_32</code></summary><div><p>Call this block after importing and using <code>INTERP</code>.</p><pre class="raw"><code>Comb = Interp_Pop_Combined(INTERP_0)</code></pre></div></details><h3>Complete INTERP walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestInterp
+Import Interp
+use Interp
+Block Main Declares
+    Res : Unsigned_32
+    Comb : Unsigned_32
+    Base : Signed_64
+Implements
+    Base = Interp_Base_Address(INTERP_0)
+    Interp_Set_Accum(INTERP_0, LANE_0, 0)
+    Interp_Add_Accum(INTERP_0, LANE_0, 10)
+    Interp_Set_Base(INTERP_0, LANE_0, 100)
+    Interp_Set_Base_2(INTERP_0, 200)
+    Interp_Set_Base_1And0(INTERP_0, 0x1234, 0x5678)
+    Interp_Set_Config(INTERP_0, LANE_0, 0, 0, 31, False, False)
+    Res = Interp_Peek_Result(INTERP_0, LANE_0)
+    Res = Interp_Pop_Result(INTERP_0, LANE_0)
+    Comb = Interp_Peek_Combined(INTERP_0)
+    Comb = Interp_Pop_Combined(INTERP_0)
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-multicore">
+<h2 id="title-multicore">Two-core tools</h2>
+<p>Inspect core identity, use hardware spinlocks, and exchange FIFO words between cores.</p>
+<h3>MULTICORE API</h3><details class="api"><summary><code>Get_Core_Num() → Signed_64</code></summary><div><p>Call this block after importing and using <code>MULTICORE</code>.</p><pre class="raw"><code>CoreId = Get_Core_Num()</code></pre></div></details><details class="api"><summary><code>Spinlock_Try_Claim(Lock_Idx: Signed_64) → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(Spinlock_Try_Claim(0))</code></pre></div></details><details class="api"><summary><code>Spinlock_Claim(Lock_Idx: Signed_64)</code></summary><div><p>Call this block after importing and using <code>MULTICORE</code>.</p><pre class="raw"><code>Spinlock_Claim(1)</code></pre></div></details><details class="api"><summary><code>Spinlock_Release(Lock_Idx: Signed_64)</code></summary><div><p>Call this block after importing and using <code>MULTICORE</code>.</p><pre class="raw"><code>Spinlock_Release(0)</code></pre></div></details><details class="api"><summary><code>Multicore_FIFO_Is_Ready() → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(Multicore_FIFO_Is_Ready())</code></pre></div></details><details class="api"><summary><code>Multicore_FIFO_Has_Data() → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(Multicore_FIFO_Has_Data())</code></pre></div></details><details class="api"><summary><code>Multicore_FIFO_Push_Blocking(Data: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>MULTICORE</code>.</p><pre class="raw"><code>Multicore_FIFO_Push_Blocking(0x1234)</code></pre></div></details><details class="api"><summary><code>Multicore_FIFO_Pop_Blocking() → Unsigned_32</code></summary><div><p>Call this block after importing and using <code>MULTICORE</code>.</p><pre class="raw"><code>Msg = Multicore_FIFO_Pop_Blocking()</code></pre></div></details><details class="api"><summary><code>Multicore_FIFO_Drain()</code></summary><div><p>Call this block after importing and using <code>MULTICORE</code>.</p><pre class="raw"><code>Multicore_FIFO_Drain()</code></pre></div></details><details class="api"><summary><code>Multicore_Launch_Core1(Entry_Function_Addr: Signed_64, Stack_Pointer: Signed_64, Vector_Table_Addr: Signed_64)</code></summary><div><p>Call this block after importing and using <code>MULTICORE</code>.</p><pre class="raw"><code>Multicore_Launch_Core1(0, 0, 0)</code></pre></div></details><h3>Complete MULTICORE walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestMulticore
+Import Multicore
+use Multicore
+Block Main Declares
+    CoreId : Signed_64
+    Locked : Boolean
+    Ready : Boolean
+    HasData : Boolean
+    Msg : Unsigned_32
+Implements
+    CoreId = Get_Core_Num()
+    Locked = Spinlock_Try_Claim(0)
+    If (Locked == True)
+        Spinlock_Release(0)
+    End If
+    Spinlock_Claim(1)
+    Spinlock_Release(1)
+    Ready = Multicore_FIFO_Is_Ready()
+    HasData = Multicore_FIFO_Has_Data()
+    Multicore_FIFO_Push_Blocking(0x1234)
+    Msg = Multicore_FIFO_Pop_Blocking()
+    Multicore_FIFO_Drain()
+    Multicore_Launch_Core1(0, 0, 0)
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-pio">
+<h2 id="title-pio">Programmable I/O</h2>
+<p>Load PIO instructions and control a state machine and its FIFOs.</p>
+<h3>PIO API</h3><details class="api"><summary><code>PIO_Base_Address(Pio_Idx: Signed_64) → Signed_64</code></summary><div><p>Call this block after importing and using <code>PIO</code>.</p><pre class="raw"><code>Base = PIO_Base_Address(PIO_0)</code></pre></div></details><details class="api"><summary><code>PIO_Init(Pio_Idx: Signed_64)</code></summary><div><p>Call this block after importing and using <code>PIO</code>.</p><pre class="raw"><code>PIO_Init(PIO_0)</code></pre></div></details><details class="api"><summary><code>PIO_Load_Instruction(Pio_Idx: Signed_64, Slot: Signed_64, Instruction: Unsigned_16)</code></summary><div><p>Call this block after importing and using <code>PIO</code>.</p><pre class="raw"><code>PIO_Load_Instruction(PIO_0, 0, PIO_INSTR_NOP)</code></pre></div></details><details class="api"><summary><code>PIO_Load_Program(Pio_Idx: Signed_64, Start_Slot: Signed_64, Program: Unsigned_16 Slice)</code></summary><div><p>Call this block after importing and using <code>PIO</code>.</p><pre class="raw"><code>PIO_Load_Program(PIO_0, 0, Slice(Prog))</code></pre></div></details><details class="api"><summary><code>PIO_SM_Base(Pio_Idx: Signed_64, Sm_Idx: Signed_64) → Signed_64</code></summary><div><p>Call this block after importing and using <code>PIO</code>.</p><pre class="raw"><code>Base = PIO_SM_Base(PIO_0, 0)</code></pre></div></details><details class="api"><summary><code>PIO_SM_Set_Clock_Div(Pio_Idx: Signed_64, Sm_Idx: Signed_64, Int_Div: Signed_64, Frac_Div: Signed_64)</code></summary><div><p>Call this block after importing and using <code>PIO</code>.</p><pre class="raw"><code>PIO_SM_Set_Clock_Div(PIO_0, 0, 4, 0)</code></pre></div></details><details class="api"><summary><code>PIO_SM_Init(Pio_Idx: Signed_64, Sm_Idx: Signed_64, Initial_PC: Signed_64, Pin_Base: Signed_64, Pin_Count: Signed_64)</code></summary><div><p>Call this block after importing and using <code>PIO</code>.</p><pre class="raw"><code>PIO_SM_Init(PIO_0, 0, 0, 16, 1)</code></pre></div></details><details class="api"><summary><code>PIO_SM_Set_Enabled(Pio_Idx: Signed_64, Sm_Idx: Signed_64, Enabled: Boolean)</code></summary><div><p>Call this block after importing and using <code>PIO</code>.</p><pre class="raw"><code>PIO_SM_Set_Enabled(PIO_0, 0, True)</code></pre></div></details><details class="api"><summary><code>PIO_SM_Is_TX_Full(Pio_Idx: Signed_64, Sm_Idx: Signed_64) → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(PIO_SM_Is_TX_Full(PIO_0, 0))</code></pre></div></details><details class="api"><summary><code>PIO_SM_Is_RX_Empty(Pio_Idx: Signed_64, Sm_Idx: Signed_64) → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(PIO_SM_Is_RX_Empty(PIO_0, 0))</code></pre></div></details><details class="api"><summary><code>PIO_SM_Put_Blocking(Pio_Idx: Signed_64, Sm_Idx: Signed_64, Data: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>PIO</code>.</p><pre class="raw"><code>PIO_SM_Put_Blocking(PIO_0, 0, 0x55)</code></pre></div></details><details class="api"><summary><code>PIO_SM_Get_Blocking(Pio_Idx: Signed_64, Sm_Idx: Signed_64) → Unsigned_32</code></summary><div><p>Call this block after importing and using <code>PIO</code>.</p><pre class="raw"><code>Data = PIO_SM_Get_Blocking(PIO_0, 0)</code></pre></div></details><h3>Complete PIO walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestPIO
+Import PIO
+use PIO
+Block Main Declares
+    Full : Boolean
+    Empty : Boolean
+    Data : Unsigned_32
+    Prog : Unsigned_16 Array[2]
+    Base : Signed_64
+Implements
+    PIO_Init(PIO_0)
+    PIO_Init(PIO_1)
+    Base = PIO_Base_Address(PIO_0)
+    PIO_Load_Instruction(PIO_0, 0, PIO_INSTR_NOP)
+    Prog[1] = PIO_INSTR_NOP
+    Prog[2] = PIO_INSTR_NOP
+    PIO_Load_Program(PIO_0, 0, Slice(Prog))
+    PIO_SM_Init(PIO_0, 0, 0, 16, 1)
+    Base = PIO_SM_Base(PIO_0, 0)
+    PIO_SM_Set_Clock_Div(PIO_0, 0, 4, 0)
+    PIO_SM_Set_Enabled(PIO_0, 0, True)
+    Full = PIO_SM_Is_TX_Full(PIO_0, 0)
+    Empty = PIO_SM_Is_RX_Empty(PIO_0, 0)
+    PIO_SM_Put_Blocking(PIO_0, 0, 0x55)
+    Data = PIO_SM_Get_Blocking(PIO_0, 0)
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-pwm">
+<h2 id="title-pwm">PWM outputs</h2>
+<p>Set the slice divider and wrap value, then write a duty percentage or raw level.</p>
+<h3>PWM API</h3><details class="api"><summary><code>PWM_Init(Pin: Signed_64)</code></summary><div><p>Call this block after importing and using <code>PWM</code>.</p><pre class="raw"><code>PWM_Init(25)</code></pre></div></details><details class="api"><summary><code>PWM_Set_Clock_Div(Pin: Signed_64, Int_Div: Signed_64, Frac_Div: Signed_64)</code></summary><div><p>Call this block after importing and using <code>PWM</code>.</p><pre class="raw"><code>PWM_Set_Clock_Div(25, 4, 0)</code></pre></div></details><details class="api"><summary><code>PWM_Set_Wrap(Pin: Signed_64, Wrap: Signed_64)</code></summary><div><p>Call this block after importing and using <code>PWM</code>.</p><pre class="raw"><code>PWM_Set_Wrap(25, 10000)</code></pre></div></details><details class="api"><summary><code>PWM_Set_Enabled(Pin: Signed_64, Enabled: Boolean)</code></summary><div><p>Call this block after importing and using <code>PWM</code>.</p><pre class="raw"><code>PWM_Set_Enabled(25, True)</code></pre></div></details><details class="api"><summary><code>PWM_Set_Mask_Enabled(Mask: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>PWM</code>.</p><pre class="raw"><code>PWM_Set_Mask_Enabled(1)</code></pre></div></details><details class="api"><summary><code>Set_PWM_Raw(Pin: Signed_64, Level: Signed_64)</code></summary><div><p>Call this block after importing and using <code>PWM</code>.</p><pre class="raw"><code>Set_PWM_Raw(25, 5000)</code></pre></div></details><details class="api"><summary><code>Set_PWM_Duty(Pin: Signed_64, Duty_Percent: Signed_64)</code></summary><div><p>Call this block after importing and using <code>PWM</code>.</p><pre class="raw"><code>Set_PWM_Duty(25, 75)</code></pre></div></details><h3>Complete PWM walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestPWM
+Import PWM
+use PWM
+Block Main Implements
+    PWM_Init(25)
+    PWM_Set_Clock_Div(25, 4, 0)
+    PWM_Set_Wrap(25, 10000)
+    PWM_Set_Enabled(25, True)
+    PWM_Set_Mask_Enabled(1)
+    Set_PWM_Raw(25, 5000)
+    Set_PWM_Duty(25, 75)
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-rp2040">
+<h2 id="title-rp2040">Board startup</h2>
+<p>Initialize standard Pico clocks and release the timer and GPIO peripheral resets.</p>
+<div class="note"><p><b>Board assumption.</b> Clock setup is for the Raspberry Pi Pico reference board with its 12 MHz crystal. Compile checks do not initialize hardware.</p></div>
+<h3>RP2040 API</h3><details class="api"><summary><code>Check(Succeeded: Boolean)</code></summary><div><p>Fail-fast helper for examples: it continues when True and stops in a loop when False. Replace it with your application’s chosen recovery or reporting behavior.</p><pre class="raw"><code>Check(Clock_Init())</code></pre></div></details><details class="api"><summary><code>RP2040_Init() → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(RP2040_Init())</code></pre></div></details><details class="api"><summary><code>RP2040_Init_Minimal() → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(RP2040_Init_Minimal())</code></pre></div></details><h3>Complete RP2040 walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestRP2040Umbrella
+Import RP2040
+use RP2040
+Block Main Declares
+    Now : Signed_64
+    Temp : Signed_64
+    Core : Signed_64
+    SPI_Bus : SPI_Handle
+    I2C_Bus : I2C_Handle
+    UART_Bus : UART_Handle
+Implements
+    RP2040.Check(RP2040_Init())
+    RP2040.Check(RP2040_Init_Minimal())
+    Core = Get_Core_Num()
+    GPIO_Init_Output(25, True)
+    UART_Bus = UART_Init(0, 1)
+    UART_Write(UART_Bus, "All RP2040 peripherals running!\n")
+    SPI_Bus = SPI_Init(18, 19, 16)
+    I2C_Bus = I2C_Init(4, 5)
+    ADC_Init()
+    Temp = Read_Temperature_Celsius()
+    PWM_Init(15)
+    Set_PWM_Duty(15, 50)
+    DMA_Init()
+    RTC_Init()
+    Now = Get_Time()
+    Delay(10)
+    GPIO_Write(25, False)
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-rtc">
+<h2 id="title-rtc">Real-time clock</h2>
+<p>Set and read calendar date and time fields.</p>
+<h3>RTC API</h3><details class="api"><summary><code>RTC_Init()</code></summary><div><p>Call this block after importing and using <code>RTC</code>.</p><pre class="raw"><code>RTC_Init()</code></pre></div></details><details class="api"><summary><code>RTC_Set_DateTime(Year: Signed_64, Month: Signed_64, Day: Signed_64, Dotw: Signed_64, Hour: Signed_64, Minute: Signed_64, Second: Signed_64)</code></summary><div><p>Call this block after importing and using <code>RTC</code>.</p><pre class="raw"><code>RTC_Set_DateTime(2026, 11, 4, 3, 12, 30, 0)</code></pre></div></details><details class="api"><summary><code>RTC_Is_Running() → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(RTC_Is_Running())</code></pre></div></details><details class="api"><summary><code>RTC_Get_Year() → Signed_64</code></summary><div><p>Call this block after importing and using <code>RTC</code>.</p><pre class="raw"><code>Y = RTC_Get_Year()</code></pre></div></details><details class="api"><summary><code>RTC_Get_Month() → Signed_64</code></summary><div><p>Call this block after importing and using <code>RTC</code>.</p><pre class="raw"><code>M = RTC_Get_Month()</code></pre></div></details><details class="api"><summary><code>RTC_Get_Day() → Signed_64</code></summary><div><p>Call this block after importing and using <code>RTC</code>.</p><pre class="raw"><code>D = RTC_Get_Day()</code></pre></div></details><details class="api"><summary><code>RTC_Get_Day_Of_Week() → Signed_64</code></summary><div><p>Call this block after importing and using <code>RTC</code>.</p><pre class="raw"><code>W = RTC_Get_Day_Of_Week()</code></pre></div></details><details class="api"><summary><code>RTC_Get_Hour() → Signed_64</code></summary><div><p>Call this block after importing and using <code>RTC</code>.</p><pre class="raw"><code>H = RTC_Get_Hour()</code></pre></div></details><details class="api"><summary><code>RTC_Get_Minute() → Signed_64</code></summary><div><p>Call this block after importing and using <code>RTC</code>.</p><pre class="raw"><code>Min = RTC_Get_Minute()</code></pre></div></details><details class="api"><summary><code>RTC_Get_Second() → Signed_64</code></summary><div><p>Call this block after importing and using <code>RTC</code>.</p><pre class="raw"><code>S = RTC_Get_Second()</code></pre></div></details><h3>Complete RTC walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestRTC
+Import RTC
+use RTC
+Block Main Declares
+    Running : Boolean
+    Y : Signed_64
+    M : Signed_64
+    D : Signed_64
+    H : Signed_64
+    Min : Signed_64
+    S : Signed_64
+    W : Signed_64
+Implements
+    RTC_Init()
+    RTC_Set_DateTime(2026, 11, 4, 3, 12, 30, 0)
+    Running = RTC_Is_Running()
+    Y = RTC_Get_Year()
+    M = RTC_Get_Month()
+    D = RTC_Get_Day()
+    H = RTC_Get_Hour()
+    Min = RTC_Get_Minute()
+    S = RTC_Get_Second()
+    W = RTC_Get_Day_Of_Week()
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-spi">
+<h2 id="title-spi">SPI bus</h2>
+<p>Choose physical pins for SCK, MOSI and MISO. Loom selects the matching controller and applies the beginner defaults: 1 MHz, 8-bit words, mode 0.</p>
+<h3>Simple SPI API</h3>
+<details class="api"><summary><code>SPI_Init(SCK_Pin: Signed_64, MOSI_Pin: Signed_64, MISO_Pin: Signed_64) → SPI_Handle</code></summary><div><p>Initializes SPI from the selected pins with 1 MHz, 8-bit, mode 0 defaults. Pass <code>-1</code> for an unused MOSI or MISO pin.</p><pre class="raw"><code>Bus = SPI_Init(18, 19, 16)</code></pre></div></details>
+<details class="api"><summary><code>SPI_Write(Handle: SPI_Handle, Bytes: Unsigned_8 Slice)</code></summary><div><p>Transmits a byte slice. Failures set the SPI diagnostic globals, then stop at the failed operation.</p><pre class="raw"><code>SPI_Write(Bus, Slice(Tx))</code></pre></div></details>
+<details class="api"><summary><code>SPI_Read(Handle: SPI_Handle, Bytes: Unsigned_8 Slice)</code></summary><div><p>Reads bytes using the default dummy value.</p><pre class="raw"><code>SPI_Read(Bus, Slice(Rx))</code></pre></div></details>
+<details class="api"><summary><code>SPI_Transfer(Handle: SPI_Handle, Transmit: Unsigned_8 Slice, Receive: Unsigned_8 Slice)</code></summary><div><p>Exchanges equal-length transmit and receive slices.</p><pre class="raw"><code>SPI_Transfer(Bus, Slice(Tx), Slice(Rx))</code></pre></div></details>
+<details class="api"><summary><code>SPI_Transfer_Byte(Handle: SPI_Handle, Out_Byte: Signed_64) → Signed_64</code></summary><div><p>Exchanges one byte and returns the received value from 0 through 255.</p><pre class="raw"><code>Received = SPI_Transfer_Byte(Bus, 0x9F)</code></pre></div></details>
+<details class="api"><summary><code>SPI_Write_Byte(Handle: SPI_Handle, Out_Byte: Signed_64)</code></summary><div><p>Sends a single byte and discards the received byte.</p><pre class="raw"><code>SPI_Write_Byte(Bus, 0x00)</code></pre></div></details>
+<details class="api"><summary><code>SPI_Read_Byte(Handle: SPI_Handle) → Signed_64</code></summary><div><p>Reads one byte using the default dummy value.</p><pre class="raw"><code>Received = SPI_Read_Byte(Bus)</code></pre></div></details>
+<h3>Example</h3><pre><code>Module SimpleSPI
+Import SPI
+Import RP2040
+use SPI
+use RP2040
+Block Main Declares
+    Bus : SPI_Handle
+    Tx : Unsigned_8 Array[2] = {0x06, 0x02}
+    Rx : Unsigned_8 Array[2]
+Implements
+    RP2040_Init()
+    Bus = SPI_Init(18, 19, 16)
+    SPI_Transfer(Bus, Slice(Tx), Slice(Rx))
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-system">
+<h2 id="title-system">Reset and chip information</h2>
+<p>Manage peripheral reset state and read basic silicon identifiers.</p>
+<h3>SYSTEM API</h3><details class="api"><summary><code>Unreset_Peripherals(Mask: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>SYSTEM</code>.</p><pre class="raw"><code>Unreset_Peripherals(RESET_UART0 | RESET_SPI0 | RESET_I2C0)</code></pre></div></details><details class="api"><summary><code>Reset_Peripherals(Mask: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>SYSTEM</code>.</p><pre class="raw"><code>Reset_Peripherals(RESET_PWM)</code></pre></div></details><details class="api"><summary><code>Is_Peripheral_Ready(Mask: Unsigned_32) → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(Is_Peripheral_Ready(RESET_TIMER))</code></pre></div></details><details class="api"><summary><code>System_Init()</code></summary><div><p>Call this block after importing and using <code>SYSTEM</code>.</p><pre class="raw"><code>System_Init()</code></pre></div></details><details class="api"><summary><code>Get_Chip_Revision() → Signed_64</code></summary><div><p>Call this block after importing and using <code>SYSTEM</code>.</p><pre class="raw"><code>Rev = Get_Chip_Revision()</code></pre></div></details><details class="api"><summary><code>Get_Chip_Part() → Signed_64</code></summary><div><p>Call this block after importing and using <code>SYSTEM</code>.</p><pre class="raw"><code>Part = Get_Chip_Part()</code></pre></div></details><details class="api"><summary><code>Is_ASIC_Platform() → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(Is_ASIC_Platform())</code></pre></div></details><details class="api"><summary><code>System_Reset()</code></summary><div><p>Call this block after importing and using <code>SYSTEM</code>.</p><pre class="raw"><code>System_Reset()</code></pre></div></details><h3>Complete SYSTEM walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestSystem
+Import System
+use System
+Block Main Declares
+    Rev : Signed_64
+    Part : Signed_64
+    Asic : Boolean
+Implements
+    System_Init()
+    Rev = Get_Chip_Revision()
+    Part = Get_Chip_Part()
+    Asic = Is_ASIC_Platform()
+    Unreset_Peripherals(RESET_UART0 | RESET_SPI0 | RESET_I2C0)
+    Reset_Peripherals(RESET_PWM)
+    If Is_Peripheral_Ready(RESET_TIMER)
+        System_Reset()
+    End If
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-time">
+<h2 id="title-time">Timers and delays</h2>
+<p>Read the microsecond timer, delay, and use the four hardware alarm registers.</p>
+<h3>TIME API</h3><details class="api"><summary><code>Get_Time_Microseconds() → Signed_64</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>Us = Get_Time_Microseconds()</code></pre></div></details><details class="api"><summary><code>Get_Time_64_Microseconds() → Signed_64</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>Us64 = Get_Time_64_Microseconds()</code></pre></div></details><details class="api"><summary><code>Timeout_Expired(Start_Us: Signed_64, Timeout_Us: Signed_64) → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(Timeout_Expired(Us64, 10000))</code></pre></div></details><details class="api"><summary><code>Get_Time() → Signed_64</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>Ms = Get_Time()</code></pre></div></details><details class="api"><summary><code>Delay_Microseconds(Microseconds: Signed_64)</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>Delay_Microseconds(100)</code></pre></div></details><details class="api"><summary><code>Delay(Milliseconds: Signed_64)</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>Delay(1)</code></pre></div></details><details class="api"><summary><code>SleepMs(Milliseconds: Signed_64)</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>SleepMs(1)</code></pre></div></details><details class="api"><summary><code>SleepUs(Microseconds: Signed_64)</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>SleepUs(50)</code></pre></div></details><details class="api"><summary><code>Set_Alarm_Target(Alarm_Idx: Signed_64, Target_Us: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>Set_Alarm_Target(ALARM_0, 1000000)</code></pre></div></details><details class="api"><summary><code>Set_Alarm_Delay(Alarm_Idx: Signed_64, Delay_Us: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>Set_Alarm_Delay(ALARM_1, 50000)</code></pre></div></details><details class="api"><summary><code>Is_Alarm_Armed(Alarm_Idx: Signed_64) → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(Is_Alarm_Armed(ALARM_0))</code></pre></div></details><details class="api"><summary><code>Disarm_Alarm(Alarm_Idx: Signed_64)</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>Disarm_Alarm(ALARM_0)</code></pre></div></details><details class="api"><summary><code>Clear_Alarm_Interrupt(Alarm_Idx: Signed_64)</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>Clear_Alarm_Interrupt(ALARM_0)</code></pre></div></details><details class="api"><summary><code>Enable_Alarm_Interrupt(Alarm_Idx: Signed_64)</code></summary><div><p>Call this block after importing and using <code>TIME</code>.</p><pre class="raw"><code>Enable_Alarm_Interrupt(ALARM_0)</code></pre></div></details><h3>Complete TIME walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestTime
+Import Time
+use Time
+Block Main Declares
+    Us : Signed_64
+    Us64 : Signed_64
+    Ms : Signed_64
+    Expired : Boolean
+Implements
+    Us = Get_Time_Microseconds()
+    Us64 = Get_Time_64_Microseconds()
+    Expired = Timeout_Expired(Us64, 10000)
+    Ms = Get_Time()
+    Delay(1)
+    Delay_Microseconds(100)
+    SleepMs(1)
+    SleepUs(50)
+    Set_Alarm_Target(ALARM_0, 1000000)
+    Set_Alarm_Delay(ALARM_1, 50000)
+    If Is_Alarm_Armed(ALARM_0)
+        Clear_Alarm_Interrupt(ALARM_0)
+        Enable_Alarm_Interrupt(ALARM_0)
+        Disarm_Alarm(ALARM_0)
+    End If
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-uart">
+<h2 id="title-uart">Serial communication</h2>
+<p>Select UART0 or UART1 from the physical TX/RX pin pair. The beginner setup uses 115200 baud, eight data bits, no parity, and one stop bit.</p>
+<h3>Simple UART API</h3>
+<details class="api"><summary><code>UART_Init(TX_Pin: Signed_64, RX_Pin: Signed_64) → UART_Handle</code></summary><div><p>Initializes the matching UART and returns a typed handle. Keep it and pass it to all UART calls.</p><pre class="raw"><code>Serial = UART_Init(0, 1)</code></pre></div></details>
+<details class="api"><summary><code>UART_Write(Handle: UART_Handle, Text: String)</code></summary><div><p>Writes a string. Invalid handles and transmit timeouts are recorded in <code>UART_Last_Error_Message</code> and stop at the failing operation.</p><pre class="raw"><code>UART_Write(Serial, "Hello from Loom!\n")</code></pre></div></details>
+<details class="api"><summary><code>UART_Write_Byte(Handle: UART_Handle, Value: Signed_64)</code></summary><div><p>Writes one byte; the value must be in the range 0 through 255.</p><pre class="raw"><code>UART_Write_Byte(Serial, 65)</code></pre></div></details>
+<details class="api"><summary><code>UART_Byte_Available(Handle: UART_Handle) → Boolean</code></summary><div><p>A data-availability query. False means the receive FIFO currently has no byte.</p><pre class="raw"><code>If (UART_Byte_Available(Serial))</code></pre></div></details>
+<details class="api"><summary><code>UART_Read_Byte(Handle: UART_Handle) → Signed_64</code></summary><div><p>Nonblocking read. Returns -1 if no byte is available; use the availability query when an empty read is not useful.</p><pre class="raw"><code>Byte_Value = UART_Read_Byte(Serial)</code></pre></div></details>
+<h3>Complete UART walkthrough</h3>
+<pre><code>Module TestUART
+Import UART
+Import RP2040
+use UART
+use RP2040
+Block Main Declares
+    Serial : UART_Handle
+    Byte_Value : Signed_64
+Implements
+    RP2040_Init()
+    Serial = UART_Init(0, 1)
+    UART_Write(Serial, "Hello from Loom!\n")
+    UART_Write_Byte(Serial, 65)
+    If (UART_Byte_Available(Serial))
+        Byte_Value = UART_Read_Byte(Serial)
+    End If
+End Main</code></pre></section>
+<section class="bsp-module" id="mod-watchdog">
+<h2 id="title-watchdog">Watchdog timer</h2>
+<p>Arm and feed the watchdog, retain scratch values, or request a reboot.</p>
+<h3>WATCHDOG API</h3><details class="api"><summary><code>Watchdog_Enable(Timeout_Ms: Signed_64, Pause_On_Debug: Boolean)</code></summary><div><p>Call this block after importing and using <code>WATCHDOG</code>.</p><pre class="raw"><code>Watchdog_Enable(5000, True)</code></pre></div></details><details class="api"><summary><code>Watchdog_Feed()</code></summary><div><p>Call this block after importing and using <code>WATCHDOG</code>.</p><pre class="raw"><code>Watchdog_Feed()</code></pre></div></details><details class="api"><summary><code>Watchdog_Reboot()</code></summary><div><p>Call this block after importing and using <code>WATCHDOG</code>.</p><pre class="raw"><code>Watchdog_Reboot()</code></pre></div></details><details class="api"><summary><code>Watchdog_Caused_Reboot() → Boolean</code></summary><div><p>Pass the result to <code>Check</code> for the fail-fast example policy, or handle False with your own recovery.</p><pre class="raw"><code>RP2040.Check(Watchdog_Caused_Reboot())</code></pre></div></details><details class="api"><summary><code>Watchdog_Set_Scratch(Index: Signed_64, Value: Unsigned_32)</code></summary><div><p>Call this block after importing and using <code>WATCHDOG</code>.</p><pre class="raw"><code>Watchdog_Set_Scratch(0, 0x12345678)</code></pre></div></details><details class="api"><summary><code>Watchdog_Get_Scratch(Index: Signed_64) → Unsigned_32</code></summary><div><p>Call this block after importing and using <code>WATCHDOG</code>.</p><pre class="raw"><code>Scratch = Watchdog_Get_Scratch(0)</code></pre></div></details><details class="api"><summary><code>Watchdog_Reboot_To_Bootsel()</code></summary><div><p>Call this block after importing and using <code>WATCHDOG</code>.</p><pre class="raw"><code>Watchdog_Reboot_To_Bootsel()</code></pre></div></details><h3>Complete WATCHDOG walkthrough</h3><p>This compact workflow is compile-checked; individual API samples below are not combined with it and are not run on hardware.</p><pre><code>Module TestWatchdog
+Import Watchdog
+use Watchdog
+Block Main Declares
+    Caused : Boolean
+    Scratch : Unsigned_32
+Implements
+    Watchdog_Enable(5000, True)
+    Watchdog_Feed()
+    Caused = Watchdog_Caused_Reboot()
+    Watchdog_Set_Scratch(0, 0x12345678)
+    Scratch = Watchdog_Get_Scratch(0)
+    If (Caused == True)
+        Watchdog_Reboot_To_Bootsel()
+        Watchdog_Reboot()
+    End If
+End Main</code></pre></section></article><aside id=toc></aside></div><footer><div class=w><span>Loom 1.2.0 · RP2040 BSP handbook</span><span>Examples compile-checked; hardware results depend on board setup.</span></div></footer><div id=pal><div><input id=pi placeholder="Search the docs…"><div id=pl></div></div></div><script>const IDX=[["Overview", "index.html", "Page"], ["Getting started", "getting-started.html", "Page"], ["Tutorials", "tutorials/index.html", "Page"], ["Beginner guide", "tutorials/beginner-guide.html", "Page"], ["Developer overview", "developer-overview.html", "Page"], ["Embedded RP2040", "embedded-rp2040.html", "Page"], ["RP2040 BSP reference", "rp2040-reference.html", "Page"], ["Reference", "reference.html", "Page"], ["Pillars", "index.html#pillars", "Overview"], ["Features", "index.html#features", "Overview"], ["Quick start", "index.html#quick-start", "Overview"], ["Explore", "index.html#explore", "Overview"], ["Install", "getting-started.html#install", "Getting started"], ["Toolchain", "getting-started.html#toolchain", "Getting started"], ["Editor setup", "getting-started.html#editor-setup", "Getting started"], ["Project anatomy", "getting-started.html#project-anatomy", "Getting started"], ["Your first project", "getting-started.html#your-first-project", "Getting started"], ["1. Hello, World", "tutorials/beginner-guide.html#l1", "Beginner guide"], ["2. Variables, types and literals", "tutorials/beginner-guide.html#l2", "Beginner guide"], ["3. Operators", "tutorials/beginner-guide.html#l3", "Beginner guide"], ["4. Decisions", "tutorials/beginner-guide.html#l4", "Beginner guide"], ["5. Loops", "tutorials/beginner-guide.html#l5", "Beginner guide"], ["6. Procedures", "tutorials/beginner-guide.html#l6", "Beginner guide"], ["7. Records, enums and Match", "tutorials/beginner-guide.html#l7", "Beginner guide"], ["8. Arrays and slices", "tutorials/beginner-guide.html#l8", "Beginner guide"], ["9. Pointers, Cast and Ensure", "tutorials/beginner-guide.html#l9", "Beginner guide"], ["10. Modules", "tutorials/beginner-guide.html#l10", "Beginner guide"], ["Memory model", "developer-overview.html#memory-model", "Developer overview"], ["Safety rules", "developer-overview.html#safety-rules", "Developer overview"], ["Deterministic cleanup", "developer-overview.html#deterministic-cleanup", "Developer overview"], ["Why one-based indexing", "developer-overview.html#why-one-based-indexing", "Developer overview"], ["Compiler pipeline", "developer-overview.html#compiler-pipeline", "Developer overview"], ["Volatile I/O", "developer-overview.html#volatile-i-o", "Developer overview"], ["C FFI", "developer-overview.html#c-ffi", "Developer overview"], ["Module graphs", "developer-overview.html#module-graphs", "Developer overview"], ["The chip", "embedded-rp2040.html#the-chip", "Embedded RP2040"], ["Create a project", "embedded-rp2040.html#create-a-project", "Embedded RP2040"], ["The SDK", "embedded-rp2040.html#the-sdk", "Embedded RP2040"], ["RP2040 function guide", "rp2040-reference.html", "RP2040 BSP"], ["Hardware abstraction layer", "embedded-rp2040.html#hardware-abstraction-layer", "Embedded RP2040"], ["Blink firmware", "embedded-rp2040.html#blink-firmware", "Embedded RP2040"], ["Direct register access", "embedded-rp2040.html#direct-register-access", "Embedded RP2040"], ["Build and flash", "embedded-rp2040.html#build-and-flash", "Embedded RP2040"], ["Simulate with Wokwi", "embedded-rp2040.html#simulate-with-wokwi", "Embedded RP2040"], ["Types", "reference.html#types", "Reference"], ["Literals", "reference.html#literals", "Reference"], ["Keywords", "reference.html#keywords", "Reference"], ["Operators", "reference.html#operators", "Reference"], ["Volatile intrinsics", "reference.html#volatile-intrinsics", "Reference"], ["CLI", "reference.html#cli", "Reference"], ["Grammar", "reference.html#grammar", "Reference"]];
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],R=document.body.dataset.r;
+const RE=/(#[^\n]*)|("(?:[^"\\]|\\.)*"|'[^'\n]*')|\b(0x[0-9a-fA-F_]+|0b[01_]+|\d[\d_]*(?:\.\d+)?)\b|\b(Module|Block|Global|Takes|Produces|Declares|Implements|End|Give|If|Else|Loop|While|Until|For|In|Exit|Skip|Ensure|Match|With|When|Import|Use|Constant|Record|Enum|Extern)\b|\b(Address|Deref|Cast|Slice|Null|True|False|And|Or|Not|Mod|LSL|LSR|ASR)\b|\b(Signed_\d+|Unsigned_\d+|Float_\d+|Boolean|Character|String|Pointer|Array|Int\d*|Uint\d*|Float\d*|Bool|Char|Byte|Word|Usize|Isize)\b|([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()|(\+=|-=|\*=|\/=|%=|:=|==|!=|<=|>=|->|=>|::|@|\^)/g;
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+$$('pre').forEach(p=>{
+  const c=p.querySelector('code');
+  if(!c)return;
+  const raw=c.textContent;
+  const isSh=p.classList.contains('sh');
+  const isRaw=p.classList.contains('raw');
+  let title='main.loom';
+  const m=raw.match(/\bModule\s+([A-Za-z0-9_]+)/);
+  if(m)title=m[1]+'.loom';
+  else if(isSh)title='Terminal — zsh';
+  else if(isRaw)title='API call — Loom';
+  else if(raw.includes('[project]')||raw.includes('config.toml'))title='config.toml';
+  else if(raw.includes('Block '))title='routine.loom';
+  else if(raw.includes('Record '))title='types.loom';
+
+  if(!isSh){
+    const hl=esc(raw).replace(RE,(match,cm,st,nu,kw,bl,ty,fn,op)=>
+      cm?`<span class="c">${cm}</span>`:
+      st?`<span class="s">${st}</span>`:
+      nu?`<span class="n">${nu}</span>`:
+      kw?`<span class="k">${kw}</span>`:
+      bl?`<span class="b">${bl}</span>`:
+      ty?`<span class="t">${ty}</span>`:
+      fn?`<span class="f">${fn}</span>`:
+      op?`<span class="o">${op}</span>`:match
+    );
+    const lines=hl.split('\n');
+    c.innerHTML=lines.map(l=>`<span class="line">${l||' '}</span>`).join('');
+  }else if(isSh){
+    c.innerHTML=esc(raw).replace(/(#[^\n]*)|("(?:[^"\\]|\\.)*")|(--?[a-zA-Z0-9_-]+)|\b(loom|cd|sudo|cp|mkdir|curl|code|python3|ctest)\b|\b(new|build|run|clean|test|install)\b/g,(match,cm,st,fl,cmd,sc)=>
+      cm?`<span class="c">${cm}</span>`:
+      st?`<span class="s">${st}</span>`:
+      fl?`<span class="flg">${fl}</span>`:
+      cmd?`<span class="cmd">${cmd}</span>`:
+      sc?`<span class="sc">${sc}</span>`:match
+    );
+  }
+
+  const bar=document.createElement('div');
+  bar.className='mac-bar';
+  bar.innerHTML=`<div class="mac-dots"><span class="mac-dot r"></span><span class="mac-dot y"></span><span class="mac-dot g"></span></div><div class="mac-title">${title}</div><button class="cb" type="button">Copy</button>`;
+  const btn=bar.querySelector('.cb');
+  btn.onclick=()=>navigator.clipboard.writeText(raw).then(()=>{
+    btn.textContent='Copied';
+    setTimeout(()=>btn.textContent='Copy',1200);
+  });
+  p.prepend(bar);
+});
+
+const hs=$$('article h2').filter(h=>h.id);if(hs.length>1){$('#toc').innerHTML='<b>ON THIS PAGE</b>'+hs.map(h=>`<a href="#${h.id}">${h.textContent}</a>`).join('');const o=new IntersectionObserver(e=>e.forEach(x=>x.isIntersecting&&$$('#toc a').forEach(a=>a.classList.toggle('on',a.hash=='#'+x.target.id))),{rootMargin:'-20% 0px -70% 0px'});hs.forEach(h=>o.observe(h))}
+$('#mb').onclick=()=>document.body.classList.toggle('open');
+const P=$('#pal'),pi=$('#pi'),pl=$('#pl');let cur=[],sel=0;
+const pr=()=>{const q=pi.value.toLowerCase();cur=IDX.filter(i=>(i[0]+' '+i[2]).toLowerCase().includes(q)).slice(0,9);sel=Math.min(sel,Math.max(cur.length-1,0));pl.innerHTML=cur.map((c,i)=>`<a href="${R+c[1]}" class="${i==sel?'on':''}">${c[0]}<small>${c[2]}</small></a>`).join('')};
+const op=v=>{P.classList.toggle('on',v);if(v){pi.value='';sel=0;pr();pi.focus()}};
+$('#sk').onclick=()=>op(1);P.onclick=e=>e.target==P&&op(0);pi.oninput=()=>{sel=0;pr()};
+addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key=='k'){e.preventDefault();op(1)}else if(e.key=='Escape')op(0);else if(P.classList.contains('on')){if(e.key=='ArrowDown'){sel=Math.min(sel+1,cur.length-1);pr()}else if(e.key=='ArrowUp'){sel=Math.max(sel-1,0);pr()}else if(e.key=='Enter'&&cur[sel])location.href=R+cur[sel][1]}});
+const ds=$$('.done');if(ds.length){let S={};try{S=JSON.parse(localStorage.loomDone||'{}')}catch(e){}
+const up=()=>{const n=ds.filter(d=>d.classList.contains('on')).length;$('#pc').textContent=n+' / '+ds.length+' lessons complete';$('#pb').style.width=n/ds.length*100+'%';try{localStorage.loomDone=JSON.stringify(S)}catch(e){}};
+ds.forEach((d,i)=>{d.classList.toggle('on',!!S[i]);d.textContent=S[i]?'✓ Completed':'Mark complete';d.onclick=()=>{S[i]=!S[i];d.classList.toggle('on',S[i]);d.textContent=S[i]?'✓ Completed':'Mark complete';up()}});up()}
+</script></body></html>

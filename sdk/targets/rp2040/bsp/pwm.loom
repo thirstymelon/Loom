@@ -1,9 +1,9 @@
 Module PWM
 
 Import System
-Import GPIO
+Import GPIO_Internal
 use System
-use GPIO
+use GPIO_Internal
 
 Block Global
     Declares

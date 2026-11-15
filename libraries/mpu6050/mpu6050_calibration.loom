@@ -1,0 +1,47 @@
+Module MPU6050_Calibration
+Import MPU6050
+use MPU6050
+
+# Calibrate while the sensor is stationary and level; Z retains +1g.
+# A larger sample count improves averaging; values outside 1..2000 are rejected.
+Block MPU6050_Calibrate Takes
+    Samples : Signed_64
+    Declares
+        I : Signed_64
+        Accel_X_Sum : Signed_64
+        Accel_Y_Sum : Signed_64
+        Accel_Z_Sum : Signed_64
+        Gyro_X_Sum : Signed_64
+        Gyro_Y_Sum : Signed_64
+        Gyro_Z_Sum : Signed_64
+        Sample : MPU6050_Sample
+    Implements
+        If (((MPU6050_Ready == False) Or (Samples < 1)) Or (Samples > 2000))
+            MPU6050_Internal_Fail(4)
+        End If
+        Accel_X_Sum = 0
+        Accel_Y_Sum = 0
+        Accel_Z_Sum = 0
+        Gyro_X_Sum = 0
+        Gyro_Y_Sum = 0
+        Gyro_Z_Sum = 0
+        I = 0
+        Loop while (I < Samples)
+            Sample = MPU6050_Read()
+            Accel_X_Sum = Accel_X_Sum + Cast[Signed_64](Sample.Accel_X_Raw)
+            Accel_Y_Sum = Accel_Y_Sum + Cast[Signed_64](Sample.Accel_Y_Raw)
+            Accel_Z_Sum = Accel_Z_Sum + Cast[Signed_64](Sample.Accel_Z_Raw)
+            Gyro_X_Sum = Gyro_X_Sum + Cast[Signed_64](Sample.Gyro_X_Raw)
+            Gyro_Y_Sum = Gyro_Y_Sum + Cast[Signed_64](Sample.Gyro_Y_Raw)
+            Gyro_Z_Sum = Gyro_Z_Sum + Cast[Signed_64](Sample.Gyro_Z_Raw)
+            I = I + 1
+            Delay(2)
+        End Loop
+        MPU6050_Accel_Offset_X = Accel_X_Sum / Samples
+        MPU6050_Accel_Offset_Y = Accel_Y_Sum / Samples
+        MPU6050_Accel_Offset_Z = (Accel_Z_Sum / Samples) - MPU6050_Accel_Scale
+        MPU6050_Gyro_Offset_X = Gyro_X_Sum / Samples
+        MPU6050_Gyro_Offset_Y = Gyro_Y_Sum / Samples
+        MPU6050_Gyro_Offset_Z = Gyro_Z_Sum / Samples
+End MPU6050_Calibrate
+

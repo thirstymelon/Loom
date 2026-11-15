@@ -1,0 +1,32 @@
+name: Package Loom releases
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  macos-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM
+        run: brew install llvm
+      - name: Build Loom compilers and driver
+        run: |
+          LLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm" \
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+      - name: Package libraries, toolchains, and catalog
+        run: scripts/package_release.sh "${GITHUB_REF_NAME#v}" build release-assets macos-arm64
+      - name: Publish downloadable packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "Loom ${GITHUB_REF_NAME#v}" \
+              --notes "Download Loom libraries and toolchains with the loom CLI."
+          gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
