@@ -6,5 +6,5 @@ Block Main
         Character_Value : Character
     Implements
     Character_Value = Cast[Character](Value)
-    Write(Character_Value)
+    Print(Character_Value)
 End Main

@@ -6,7 +6,7 @@
 
 **A modern, deterministic, high-performance systems programming language with an LLVM backend and first-class bare-metal support.**
 
-[![Version](https://img.shields.io/badge/version-1.2.0-92a9e1.svg)](https://github.com/thirstymelon/Loom/releases)
+[![Version](https://img.shields.io/badge/version-1.3.0-92a9e1.svg)](https://github.com/thirstymelon/Loom/releases)
 [![Backend](https://img.shields.io/badge/backend-LLVM%20Native-blue.svg)](https://llvm.org/)
 [![Embedded](https://img.shields.io/badge/target-RP2040%20Bare--Metal-brightgreen.svg)](https://thirstymelon.github.io/Loom/embedded-rp2040.html)
 [![VS Code](https://img.shields.io/badge/vscode-extension%20in%20repo-informational.svg)](vscode-loom/)
@@ -21,7 +21,7 @@
 
 ## Introduction
 
-Loom v1.2.0 is a block-oriented, statically typed systems programming language with explicit low-level types, readable block syntax, an LLVM-based compiler, and an RP2040 target SDK.
+Loom v1.3.0 is a block-oriented, statically typed systems programming language with explicit low-level types, readable block syntax, an LLVM-based compiler, and an RP2040 target SDK.
 
 The C++ frontend parses and checks Loom programs and the LLVM backend emits target code. The project includes hosted/native tooling and an RP2040 target. RP2040 I²C and SPI return typed handles from pin-based initialization; device libraries receive the handle they should use. These calls capture failures internally and retain readable diagnostics. Compile checks do not execute MMIO or substitute for board-level validation; review the [RP2040 BSP handbook](docs/rp2040-reference.html#mod-i2c) for setup and hardware guidance.
 
@@ -34,13 +34,23 @@ With `Bare-Metal = true` and an AArch64 ELF target such as `aarch64-none-elf`, `
 ## Core Capabilities
 
 - **LLVM Backend**: Generates code for configured targets and applies optimization passes.
-- **Deterministic Memory Model**: Free of garbage collection pauses and hidden runtime overhead. Stack allocation, fixed arrays, non-owning fat slices, and raw pointers deliver predictable execution.
+- **Deterministic Memory Model**: Free of garbage collection pauses and hidden runtime overhead. Stack allocation, fixed arrays, non-owning fat slices, raw pointers, and explicit dynamic memory management (`Allocate`, `Resize`, `Release`) deliver predictable execution.
+- **Dynamic Collections & Data Structures**:
+  - `HMap[KeyType : ValType]`: Open-addressing hash maps supporting integer and string keys with `Map[Key]`, `Map.Length`, `Map.Contains(Key)`, and `Map.Remove(Key)`.
+  - `T Vector[N]` & `T Vector = {...}`: Dynamic growable typed vectors with `Vec.Append(x)`, `Vec.Pop()`, `Vec.Contains(x)`, `Vec.Index(x)`, `Vec.Index_All(x)`, `Vec.Length`, and `Vec.Capacity`.
+  - `Text` / `Text[N]`: High-performance dynamic string builder buffers supporting `+=` concatenation, `Length`, `Capacity`, and `To_String()`.
+  - Sub-slicing: `Vec[Start .. End]` produces a non-owning `T Slice`, and `Txt[Start .. End]` produces a `String`.
+- **First-Class Block Pointers**: First-class procedure and function pointers (`Op : Signed_32 Block_Pointer(Signed_32, Signed_32) = Add`, `Action : Block_Pointer = Trigger_Shutdown`) enabling high-performance callbacks and dispatch tables.
+- **Lightweight Multi-Value Returns & Tuples**: Return multiple values directly (`Block Calc ... Produces (Signed_32, Boolean)`), concise produces `Produces (A, B)`, and tuple unpacking assignments (`X, Y = Calc()` or `(X, Y) = Calc()`).
+- **Pattern Matching with Ranges & Destructuring**: Expressive `Match` patterns over integers, characters, enums, ranges (`When 1 .. 10:`), catch-all wildcard (`When _:`), tuple destructuring (`When (0, 0):`), and record destructuring (`When Point{ X: 1, Y: 2 }:`).
+- **String Interpolation & Format Specifiers**: Interpolate expressions directly inside string literals with formatting specifiers (`"Hex: <Val:04X>, Float: <Val:.2f>, Dec: <Val:6d>"`).
+- **Mathematical Intrinsics**: Native hardware-accelerated math primitives (`Sqrt`, `Abs`, `Floor`, `Ceil`, `Min`, `Max`) and natural infix exponentiation power operator (`2 pow 8 == 256`).
 - **Explicit Types and Hardware Access**: Fixed-width integer types, pointers, slices, and volatile I/O primitives support systems programming.
-- **1-Based Indexing**: Natural mathematical indexing (1..Length) across arrays, slices, and strings, safeguarded by static analysis and runtime bounds checks.
+- **1-Based Indexing**: Natural mathematical indexing (1..Length) across arrays, vectors, slices, and strings, safeguarded by static analysis and runtime bounds checks.
 - **Turnkey RP2040 Bare-Metal Support**: Built-in scaffolding for Raspberry Pi Pico firmware, including Boot2 stage, vector tables, linker scripts, and direct generation of UF2 bootloader images.
 - **Pre-Integrated Hardware HAL**: Comprehensive 16-peripheral hardware abstraction layer (Clock, GPIO, UART, SPI, I2C, ADC, PWM, DMA, Watchdog, Multicore, PIO, RTC, Interp, System, and Time).
 - **C ABI Interoperability**: Direct foreign function linkage enabling frictionless communication with existing C libraries.
-- **Integrated Toolchain**: Includes the unified `loom` project tool, the optimizing `loomc` compiler, and the `loom-lsp` Language Server Protocol service.
+- **Integrated Toolchain & Language Server**: Includes the unified `loom` project tool, the optimizing `loomc` compiler, the `loom fmt` code formatter (featuring canonical keyword casing, 4-space indentation, and colon alignment in declaration blocks), and the `loom-lsp` Language Server Protocol service with code completion, hover documentation, and go-to-definition.
 
 ### RP2040 peripheral handles
 
@@ -69,8 +79,8 @@ I²C defaults to 100 kHz. SPI defaults to 1 MHz, eight-bit words, mode 0. I²C/S
 
 ## Downloads & Toolchain Management
 
-- **macOS Desktop Native Toolchain (`Loom-1.2.0-macos-arm64-native.pkg`)**: Apple Silicon installer with the Loom build driver, native compiler, language server, standard library, and bundled compiler runtime libraries.
-- **RP2040 Embedded Toolchain (`Loom-1.2.0-macos-arm64-rp2040.pkg`)**: Apple Silicon installer with the Loom build driver, ARM Cortex-M0+ compiler, language server, `llvm-objcopy` for UF2 generation, current RP2040 BSP/startup/linker files, standard library, and bundled compiler runtime libraries. macOS Command Line Tools provide `clang`; bare-metal linking also requires `ld.lld` on `PATH`.
+- **macOS Desktop Native Toolchain (`Loom-1.3.0-macos-arm64-native.pkg`)**: Apple Silicon installer with the Loom build driver, native compiler, language server, standard library, and bundled compiler runtime libraries.
+- **RP2040 Embedded Toolchain (`Loom-1.3.0-macos-arm64-rp2040.pkg`)**: Apple Silicon installer with the Loom build driver, ARM Cortex-M0+ compiler, language server, `llvm-objcopy` for UF2 generation, current RP2040 BSP/startup/linker files, standard library, and bundled compiler runtime libraries. macOS Command Line Tools provide `clang`; bare-metal linking also requires `ld.lld` on `PATH`.
 - **Independent Coexistence & Toolchain Management**: Both packages install independently into `/usr/local/share/loom/toolchains/` without conflicts. Manage and switch toolchains easily:
   ```bash
   # View all installed toolchains and active default
@@ -84,7 +94,7 @@ I²C defaults to 100 kHz. SPI defaults to 1 MHz, eight-bit words, mode 0. I²C/S
   loom build --toolchain rp2040
   ```
   Loom's native toolchain strictly prevents building embedded RP2040 projects and guides you to switch to the RP2040 toolchain.
-- **VS Code Extension**: The official VS Code extension for Loom language support is available in this repository as a prepackaged `.vsix` file ([`vscode-loom/Loom-1.2.0.vsix`](vscode-loom/Loom-1.2.0.vsix)):
+- **VS Code Extension**: The official VS Code extension for Loom language support is available in this repository as a prepackaged `.vsix` file ([`vscode-loom/Loom-1.3.0.vsix`](vscode-loom/Loom-1.3.0.vsix)):
   - **Syntax Highlighting**: Complete TextMate grammar covering blocks, keywords, built-in types, operators, and string interpolation.
   - **Editor Productivity**: Automated code snippets, bracket autocompletion, intelligent indentation rules, and file icon associations.
   - **Compiler-Backed Diagnostics**: Real-time error reporting and inline diagnostic squiggles.

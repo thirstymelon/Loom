@@ -15,6 +15,6 @@ Block Main
         Addr : Signed_64
     Implements
         Addr = Transform(1000, 5, 8)
-        Write(Addr)
+        Print(Addr)
 End Main
 

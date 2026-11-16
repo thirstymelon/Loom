@@ -3,16 +3,16 @@ Module Test18EnsureLifoAndEarlyExit
 Block Produce
     Produces Signed_32
     Implements
-        Ensure { Write(4) }
+        Ensure { Print(4) }
         Give 8
 End Produce
 
 Block Main
     Implements
         Ensure {
-            Write(2)
-            Write(1)
+            Print(2)
+            Print(1)
         }
-        Write(3)
-        Write(Produce())
+        Print(3)
+        Print(Produce())
 End Main

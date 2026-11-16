@@ -6,5 +6,5 @@ Block Main
         View : Signed_32 Slice
     Implements
         View = Slice(Address(Values[1]), -1)
-        Write(View.Length)
+        Print(View.Length)
 End Main

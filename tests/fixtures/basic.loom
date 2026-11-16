@@ -2,7 +2,7 @@
 # Loom Language Feature Tour & Canonical Reference
 # ==============================================================================
 # Demonstrates core syntax, data types, control flow structures,
-# low-level systems operators, pointers, records, and enums in Loom 1.2.0.
+# low-level systems operators, pointers, records, and enums in Loom 1.3.0.
 # ==============================================================================
 
 Module Feature_Tour
@@ -136,8 +136,8 @@ Block Log_Message Takes
     Prefix : String
     Detail : String
 Implements
-    Write(Prefix)
-    Write(Detail)
+    Print(Prefix)
+    Print(Detail)
 End Log_Message
 
 # ------------------------------------------------------------------------------
@@ -181,10 +181,10 @@ Block Main
         # ----------------------------------------------------------------------
         # A. Console Output and Types
         # ----------------------------------------------------------------------
-        Write("==========================================")
-        Write("       Loom Language Feature Showcase     ")
-        Write("==========================================")
-        Write("")
+        Print("==========================================")
+        Print("       Loom Language Feature Showcase     ")
+        Print("==========================================")
+        Print("")
 
         # Scalar numeric assignments
         S8 = -8
@@ -209,12 +209,12 @@ Block Main
         Factorial_Res = Factorial(5)
         Global_Counter = Global_Counter + 1
 
-        Write("1. Scalars, Function Calls & Recursion:")
-        Write(Message)
-        Write(Symbol)
-        Write(S32)
-        Write(Factorial_Res)
-        Write("")
+        Print("1. Scalars, Function Calls & Recursion:")
+        Print(Message)
+        Print(Symbol)
+        Print(S32)
+        Print(Factorial_Res)
+        Print("")
 
         # ----------------------------------------------------------------------
         # C. Value-Producing Blocks Giving Records & Pointers (Address / Deref)
@@ -234,53 +234,53 @@ Block Main
         Speed_Ptr = Address(Report.Speed)
         Scale_Speed(Speed_Ptr, 1.2)
 
-        Write("2. Structured Records, Record Returns & Pointers:")
-        Write(Report)
-        Write(Status)
-        Write(Report.Speed)
-        Write("")
+        Print("2. Structured Records, Record Returns & Pointers:")
+        Print(Report)
+        Print(Status)
+        Print(Report.Speed)
+        Print("")
 
         # ----------------------------------------------------------------------
         # D. Else If Ladder & Conditionals
         # ----------------------------------------------------------------------
         Altitude_Label = Classify_Altitude(Report.Position.Z)
-        Write("3. Multi-branch Conditionals (Else If):")
-        Write(Altitude_Label)
+        Print("3. Multi-branch Conditionals (Else If):")
+        Print(Altitude_Label)
 
         If S32 >= 42 And Flag And Not False
-            Write("Condition branch: Verified (>=, And, Not)")
+            Print("Condition branch: Verified (>=, And, Not)")
         Else
-            Write("Condition branch: Failed")
+            Print("Condition branch: Failed")
         End If
-        Write("")
+        Print("")
 
         # ----------------------------------------------------------------------
         # E. Low-Level Systems Operators: & | ^ ~ LSL LSR Mod %
         # ----------------------------------------------------------------------
-        Write("4. Low-Level Systems Operations:")
+        Print("4. Low-Level Systems Operations:")
         Packed_Tag = Pack_Header(101, 4)
-        Write(Packed_Tag)
+        Print(Packed_Tag)
 
         # Bitwise NOT (~), AND (&), XOR (^)
         Bit_Mask = (~S32 & 255) ^ 15
-        Write(Bit_Mask)
+        Print(Bit_Mask)
 
         # Shift Left (LSL), Shift Right (LSR), Modulo (Mod and %)
         S32 = (S32 LSL 2) Mod 50
         Remainder = 125 % 10
-        Write(S32)
-        Write(Remainder)
-        Write("")
+        Print(S32)
+        Print(Remainder)
+        Print("")
 
         # ----------------------------------------------------------------------
         # F. Loops: Loop Until, Infinite Loop, Skip & Exit
         # ----------------------------------------------------------------------
-        Write("5. Loops and Flow Control:")
+        Print("5. Loops and Flow Control:")
         Loop_Count = 0
         Loop Until Loop_Count >= 3
             Loop_Count = Loop_Count + 1
         End Loop
-        Write(Loop_Count)
+        Print(Loop_Count)
 
         # Infinite loop controlled by Skip and Exit
         Loop
@@ -290,10 +290,10 @@ Block Main
             End If
             Exit
         End Loop
-        Write("Loop finished successfully with Exit")
-        Write("")
+        Print("Loop finished successfully with Exit")
+        Print("")
 
-        Write("==========================================")
-        Write("Selected Loom language features demonstrated!")
-        Write("==========================================")
+        Print("==========================================")
+        Print("Selected Loom language features demonstrated!")
+        Print("==========================================")
 End Main

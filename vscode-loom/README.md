@@ -35,4 +35,4 @@ npm test
 npm run package
 ```
 
-This packages version 1.2.0 as `Loom-1.2.0.vsix` in this folder.
+This packages version 1.3.0 as `Loom-1.3.0.vsix` in this folder.

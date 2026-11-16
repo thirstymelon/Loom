@@ -57,7 +57,13 @@ static const std::unordered_map<std::string, std::string> KEYWORD_DOCS = {
     {"or", "**or**: Error union type specification (`Produces T or ErrorType`)."},
     {"packed", "**Packed**: Specifies packed struct layout with no padding between record fields."},
     {"align", "**Align**: Specifies custom memory alignment for records."},
-    {"volatile", "**volatile**: Type qualifier for memory-mapped I/O operations with strict load/store semantics."}
+    {"volatile", "**volatile**: Type qualifier for memory-mapped I/O operations with strict load/store semantics."},
+    {"spawn", "**Spawn**: Concurrently spawns an asynchronous task.\n\n```loom\nhandle : Task_Handle = Spawn Worker(arg)\n```"},
+    {"join", "**Join**: Waits for asynchronous task completion and returns the result.\n\n```loom\nres = Join handle\n```"},
+    {"to_string", "**To_String**: Converts expression or Text buffer to a String.\n\n```loom\nstr : String = To_String(buf)\n```"},
+    {"allocate", "**Allocate**: Dynamically allocates heap memory with size and alignment.\n\n```loom\nptr : Signed_32 Pointer = Allocate(4, 4)\n```"},
+    {"resize", "**Resize**: Reallocates a dynamically allocated heap block.\n\n```loom\nptr = Resize(ptr, 8, 4)\n```"},
+    {"release", "**Release**: Deallocates a dynamically allocated heap block.\n\n```loom\nRelease(ptr)\n```"}
 };
 
 static const std::unordered_map<std::string, std::string> TYPE_DOCS = {
@@ -76,7 +82,12 @@ static const std::unordered_map<std::string, std::string> TYPE_DOCS = {
     {"string", "**String**: Null-terminated UTF-8 byte string."},
     {"pointer", "**Pointer**: Memory pointer to a typed location (`T Pointer`)."},
     {"slice", "**Slice**: Non-owning view of a contiguous sequence (`T Slice` or `Slice(ptr, len)`)."},
-    {"array", "**Array**: Fixed-size contiguous array (`Array[T, N]`)."}
+    {"array", "**Array**: Fixed-size contiguous array (`Array[T, N]`)."},
+    {"hmap", "**HMap**: Open-addressing hash map with integer or string keys (`HMap[KeyType : ValType]`)."},
+    {"vector", "**Vector**: Growable dynamic typed array (`Type Vector[initial_size]`)."},
+    {"text", "**Text**: Growable dynamic string buffer / string builder (`Text` or `Text[capacity]`)."},
+    {"block_pointer", "**Block_Pointer**: First-class function pointer type (`[RetType] Block_Pointer(ParamTypes)`)."},
+    {"task_handle", "**Task_Handle**: Asynchronous spawned task handle."}
 };
 
 static std::string escapeJson(const std::string& s) {
@@ -120,6 +131,25 @@ static std::string readMessage() {
     return body;
 }
 
+static std::string unescapeJson(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            char next = s[i + 1];
+            if (next == 'n') { out.push_back('\n'); i++; }
+            else if (next == 'r') { out.push_back('\r'); i++; }
+            else if (next == 't') { out.push_back('\t'); i++; }
+            else if (next == '"') { out.push_back('"'); i++; }
+            else if (next == '\\') { out.push_back('\\'); i++; }
+            else { out.push_back(next); i++; }
+        } else {
+            out.push_back(s[i]);
+        }
+    }
+    return out;
+}
+
 static std::string getJsonStringField(const std::string& json, const std::string& field) {
     std::string key = "\"" + field + "\"";
     auto pos = json.find(key);
@@ -133,7 +163,7 @@ static std::string getJsonStringField(const std::string& json, const std::string
         endPos = json.find('"', endPos + 1);
     }
     if (endPos == std::string::npos) return {};
-    return json.substr(pos + 1, endPos - pos - 1);
+    return unescapeJson(json.substr(pos + 1, endPos - pos - 1));
 }
 
 static int getJsonIntField(const std::string& json, const std::string& field, int def = 0) {
@@ -172,6 +202,45 @@ static std::string getWordAt(const std::string& text, int line, int character) {
         curLine++;
     }
     return {};
+}
+
+static bool findDefinition(const std::string& text, const std::string& word, int& defLine, int& defCol) {
+    if (word.empty()) return false;
+    std::istringstream stream(text);
+    std::string line;
+    int curLine = 0;
+    std::regex blockRegex(R"(\bBlock\s+)" + word + R"(\b)");
+    std::regex recordRegex(R"(\bRecord\s+)" + word + R"(\b)");
+    std::regex enumRegex(R"(\bEnum\s+)" + word + R"(\b)");
+    std::regex varRegex(R"(\b)" + word + R"(\s*:)");
+
+    while (std::getline(stream, line)) {
+        std::smatch m;
+        if (std::regex_search(line, m, blockRegex) ||
+            std::regex_search(line, m, recordRegex) ||
+            std::regex_search(line, m, enumRegex)) {
+            defLine = curLine;
+            auto pos = line.find(word);
+            defCol = (pos != std::string::npos) ? (int)pos : 0;
+            return true;
+        }
+        curLine++;
+    }
+
+    stream.clear();
+    stream.seekg(0);
+    curLine = 0;
+    while (std::getline(stream, line)) {
+        std::smatch m;
+        if (std::regex_search(line, m, varRegex)) {
+            defLine = curLine;
+            auto pos = line.find(word);
+            defCol = (pos != std::string::npos) ? (int)pos : 0;
+            return true;
+        }
+        curLine++;
+    }
+    return false;
 }
 
 static void publishDiagnostics(const std::string& uri, const std::string& text) {
@@ -310,6 +379,27 @@ int main() {
             res << "}";
             loom::lsp::sendResponse(res.str());
         } else if (method == "textDocument/completion") {
+            auto uri = loom::lsp::getJsonStringField(msg, "uri");
+            auto posPos = msg.find("\"position\"");
+            int line = 0, character = 0;
+            if (posPos != std::string::npos) {
+                line = loom::lsp::getJsonIntField(msg.substr(posPos), "line", 0);
+                character = loom::lsp::getJsonIntField(msg.substr(posPos), "character", 0);
+            }
+            std::string prefixLine;
+            if (loom::lsp::documents.count(uri)) {
+                std::istringstream stream(loom::lsp::documents[uri].text);
+                std::string curLine;
+                int cl = 0;
+                while (std::getline(stream, curLine)) {
+                    if (cl == line) {
+                        if (character <= (int)curLine.size()) prefixLine = curLine.substr(0, character);
+                        else prefixLine = curLine;
+                        break;
+                    }
+                    cl++;
+                }
+            }
             std::ostringstream res;
             res << "{\"jsonrpc\":\"2.0\",\"id\":" << id << ",\"result\":[";
             bool first = true;
@@ -318,14 +408,70 @@ int main() {
                 first = false;
                 res << "{\"label\":\"" << label << "\",\"kind\":" << kind << ",\"detail\":\"" << loom::lsp::escapeJson(detail) << "\"}";
             };
-            for (const auto& [kw, doc] : loom::lsp::KEYWORD_DOCS) addCompletion(kw, 14, "keyword");
-            for (const auto& [ty, doc] : loom::lsp::TYPE_DOCS) addCompletion(ty, 7, "type");
-            addCompletion("Block", 14, "procedure/function declaration");
-            addCompletion("Ensure", 14, "guaranteed cleanup block");
-            addCompletion("as", 14, "type casting expression");
-            addCompletion("try", 14, "error unwrapping expression");
-            addCompletion("Packed Record", 14, "packed structure layout");
+
+            auto trimmed = prefixLine;
+            while (!trimmed.empty() && std::isspace((unsigned char)trimmed.back())) trimmed.pop_back();
+            if (!trimmed.empty() && trimmed.back() == '.') {
+                addCompletion("Length", 10, "collection element count or string length");
+                addCompletion("Capacity", 10, "allocated buffer capacity");
+                addCompletion("Append", 2, "Append(elem): appends an element to Vector");
+                addCompletion("Pop", 2, "Pop(): removes and returns last element from Vector");
+                addCompletion("Contains", 2, "Contains(key/elem): checks presence in Vector or HMap");
+                addCompletion("Remove", 2, "Remove(key): removes key from HMap");
+                addCompletion("Index", 2, "Index(elem): returns 1-based index of first match (or 0)");
+                addCompletion("Index_All", 2, "Index_All(elem): returns Vector of all matching 1-based indices");
+            } else if (trimmed.find("use ") != std::string::npos || trimmed.find("Import ") != std::string::npos) {
+                addCompletion("Math", 9, "built-in math module");
+                addCompletion("System", 9, "system intrinsics and memory");
+                addCompletion("IO", 9, "file and console I/O");
+            } else {
+                for (const auto& [kw, doc] : loom::lsp::KEYWORD_DOCS) addCompletion(kw, 14, "keyword");
+                for (const auto& [ty, doc] : loom::lsp::TYPE_DOCS) addCompletion(ty, 7, "type");
+                addCompletion("Block", 14, "procedure/function declaration");
+                addCompletion("Takes", 14, "parameter list");
+                addCompletion("Produces", 14, "return type");
+                addCompletion("Declares", 14, "local variable declarations");
+                addCompletion("Implements", 14, "executable body");
+                addCompletion("Ensure", 14, "guaranteed cleanup block");
+                addCompletion("as", 14, "type casting expression");
+                addCompletion("try", 14, "error unwrapping expression");
+                addCompletion("Packed Record", 14, "packed structure layout");
+                addCompletion("Spawn", 14, "concurrency spawn");
+                addCompletion("Join", 14, "concurrency join");
+                addCompletion("Print", 3, "Print(msg): standard output with newline");
+                addCompletion("Write", 3, "Write(msg): standard output without newline");
+                addCompletion("To_String", 3, "To_String(val): converts value to String");
+            }
             res << "]}";
+            loom::lsp::sendResponse(res.str());
+        } else if (method == "textDocument/definition") {
+            auto uri = loom::lsp::getJsonStringField(msg, "uri");
+            auto posPos = msg.find("\"position\"");
+            int line = 0, character = 0;
+            if (posPos != std::string::npos) {
+                line = loom::lsp::getJsonIntField(msg.substr(posPos), "line", 0);
+                character = loom::lsp::getJsonIntField(msg.substr(posPos), "character", 0);
+            }
+            std::string word;
+            if (loom::lsp::documents.count(uri)) {
+                word = loom::lsp::getWordAt(loom::lsp::documents[uri].text, line, character);
+            }
+            int defLine = 0, defCol = 0;
+            bool found = false;
+            if (!word.empty() && loom::lsp::documents.count(uri)) {
+                found = loom::lsp::findDefinition(loom::lsp::documents[uri].text, word, defLine, defCol);
+            }
+            std::ostringstream res;
+            res << "{\"jsonrpc\":\"2.0\",\"id\":" << id << ",\"result\":";
+            if (found) {
+                res << "{\"uri\":\"" << loom::lsp::escapeJson(uri) << "\",\"range\":{"
+                    << "\"start\":{\"line\":" << defLine << ",\"character\":" << defCol << "},"
+                    << "\"end\":{\"line\":" << defLine << ",\"character\":" << (defCol + (int)word.size()) << "}"
+                    << "}}";
+            } else {
+                res << "null";
+            }
+            res << "}";
             loom::lsp::sendResponse(res.str());
         } else if (method == "shutdown") {
             std::ostringstream res;

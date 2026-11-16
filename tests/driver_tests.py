@@ -26,11 +26,11 @@ with tempfile.TemporaryDirectory(prefix="loom-cli-suite-") as tmp:
     tc_nat = test_home / ".loom" / "toolchains" / "native"
     (tc_nat / "bin").mkdir(parents=True, exist_ok=True)
     (tc_nat / "bin" / "loomc").symlink_to(loomc)
-    (tc_nat / "toolchain.toml").write_text('name = "native"\nkind = "native"\nversion = "1.2.0"\ndescription = "Loom Native Desktop Toolchain"\n')
+    (tc_nat / "toolchain.toml").write_text('name = "native"\nkind = "native"\nversion = "1.3.0"\ndescription = "Loom Native Desktop Toolchain"\n')
     tc_rp = test_home / ".loom" / "toolchains" / "rp2040"
     (tc_rp / "bin").mkdir(parents=True, exist_ok=True)
     (tc_rp / "bin" / "loomc").symlink_to(loomc)
-    (tc_rp / "toolchain.toml").write_text('name = "rp2040"\nkind = "rp2040"\nversion = "1.2.0"\ndescription = "Loom RP2040 Embedded Bare-Metal Toolchain"\n')
+    (tc_rp / "toolchain.toml").write_text('name = "rp2040"\nkind = "rp2040"\nversion = "1.3.0"\ndescription = "Loom RP2040 Embedded Bare-Metal Toolchain"\n')
     run(["new", "hello"], parent)
     project = parent / "hello"
     assert (project / "config.toml").exists()
@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix="loom-cli-suite-") as tmp:
     assert "project.o" not in one_file_graph and "Native Build" not in one_file_graph
     run(["graph", "--config", "config.toml"], project)
     assert (project / "loom-deps.mmd").read_text() == one_file_graph
-    (project / "src/main.loom").write_text('Module Main\nImport Math\nImport IO\nuse Math\nuse IO\n\nBlock Main Declares\n    Answer : Signed_32\nImplements\n    Answer = Helper(41)\n    Answer = Identity(Answer)\n    Log()\n    Write("Hello from Loom!")\n    Write("")\nEnd Main\n')
+    (project / "src/main.loom").write_text('Module Main\nImport Math\nImport IO\nuse Math\nuse IO\n\nBlock Main Declares\n    Answer : Signed_32\nImplements\n    Answer = Helper(41)\n    Answer = Identity(Answer)\n    Log()\n    Print("Hello from Loom!")\n    Print("")\nEnd Main\n')
 
     (project / "src/math.loom").write_text("Module Math\n\nBlock Helper Takes\n    Value : Signed_32\nProduces Signed_32\nImplements\n    Give Value + 1\nEnd Helper\n")
     (project / "src/io helper.loom").write_text("Module IO\nImport Math\nuse Math\n\nBlock Identity Takes\n    Value : Signed_32\nProduces Signed_32\nImplements\n    Give Helper(Value)\nEnd Identity\nBlock Log Implements\nEnd Log\n")
@@ -107,12 +107,12 @@ Block Main Declares
 Implements
     Pair_Value.Value = Sum
     Pair_Value.Label = "record"
-    Write(Sum)
-    Write(Ready)
-    Write(Ratio)
-    Write(Letter)
-    Write(Text)
-    Write(Pair_Value)
+    Print(Sum)
+    Print(Ready)
+    Print(Ratio)
+    Print(Letter)
+    Print(Text)
+    Print(Pair_Value)
 End Main
 Block Add Takes
     Left : Signed_32
@@ -147,7 +147,7 @@ End Add
     missing_config = run(["graph", "--config", "missing.toml"], project, check=False)
     assert missing_config.returncode != 0 and "missing.toml" in missing_config.stderr
     version = run(["--version"], project)
-    assert "1.2.0" in version.stdout
+    assert "1.3.0" in version.stdout
     help_text = run(["--help"], project)
     assert "loom graph" in help_text.stdout and "--verbose" in help_text.stdout
     unsupported_mode = run(["build", "--freestanding"], project, check=False)

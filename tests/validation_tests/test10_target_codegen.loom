@@ -15,6 +15,6 @@ Block Main
         R : Signed_32
     Implements
         R = FastMultiplyAccumulate(10, 20, 30)
-        Write(R)
+        Print(R)
 End Main
 

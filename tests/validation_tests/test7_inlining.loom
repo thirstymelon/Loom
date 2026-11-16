@@ -19,6 +19,6 @@ Block Main
         Res : Signed_32
     Implements
         Res = Compute(10)
-        Write(Res)
+        Print(Res)
 End Main
 

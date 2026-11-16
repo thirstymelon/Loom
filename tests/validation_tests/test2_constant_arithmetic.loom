@@ -5,6 +5,6 @@ Block Main
         Value : Signed_32
     Implements
         Value = (20 + 22) * 2 - 42
-        Write(Value)
+        Print(Value)
 End Main
 

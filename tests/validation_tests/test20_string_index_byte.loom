@@ -6,5 +6,5 @@ Block Main
         First : Unsigned_8
     Implements
     First = Text[1]
-    Write(First)
+    Print(First)
 End Main

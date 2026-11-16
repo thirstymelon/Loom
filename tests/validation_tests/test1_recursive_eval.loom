@@ -15,6 +15,6 @@ Block Main
         Result : Signed_32
     Implements
         Result = Factorial(5)
-        Write(Result)
+        Print(Result)
 End Main
 

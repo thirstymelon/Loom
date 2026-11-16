@@ -32,8 +32,8 @@ Block Main
         Z : Float_64 = 0.0 - 1.0
     Implements
     Res = ComputeFloat(A, B, C)
-    Write(Res)
+    Print(Res)
     Probe = FmaProbe(X, Y, Z)
-    Write(Probe)
+    Print(Probe)
 End Main
 

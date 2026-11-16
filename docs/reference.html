@@ -1,6 +1,6 @@
-<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Reference · Loom 1.2.0</title><link rel=stylesheet href="styles.css"><link rel="icon" type="image/png" href="assets/logo.png"></head><body data-r=""><header><div class=w><a class=brand href="index.html"><img src="assets/logo.png" alt="Loom"><span>Loom<i>.</i><sup>1.2.0</sup></span></a><nav><a href="getting-started.html">Start</a><a href="tutorials/index.html">Tutorials</a><a href="developer-overview.html">Developer</a><a href="rp2040-reference.html">RP2040 BSP</a><a href="reference.html" class=on>Reference</a></nav><button class=sb id=sk>Search <kbd>Ctrl K</kbd></button><button class=mb id=mb aria-label=Menu>≡</button></div></header><div class="w doc"><article>
-<p class=eb>Technical Language Specification</p><h1>Loom 1.2.0 language reference</h1>
-<p class=lead>The authoritative specification of Loom v1.2.0: type system, literal forms, keyword directory, operator precedence, volatile memory intrinsics, compiler diagnostics, CLI options, and formal EBNF grammar.</p>
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Reference · Loom 1.3.0</title><link rel=stylesheet href="styles.css"><link rel="icon" type="image/png" href="assets/logo.png"></head><body data-r=""><header><div class=w><a class=brand href="index.html"><img src="assets/logo.png" alt="Loom"><span>Loom<i>.</i><sup>1.3.0</sup></span></a><nav><a href="getting-started.html">Start</a><a href="tutorials/index.html">Tutorials</a><a href="developer-overview.html">Developer</a><a href="rp2040-reference.html">RP2040 BSP</a><a href="reference.html" class=on>Reference</a></nav><button class=sb id=sk>Search <kbd>Ctrl K</kbd></button><button class=mb id=mb aria-label=Menu>≡</button></div></header><div class="w doc"><article>
+<p class=eb>Technical Language Specification</p><h1>Loom 1.3.0 language reference</h1>
+<p class=lead>The authoritative specification of Loom v1.3.0: type system, literal forms, keyword directory, operator precedence, volatile memory intrinsics, compiler diagnostics, CLI options, and formal EBNF grammar.</p>
 
 <h2 id="types">The type system</h2>
 <p>Loom provides explicit, fixed-width primitive and composite types. There are no implicit promotions or silent coercions:</p>
@@ -24,6 +24,13 @@
 <tr><td><code>T Slice</code><td>16 bytes (or 8 on ARM)<td>Pointer size<td>Non-owning fat pointer struct (pointer to element 1 + unsigned 64-bit element count). Provides <code>.Length</code>.</tr>
 <tr><td><code>Record</code><td>Sum of fields + pad<td>Max field align<td>Structured value type. Field order preserved. Copied by value.</tr>
 <tr><td><code>Enum</code><td>Underlying type<td>Underlying align<td>Named integer enumeration with explicit underlying scalar type.</tr>
+<tr><td><code>T Vector[N]</code> / <code>T Vector = {...}</code><td>24 bytes (or 16 on ARM)<td>Pointer size<td>Growable dynamic heap vector. 1-based indexing, <code>.Append()</code>, <code>.Pop()</code>, <code>.Index()</code>, <code>.Index_All()</code>, <code>.Contains()</code>, <code>.Length</code>, and <code>.Capacity</code>.</tr>
+<tr><td><code>HMap[K : V]</code><td>Pointer size<td>Pointer size<td>Open-addressing dynamic hash map with integer or string keys. Supports indexing <code>Map[K]</code>, <code>.Length</code>, <code>.Contains(K)</code>, and <code>.Remove(K)</code>. Restricted to Loom Native.</tr>
+<tr><td><code>(T1, T2, ...)</code><td>Sum of elements<td>Max element align<td>Lightweight anonymous tuple value type. Used for multi-value returns and unpacking assignments.</tr>
+<tr><td><code>Text</code> / <code>Text[N]</code><td>24 bytes (or 16 on ARM)<td>Pointer size<td>Growable dynamic string builder. In-place appending via <code>+=</code>, <code>.Length</code>, <code>.Capacity</code>, and <code>To_String()</code>.</tr>
+<tr><td><code>Block_Pointer(...)</code><td>Pointer size<td>Pointer size<td>First-class indirect block (function or procedure) pointer. Null keyword omitted on non-producing pointers.</tr>
+<tr><td><code>File_Handle</code><td>Pointer size<td>Pointer size<td>OS file descriptor handle. Created via <code>Open_File</code>, closed via <code>Close_File</code>.</tr>
+<tr><td><code>Task_Handle</code><td>Pointer size<td>Pointer size<td>Preemptive OS thread/fiber concurrency handle for <code>Spawn</code>, <code>Join Task</code>, and <code>Cancel Task</code>.</tr>
 </table>
 
 <h2 id="literals">Literal expressions & representations</h2>
@@ -35,7 +42,9 @@
 <tr><td><b>Floating Point</b><td><code>3.14159</code>, <code>-0.005</code>, <code>1_000.50</code><td>Standard IEEE decimal float literal. Requires explicit <code>Float_32</code> or <code>Float_64</code> context.</tr>
 <tr><td><b>Characters</b><td><code>'A'</code>, <code>'\n'</code>, <code>'\t'</code>, <code>'\\'</code>, <code>'\''</code>, <code>'⚡'</code><td>Single quotes enclosing a single Unicode scalar or escape sequence.</tr>
 <tr><td><b>Strings</b><td><code>"Hello, World!\n"</code><td>Double quotes enclosing UTF-8 character sequence. Supports standard escapes (<code>\n</code>, <code>\t</code>, <code>\r</code>, <code>\\</code>, <code>\"</code>).</tr>
-<tr><td><b>String Interpolation</b><td><code>"Count: &lt;Count&gt;, Uptime: &lt;Get_Time()&gt; ms"</code><td>Angle brackets inside string literals interpolate expressions dynamically at runtime.</tr>
+<tr><td><b>String Interpolation</b><td><code>"Count: &lt;Count&gt;, Hex: &lt;Val:04X&gt;, Float: &lt;F:.2f&gt;"</code><td>Angle brackets inside string literals interpolate expressions dynamically at runtime with optional format specifiers (e.g. <code>:04X</code>, <code>:.2f</code>, <code>:6d</code>).</tr>
+<tr><td><b>Hash Map Literal</b><td><code>{ 1 : "Alex", 2 : "Adam" }</code><td>Constructs an initialized <code>HMap</code> with key-value pairs separated by colons.</tr>
+<tr><td><b>Tuple Literal</b><td><code>(10, True, "OK")</code><td>Constructs a lightweight tuple value with comma-separated elements in parentheses.</tr>
 <tr><td><b>Null Pointer</b><td><code>Null</code><td>Typed null pointer literal compatible with all pointer types. Uninitialized pointers default to <code>Null</code>.</tr>
 <tr><td><b>Record Struct Literal</b><td><code>Point{ X: 10, Y: 20 }</code><td>Constructs an initialized record by specifying field names and initial values.</tr>
 </table>
@@ -48,16 +57,16 @@
 <tr><td><code>Block</code><td>Structure<td><code>Block &lt;Name&gt; ... End &lt;Name&gt;</code> — Defines an executable procedure or function.</tr>
 <tr><td><code>Global</code><td>Structure<td><code>Block Global ... End Global</code> — Declares global variables and constants.</tr>
 <tr><td><code>Takes</code><td>Header<td><code>Takes &lt;Name&gt; : &lt;Type&gt;</code> — Declares parameter list for a block.</tr>
-<tr><td><code>Produces</code><td>Header<td><code>Produces &lt;Type&gt;</code> or concise <code>Produces (&lt;Expr&gt;)</code> — Declares return type or concise return expression.</tr>
+<tr><td><code>Produces</code><td>Header<td><code>Produces &lt;Type&gt;</code>, multi-value <code>Produces (&lt;T1&gt;, &lt;T2&gt;)</code>, or concise <code>Produces (&lt;Expr&gt;)</code> / <code>Produces &lt;Expr&gt;</code> — Declares return type or concise return expression.</tr>
 <tr><td><code>Declares</code><td>Header<td><code>Declares &lt;Name&gt; : &lt;Type&gt; [= &lt;Init&gt;]</code> — Declares local variable block.</tr>
 <tr><td><code>Implements</code><td>Header<td><code>Implements</code> — Begins block statement execution body.</tr>
 <tr><td><code>End</code><td>Structure<td><code>End &lt;Name&gt;</code> / <code>End If</code> / <code>End Loop</code> / <code>End Match</code> — Closes a block or control structure.</tr>
-<tr><td><code>Give</code><td>Control<td><code>Give &lt;Expr&gt;</code> — Returns a value from a value-producing block.</tr>
+<tr><td><code>Give</code><td>Control<td><code>Give &lt;Expr&gt;</code> or multi-value <code>Give (&lt;Expr1&gt;, &lt;Expr2&gt;)</code> — Returns a value from a value-producing block.</tr>
 <tr><td><code>If</code> / <code>Else If</code> / <code>Else</code><td>Control<td><code>If &lt;Cond&gt; ... Else If &lt;Cond&gt; ... Else ... End If</code> — Conditional branching.</tr>
 <tr><td><code>Loop</code><td>Control<td><code>Loop ... End Loop</code>, <code>Loop while &lt;Cond&gt;</code>, or <code>Loop until &lt;Cond&gt;</code> — Loop execution.</tr>
-<tr><td><code>Exit</code><td>Control<td><code>Exit</code> — Terminates the nearest enclosing loop or exits a procedure early.</tr>
+<tr><td><code>Exit</code><td>Control<td><code>Exit</code> / <code>Exit(&lt;Code&gt;)</code> — Terminates the nearest enclosing loop or exits the process with an optional status code.</tr>
 <tr><td><code>Skip</code><td>Control<td><code>Skip</code> — Advances immediately to the next loop iteration check.</tr>
-<tr><td><code>Match</code> / <code>When</code><td>Control<td><code>Match &lt;Expr&gt; When &lt;Pattern&gt;: ... Else: ... End Match</code> — Pattern matching.</tr>
+<tr><td><code>Match</code> / <code>When</code><td>Control<td><code>Match &lt;Expr&gt; When &lt;Pattern&gt;: ... When &lt;A&gt; .. &lt;B&gt;: ... When _: ... Else: ... End Match</code> — Pattern matching over values, ranges, tuples, records, and wildcard.</tr>
 <tr><td><code>Ensure</code><td>Memory<td><code>Ensure { &lt;Statements&gt; }</code> — Single multi-line block per function for deterministic LIFO cleanup.</tr>
 <tr><td><code>Address</code><td>Memory<td><code>Address(&lt;Var&gt;)</code> — Returns <code>T Pointer</code> to an lvalue variable.</tr>
 <tr><td><code>Deref</code><td>Memory<td><code>Deref(&lt;Ptr&gt;)</code> — Dereferences a pointer for read or assignment (<code>Deref(P) = 42</code>).</tr>
@@ -70,7 +79,12 @@
 <tr><td><code>Constant</code><td>Type<td><code>&lt;Name&gt; : Constant &lt;Type&gt; = &lt;Value&gt;</code> — Compile-time immutable constant.</tr>
 <tr><td><code>Extern</code><td>Interop<td><code>Extern Block &lt;Name&gt; ... End &lt;Name&gt;</code> — Declares a C ABI foreign function.</tr>
 <tr><td><code>Import</code><td>Module<td><code>Import &lt;Module&gt;</code> — Imports an external source file or SDK module.</tr>
-<tr><td><code>use</code><td>Module<td><code>use &lt;Module&gt;</code> — Unqualified namespace import (file-level or block-scoped).</tr>
+<tr><td><code>use</code><td>Module<td><code>use &lt;Module&gt;</code> — Unqualified namespace import (module-scoped or block-scoped).</tr>
+<tr><td><code>Spawn</code><td>Concurrency<td><code>Task = Spawn &lt;Block&gt;(&lt;Args&gt;)</code> — Spawns an asynchronous background task, returning a <code>Task_Handle</code>.</tr>
+<tr><td><code>Join</code><td>Concurrency<td><code>Result = Join Task &lt;Handle&gt; [within &lt;Ms&gt;]</code> — Suspends until task completes (optional timeout in ms).</tr>
+<tr><td><code>Cancel</code><td>Concurrency<td><code>Cancel Task &lt;Handle&gt;</code> — Aborts an active concurrent task.</tr>
+<tr><td><code>Print</code><td>I/O<td><code>Print(...)</code> — Exclusively outputs formatted, interpolated text to terminal standard output (stdout).</tr>
+<tr><td><code>Write</code><td>I/O<td><code>Write(File, ...)</code> — Exclusively outputs formatted text to an open <code>File_Handle</code> stream.</tr>
 </table>
 
 <div class=note><p><b>Direct Block Invocations:</b> Loom does <b>not</b> have a <code>Call</code> keyword. Procedures and functions are called directly by their identifier: <code>My_Procedure()</code> or <code>Result = My_Function(Arg)</code>. If a value-producing block's result is not needed, call it as a statement and Loom discards that value. The compiler still checks visibility and argument types.</p><pre><code>RP2040_Init() # The Boolean return value is intentionally unused.
@@ -81,15 +95,16 @@ OLED_I2C = I2C_Init(4, 5)</code></pre></div>
 <table>
 <tr><th>Precedence Level<th>Operators<th>Category & Behavior</tr>
 <tr><td>1 (Highest)<td><code>-</code> (unary), <code>Not</code>, <code>~</code> (bitwise NOT)<td>Unary negation, logical inversion, and bitwise NOT.</tr>
-<tr><td>2<td><code>*</code>, <code>/</code>, <code>Mod</code>, <code>%</code><td>Multiplication, integer/float division, and modulo / remainder.</tr>
-<tr><td>3<td><code>+</code>, <code>-</code><td>Addition and subtraction. Fixed integer overflow wraps.</tr>
-<tr><td>4<td><code>LSL</code>, <code>LSR</code><td>Logical Shift Left and Shift Right (sign-extended for signed types).</tr>
-<tr><td>5<td><code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code><td>Relational equality and ordering comparisons. Evaluates to <code>Boolean</code>.</tr>
-<tr><td>6<td><code>&amp;</code><td>Bitwise AND.</tr>
-<tr><td>7<td><code>^</code><td>Bitwise XOR.</tr>
-<tr><td>8<td><code>|</code><td>Bitwise OR.</tr>
-<tr><td>9<td><code>And</code><td>Logical AND.</tr>
-<tr><td>10 (Lowest)<td><code>Or</code><td>Logical OR.</tr>
+<tr><td>2<td><code>pow</code><td>Infix exponentiation power operator (<code>2 pow 8 == 256</code>).</tr>
+<tr><td>3<td><code>*</code>, <code>/</code>, <code>Mod</code>, <code>%</code><td>Multiplication, integer/float division, and modulo / remainder.</tr>
+<tr><td>4<td><code>+</code>, <code>-</code><td>Addition and subtraction. Fixed integer overflow wraps.</tr>
+<tr><td>5<td><code>LSL</code>, <code>LSR</code><td>Logical Shift Left and Shift Right (sign-extended for signed types).</tr>
+<tr><td>6<td><code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code><td>Relational equality and ordering comparisons. Evaluates to <code>Boolean</code>.</tr>
+<tr><td>7<td><code>&amp;</code><td>Bitwise AND.</tr>
+<tr><td>8<td><code>^</code><td>Bitwise XOR.</tr>
+<tr><td>9<td><code>|</code><td>Bitwise OR.</tr>
+<tr><td>10<td><code>And</code><td>Logical AND.</tr>
+<tr><td>11 (Lowest)<td><code>Or</code><td>Logical OR.</tr>
 </table>
 
 <h3>Compound Assignment Operators</h3>
@@ -122,7 +137,7 @@ Bits  ^= 0xFF      # Equivalent to: Bits = Bits ^ 0xFF</code></pre>
 <tr><td><code>loom lsp</code><td>Starts the native Loom Language Server Protocol (LSP) daemon for IDE integration.</tr>
 <tr><td><code>loom clean</code><td>Deletes the <code>target/</code> directory and all intermediate object files.</tr>
 <tr><td><code>loom graph [--view calls|data] [--format mermaid|json]</code><td>Generates an architectural call graph or data access model from semantic analysis.</tr>
-<tr><td><code>loom --version</code> / <code>-V</code><td>Prints driver version string (e.g. <code>loom 1.2.0</code>).</tr>
+<tr><td><code>loom --version</code> / <code>-V</code><td>Prints driver version string (e.g. <code>loom 1.3.0</code>).</tr>
 </table>
 
 <h3>The <code>loomc</code> Native Compiler</h3>
@@ -138,7 +153,7 @@ Bits  ^= 0xFF      # Equivalent to: Bits = Bits ^ 0xFF</code></pre>
 <tr><td><code>--emit-c-header &lt;header.h&gt;</code><td>Generates ANSI C header with matching record structs and extern block declarations.</tr>
 <tr><td><code>--test-runner</code><td>Synthesizes and compiles test execution harness for all declared <code>Test</code> blocks.</tr>
 <tr><td><code>-I &lt;dir&gt;</code><td>Adds an SDK or header include directory for module resolution.</tr>
-<tr><td><code>--version</code><td>Prints compiler version and linked LLVM version (e.g. <code>loomc 1.2.0 (LLVM 23.1.4)</code>).</tr>
+<tr><td><code>--version</code><td>Prints compiler version and linked LLVM version (e.g. <code>loomc 1.3.0 (LLVM 23.1.4)</code>).</tr>
 </table>
 
 <h2 id="grammar">Formal EBNF grammar specification</h2>
@@ -179,7 +194,7 @@ EnsureStmt     ::= "Ensure" "{" Statement "}"
 CallStmt       ::= [ Identifier "." ] Identifier "(" [ Expression ( "," Expression )* ] ")"
 WriteStmt      ::= "Write" "(" [ Expression ( "," Expression )* ] ")" | "Write_UART" "(" Expression ")"</code></pre>
 
-<div class=pn><a href="embedded-rp2040.html"><small>← Previous</small>Embedded RP2040</a><span></span></div></article><aside id=toc></aside></div><footer><div class=w><span>Loom 1.2.0</span><span>loomc 1.2.0 (LLVM 23.1.4)</span></div></footer><div id=pal><div><input id=pi placeholder="Search the docs…"><div id=pl></div></div></div><script>const IDX=[["Overview", "index.html", "Page"], ["Getting started", "getting-started.html", "Page"], ["Tutorials", "tutorials/index.html", "Page"], ["Beginner guide", "tutorials/beginner-guide.html", "Page"], ["Developer overview", "developer-overview.html", "Page"], ["Embedded RP2040", "embedded-rp2040.html", "Page"], ["RP2040 BSP reference", "rp2040-reference.html", "Page"], ["Reference", "reference.html", "Page"], ["Pillars", "index.html#pillars", "Overview"], ["Features", "index.html#features", "Overview"], ["Quick start", "index.html#quick-start", "Overview"], ["Explore", "index.html#explore", "Overview"], ["Install", "getting-started.html#install", "Getting started"], ["Toolchain", "getting-started.html#toolchain", "Getting started"], ["Editor setup", "getting-started.html#editor-setup", "Getting started"], ["Project anatomy", "getting-started.html#project-anatomy", "Getting started"], ["Your first project", "getting-started.html#your-first-project", "Getting started"], ["1. Hello, World", "tutorials/beginner-guide.html#l1", "Beginner guide"], ["2. Variables, types and literals", "tutorials/beginner-guide.html#l2", "Beginner guide"], ["3. Operators", "tutorials/beginner-guide.html#l3", "Beginner guide"], ["4. Decisions", "tutorials/beginner-guide.html#l4", "Beginner guide"], ["5. Loops", "tutorials/beginner-guide.html#l5", "Beginner guide"], ["6. Procedures", "tutorials/beginner-guide.html#l6", "Beginner guide"], ["7. Records, enums and Match", "tutorials/beginner-guide.html#l7", "Beginner guide"], ["8. Arrays and slices", "tutorials/beginner-guide.html#l8", "Beginner guide"], ["9. Pointers, Cast and Ensure", "tutorials/beginner-guide.html#l9", "Beginner guide"], ["10. Modules", "tutorials/beginner-guide.html#l10", "Beginner guide"], ["Memory model", "developer-overview.html#memory-model", "Developer overview"], ["Safety rules", "developer-overview.html#safety-rules", "Developer overview"], ["Deterministic cleanup", "developer-overview.html#deterministic-cleanup", "Developer overview"], ["Why one-based indexing", "developer-overview.html#why-one-based-indexing", "Developer overview"], ["Compiler pipeline", "developer-overview.html#compiler-pipeline", "Developer overview"], ["Volatile I/O", "developer-overview.html#volatile-i-o", "Developer overview"], ["C FFI", "developer-overview.html#c-ffi", "Developer overview"], ["Module graphs", "developer-overview.html#module-graphs", "Developer overview"], ["The chip", "embedded-rp2040.html#the-chip", "Embedded RP2040"], ["Create a project", "embedded-rp2040.html#create-a-project", "Embedded RP2040"], ["The SDK", "embedded-rp2040.html#the-sdk", "Embedded RP2040"], ["RP2040 function guide", "rp2040-reference.html", "RP2040 BSP"], ["Hardware abstraction layer", "embedded-rp2040.html#hardware-abstraction-layer", "Embedded RP2040"], ["Blink firmware", "embedded-rp2040.html#blink-firmware", "Embedded RP2040"], ["Direct register access", "embedded-rp2040.html#direct-register-access", "Embedded RP2040"], ["Build and flash", "embedded-rp2040.html#build-and-flash", "Embedded RP2040"], ["Simulate with Wokwi", "embedded-rp2040.html#simulate-with-wokwi", "Embedded RP2040"], ["Types", "reference.html#types", "Reference"], ["Literals", "reference.html#literals", "Reference"], ["Keywords", "reference.html#keywords", "Reference"], ["Operators", "reference.html#operators", "Reference"], ["Volatile intrinsics", "reference.html#volatile-intrinsics", "Reference"], ["CLI", "reference.html#cli", "Reference"], ["Grammar", "reference.html#grammar", "Reference"]];
+<div class=pn><a href="embedded-rp2040.html"><small>← Previous</small>Embedded RP2040</a><span></span></div></article><aside id=toc></aside></div><footer><div class=w><span>Loom 1.3.0</span><span>loomc 1.3.0 (LLVM 23.1.4)</span></div></footer><div id=pal><div><input id=pi placeholder="Search the docs…"><div id=pl></div></div></div><script>const IDX=[["Overview", "index.html", "Page"], ["Getting started", "getting-started.html", "Page"], ["Tutorials", "tutorials/index.html", "Page"], ["Beginner guide", "tutorials/beginner-guide.html", "Page"], ["Developer overview", "developer-overview.html", "Page"], ["Embedded RP2040", "embedded-rp2040.html", "Page"], ["RP2040 BSP reference", "rp2040-reference.html", "Page"], ["Reference", "reference.html", "Page"], ["Pillars", "index.html#pillars", "Overview"], ["Features", "index.html#features", "Overview"], ["Quick start", "index.html#quick-start", "Overview"], ["Explore", "index.html#explore", "Overview"], ["Install", "getting-started.html#install", "Getting started"], ["Toolchain", "getting-started.html#toolchain", "Getting started"], ["Editor setup", "getting-started.html#editor-setup", "Getting started"], ["Project anatomy", "getting-started.html#project-anatomy", "Getting started"], ["Your first project", "getting-started.html#your-first-project", "Getting started"], ["1. Hello, World", "tutorials/beginner-guide.html#l1", "Beginner guide"], ["2. Variables, types and literals", "tutorials/beginner-guide.html#l2", "Beginner guide"], ["3. Operators", "tutorials/beginner-guide.html#l3", "Beginner guide"], ["4. Decisions", "tutorials/beginner-guide.html#l4", "Beginner guide"], ["5. Loops", "tutorials/beginner-guide.html#l5", "Beginner guide"], ["6. Procedures", "tutorials/beginner-guide.html#l6", "Beginner guide"], ["7. Records, enums and Match", "tutorials/beginner-guide.html#l7", "Beginner guide"], ["8. Arrays and slices", "tutorials/beginner-guide.html#l8", "Beginner guide"], ["9. Pointers, Cast and Ensure", "tutorials/beginner-guide.html#l9", "Beginner guide"], ["10. Modules", "tutorials/beginner-guide.html#l10", "Beginner guide"], ["Memory model", "developer-overview.html#memory-model", "Developer overview"], ["Safety rules", "developer-overview.html#safety-rules", "Developer overview"], ["Deterministic cleanup", "developer-overview.html#deterministic-cleanup", "Developer overview"], ["Why one-based indexing", "developer-overview.html#why-one-based-indexing", "Developer overview"], ["Compiler pipeline", "developer-overview.html#compiler-pipeline", "Developer overview"], ["Volatile I/O", "developer-overview.html#volatile-i-o", "Developer overview"], ["C FFI", "developer-overview.html#c-ffi", "Developer overview"], ["Module graphs", "developer-overview.html#module-graphs", "Developer overview"], ["The chip", "embedded-rp2040.html#the-chip", "Embedded RP2040"], ["Create a project", "embedded-rp2040.html#create-a-project", "Embedded RP2040"], ["The SDK", "embedded-rp2040.html#the-sdk", "Embedded RP2040"], ["RP2040 function guide", "rp2040-reference.html", "RP2040 BSP"], ["Hardware abstraction layer", "embedded-rp2040.html#hardware-abstraction-layer", "Embedded RP2040"], ["Blink firmware", "embedded-rp2040.html#blink-firmware", "Embedded RP2040"], ["Direct register access", "embedded-rp2040.html#direct-register-access", "Embedded RP2040"], ["Build and flash", "embedded-rp2040.html#build-and-flash", "Embedded RP2040"], ["Simulate with Wokwi", "embedded-rp2040.html#simulate-with-wokwi", "Embedded RP2040"], ["Types", "reference.html#types", "Reference"], ["Literals", "reference.html#literals", "Reference"], ["Keywords", "reference.html#keywords", "Reference"], ["Operators", "reference.html#operators", "Reference"], ["Volatile intrinsics", "reference.html#volatile-intrinsics", "Reference"], ["CLI", "reference.html#cli", "Reference"], ["Grammar", "reference.html#grammar", "Reference"]];
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],R=document.body.dataset.r;
 const RE=/(#[^\n]*)|("(?:[^"\\]|\\.)*"|'[^'\n]*')|\b(0x[0-9a-fA-F_]+|0b[01_]+|\d[\d_]*(?:\.\d+)?)\b|\b(Module|Block|Global|Takes|Produces|Declares|Implements|End|Give|If|Else|Loop|While|Until|For|In|Exit|Skip|Ensure|Match|With|When|Import|Use|Constant|Record|Enum|Extern)\b|\b(Address|Deref|Cast|Slice|Null|True|False|And|Or|Not|Mod|LSL|LSR|ASR)\b|\b(Signed_\d+|Unsigned_\d+|Float_\d+|Boolean|Character|String|Pointer|Array|Int\d*|Uint\d*|Float\d*|Bool|Char|Byte|Word|Usize|Isize)\b|([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()|(\+=|-=|\*=|\/=|%=|:=|==|!=|<=|>=|->|=>|::|@|\^)/g;
 const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');

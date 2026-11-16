@@ -28,6 +28,6 @@ Block Main
         V2.Y = 5.0
         V2.Z = 6.0
         D = Dot(V1, V2)
-        Write(D)
+        Print(D)
 End Main
 

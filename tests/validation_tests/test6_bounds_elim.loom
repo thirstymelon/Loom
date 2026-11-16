@@ -25,6 +25,6 @@ Block Main
         I = I + 1
     End Loop
     ScaleArray(Address(Arr[1]), 8)
-    Write(Arr[1])
+    Print(Arr[1])
 End Main
 

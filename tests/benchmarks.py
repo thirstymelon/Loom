@@ -56,7 +56,7 @@ Block Main
         Res : Signed_32
     Implements
         Res = Fib(Arg)
-        Write(Res)
+        Print(Res)
 End Main
 """
 
@@ -147,7 +147,7 @@ Block Main
         Total = Total + VectorSum(Ptr, 1024)
         Iter = Iter + 1
     End Loop
-    Write(Total)
+    Print(Total)
 End Main
 """
 
@@ -229,7 +229,7 @@ Block Main
         Res : Signed_64
     Implements
         Res = ComputeTransform(100, 100000000)
-        Write(Res)
+        Print(Res)
 End Main
 """
 

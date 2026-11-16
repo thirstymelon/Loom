@@ -5,7 +5,7 @@ Block Main
         I : Signed_32 = 0
     Implements
         Loop
-            Ensure { Write(I) }
+            Ensure { Print(I) }
             I = I + 1
             If I == 1
                 Skip
@@ -13,6 +13,6 @@ Block Main
             Exit
         End Loop
         If True
-            Ensure { Write(7) }
+            Ensure { Print(7) }
         End If
 End Main

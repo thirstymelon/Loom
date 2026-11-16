@@ -17,6 +17,6 @@ Block Main
         Total : Signed_32
     Implements
         Total = SumElements()
-        Write(Total)
+        Print(Total)
 End Main
 

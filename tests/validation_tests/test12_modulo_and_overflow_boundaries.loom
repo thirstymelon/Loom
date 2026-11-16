@@ -19,5 +19,5 @@ Block Main
         R : Signed_64
     Implements
     R = TestMath(105, 10)
-    Write(R)
+    Print(R)
 End Main

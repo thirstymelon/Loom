@@ -5,5 +5,5 @@ Block Main
         Text : String = "x"
         Index : Signed_64 = 2
     Implements
-        Write(Text[Index])
+        Print(Text[Index])
 End Main

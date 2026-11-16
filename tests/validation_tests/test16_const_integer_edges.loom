@@ -30,7 +30,7 @@ Block Main
         A = Wrap8(127, 1)
         B = ShiftLeft8()
         C = ShiftRight8()
-        Write(A)
-        Write(B)
-        Write(C)
+        Print(A)
+        Print(B)
+        Print(C)
 End Main

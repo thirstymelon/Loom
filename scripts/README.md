@@ -6,14 +6,14 @@ This directory contains automation scripts for packaging the Loom toolchain acro
 
 Loom packages two distinct macOS Apple Silicon (`arm64`) installer packages (`.pkg`):
 
-1. **Desktop Native Toolchain (`Loom-1.2.0-macos-arm64-native.pkg`)**:
+1. **Desktop Native Toolchain (`Loom-1.3.0-macos-arm64-native.pkg`)**:
    - Universal build driver CLI (`/usr/local/bin/loom`) and Language Server (`/usr/local/bin/loom-lsp`).
    - Native desktop compiler (`/usr/local/share/loom/toolchains/native/bin/loomc`) targeting host native architecture (`arm64-apple-darwin`).
    - Bundled Z3 and zstd runtime libraries, so the compiler does not need Homebrew's runtime paths.
    - Toolchain manifest (`toolchain.toml`) with native desktop constraints.
    - Desktop standard library (`/usr/local/share/loom/toolchains/native/sdk/std/`).
 
-2. **RP2040 Embedded Toolchain (`Loom-1.2.0-macos-arm64-rp2040.pkg`)**:
+2. **RP2040 Embedded Toolchain (`Loom-1.3.0-macos-arm64-rp2040.pkg`)**:
    - Universal build driver CLI (`/usr/local/bin/loom`) and Language Server (`/usr/local/bin/loom-lsp`).
    - Embedded compiler (`/usr/local/share/loom/toolchains/rp2040/bin/loomc`) with ARM Cortex-M0+ (`thumbv6m-none-eabi`) backend support.
    - `llvm-objcopy` for generating UF2 firmware images, plus its runtime libraries.

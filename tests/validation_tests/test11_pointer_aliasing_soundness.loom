@@ -21,6 +21,6 @@ Block Main
         Res : Signed_32
     Implements
     Res = MutateAliased(Address(X), Address(X))
-    Write(Res)
+    Print(Res)
 End Main
 

@@ -21,31 +21,31 @@ positive = {
     "boolean_and_not": ("Block Test Takes\n A : Boolean\n B : Boolean\nProduces Boolean\nImplements\n Give Not A And B Or A\nEnd Test\n", ["and.rhs", "or.rhs", "xor i1"]),
     "boolean_equal": ("Block Test Takes\n A : Boolean\nProduces Boolean\nImplements\n Give A == False\nEnd Test\n", ["icmp eq i1"]),
     "locals_if_compare": ("Block Main Declares\n X : Signed_16\nImplements\n X = 9\n If X < 10\n X = X + 1\n End If\nEnd Main\n", ["alloca i16", "icmp slt i16", "if.end"]),
-    "local_expression_initializers": ("Block Main Declares\n A : Signed_32 = 4\n B : Signed_32 = 5\n Total : Signed_32 = Add(A, B)\nImplements\n Write(Total)\nEnd Main\nBlock Add Takes\n A : Signed_32\n B : Signed_32\nProduces Signed_32\nImplements\n Give A + B\nEnd Add\n", ["store i32 4", "store i32 5", "call i32 @Add", "call i32 (ptr, ...) @printf"]),
+    "local_expression_initializers": ("Block Main Declares\n A : Signed_32 = 4\n B : Signed_32 = 5\n Total : Signed_32 = Add(A, B)\nImplements\n Print(Total)\nEnd Main\nBlock Add Takes\n A : Signed_32\n B : Signed_32\nProduces Signed_32\nImplements\n Give A + B\nEnd Add\n", ["store i32 4", "store i32 5", "call i32 @Add", "call i32 (ptr, ...) @printf"]),
     "loop_exit_skip": ("Block Main Declares\n B : Boolean\nImplements\n Loop\n  If B\n   Skip\n  End If\n  Exit\n End Loop\nEnd Main\n", ["loop.header", "loop.exit", "br label %loop.header"]),
     "nested_loop_targets": ("Block Main\nImplements\n Loop\n  Loop\n   Exit\n  End Loop\n  Skip\n End Loop\nEnd Main\n", ["loop.header1", "br label %loop.exit2", "br label %loop.header"]),
     "nested_inner_skip": ("Block Main Declares\n B : Boolean\nImplements\n Loop\n  Loop\n   If B\n    Skip\n   End If\n   Exit\n  End Loop\n  Exit\n End Loop\nEnd Main\n", ["br label %loop.header1", "br label %loop.exit2", "br label %loop.exit"]),
-    "write_string": ("Block Main\nImplements\n Write(\"Hello\")\n Write(\"\")\nEnd Main\n", ["call i32 (ptr, ...) @printf", ".loom.string.", ".loom.write.character"]),
+    "write_string": ("Block Main\nImplements\n Print(\"Hello\")\n Print(\"\")\nEnd Main\n", ["call i32 (ptr, ...) @printf", ".loom.string.", ".loom.write.character"]),
     "function_call": ("Block Add Takes\n X : Signed_32\nProduces Signed_32\nImplements\n Give X + 1\nEnd Add\nBlock Main Declares\n Y : Signed_32\nImplements\n Y = Add(41)\nEnd Main\n", ["call i32 @Add(i32 41)"]),
     "forward_and_recursive_call": ("Block Main Declares\n Y : Signed_32\nImplements\n Y = SumTo(4)\nEnd Main\nBlock SumTo Takes\n N : Signed_32\nProduces Signed_32\nImplements\n If N <= 0\n  Give 0\n Else\n  Give N + SumTo(N - 1)\n End If\nEnd SumTo\n", ["call i32 @SumTo", "if.else"]),
-    "procedure_call_statement": ("Block Log Implements\n Write(\"logged\")\nEnd Log\nBlock Main Implements\n Log()\nEnd Main\n", ["call void @Log()"]),
+    "procedure_call_statement": ("Block Log Implements\n Print(\"logged\")\nEnd Log\nBlock Main Implements\n Log()\nEnd Main\n", ["call void @Log()"]),
     "else_complete_result": ("Block Choose Takes\n B : Boolean\nProduces Signed_32\nImplements\n If B\n  Give 1\n Else\n  Give 2\n End If\nEnd Choose\n", ["if.else", "ret i32 1", "ret i32 2"]),
     "loop_until": ("Block Main Declares\n N : Signed_32\n Ready : Boolean\nImplements\n Loop Until Ready\n  N = N + 1\n  Ready = N >= 2\n End Loop\nEnd Main\n", ["loop.header", "loop.body", "icmp sge i32"]),
     "float_ops": ("Block Twice Takes\n X : Float_64\nProduces Float_64\nImplements\n Give X * 2.5 - 1.0 / 2.0\nEnd Twice\n", ["define double @Twice", "fmul double", "fsub double"]),
-    "string_assignment_and_write": ("Block Main Declares\n S : String\nImplements\n S = \"UTF-8: café\\n\"\n Write(S)\nEnd Main\n", [".loom.string.", "call i32 (ptr, ...) @printf"]),
-    "write_scalar_and_record_types": ("Record Pair\n Left : Signed_16\n Label : String\nEnd Pair\nEnum Mode : Unsigned_8\n Active = 2\nEnd Mode\nBlock Main Declares\n N : Signed_8 = -3\n U : Unsigned_64 = 9\n F : Float_32 = 1.5\n Ready : Boolean = True\n C : Character = 'é'\n State : Mode = Mode.Active\n P : Pair\nImplements\n P.Left = 4\n P.Label = \"x\"\n Write(N)\n Write(U)\n Write(F)\n Write(Ready)\n Write(C)\n Write(State)\n Write(P)\nEnd Main\n", ["%llu", "%g", "True", "two.byte", "Pair{", "Left: ", "Label: "]),
+    "string_assignment_and_write": ("Block Main Declares\n S : String\nImplements\n S = \"UTF-8: café\\n\"\n Print(S)\nEnd Main\n", [".loom.string.", "call i32 (ptr, ...) @printf"]),
+    "write_scalar_and_record_types": ("Record Pair\n Left : Signed_16\n Label : String\nEnd Pair\nEnum Mode : Unsigned_8\n Active = 2\nEnd Mode\nBlock Main Declares\n N : Signed_8 = -3\n U : Unsigned_64 = 9\n F : Float_32 = 1.5\n Ready : Boolean = True\n C : Character = 'é'\n State : Mode = Mode.Active\n P : Pair\nImplements\n P.Left = 4\n P.Label = \"x\"\n Print(N)\n Print(U)\n Print(F)\n Print(Ready)\n Print(C)\n Print(State)\n Print(P)\nEnd Main\n", ["%llu", "%g", "True", "two.byte", "Pair{", "Left: ", "Label: "]),
     "character_literal": ("Block Main Declares\n C : Character\nImplements\n C = 'é'\nEnd Main\n", ["store i32 233"]),
-    "module_globals_and_constants": ("Module Example\nBlock Global\nDeclares\n Rate : Constant Unsigned_32 = 1000\n Count : Signed_32 = 4\n Label : Constant String = \"ready\\n\"\nEnd Global\nBlock Main\nImplements\n Count = Count + 1\n Write(Label)\nEnd Main\n", ["@Rate = constant i32 1000", "@Count = global i32 4", "@Label = constant ptr", "store i32"]),
-    "enum_declaration_use": ("Enum Mode : Unsigned_8\n Idle = 0\n Flying = 2\nEnd Mode\nBlock Main Declares\n Current : Mode\nImplements\n Current = Mode.Flying\n If Current == Mode.Flying\n  Write(\"flying\")\n End If\nEnd Main\n", ["alloca i8", "store i8 2", "icmp eq i8"]),
+    "module_globals_and_constants": ("Module Example\nBlock Global\nDeclares\n Rate : Constant Unsigned_32 = 1000\n Count : Signed_32 = 4\n Label : Constant String = \"ready\\n\"\nEnd Global\nBlock Main\nImplements\n Count = Count + 1\n Print(Label)\nEnd Main\n", ["@Rate = constant i32 1000", "@Count = global i32 4", "@Label = constant ptr", "store i32"]),
+    "enum_declaration_use": ("Enum Mode : Unsigned_8\n Idle = 0\n Flying = 2\nEnd Mode\nBlock Main Declares\n Current : Mode\nImplements\n Current = Mode.Flying\n If Current == Mode.Flying\n  Print(\"flying\")\n End If\nEnd Main\n", ["alloca i8", "store i8 2", "icmp eq i8"]),
     "enum_global_constant": ("Enum Mode : Unsigned_8\n Idle = 0\n Flying = 2\nEnd Mode\nBlock Global\nDeclares\n Default_Mode : Constant Mode = Mode.Idle\nEnd Global\nBlock Main Implements\nEnd Main\n", ["@Default_Mode = constant i8 0"]),
     "record_field_read_write": ("Record Sensor_Data\n Roll : Float_32\n Pitch : Signed_32\nEnd Sensor_Data\nBlock Main Declares\n Sensor : Sensor_Data\n Value : Float_32\nImplements\n Sensor.Roll = 1.5\n Sensor.Pitch = 12\n Value = Sensor.Roll\nEnd Main\n", ["%Sensor_Data = type { float, i32 }", "getelementptr inbounds nuw %Sensor_Data", "store float 1.500000e+00"]),
     "nested_record_field_read": ("Record Point\n X : Signed_32\nEnd Point\nRecord Sensor\n Position : Point\nEnd Sensor\nBlock Main Declares\n Device : Sensor\n X : Signed_32\nImplements\n X = Device.Position.X\nEnd Main\n", ["%Point = type { i32 }", "%Sensor = type { %Point }", "getelementptr inbounds nuw %Sensor"]),
     "global_record_zero_init": ("Record Pair\n Left : Signed_32\n Right : Signed_32\nEnd Pair\nBlock Global\nDeclares\n Shared : Pair\nEnd Global\nBlock Main Implements\n Shared.Left = 5\nEnd Main\n", ["@Shared = global %Pair zeroinitializer", "store i32 5, ptr @Shared"]),
     "constant_prefix_global_and_write_uart": ("Module UartTest\nBlock Global\nDeclares\n BAUD : Constant Signed_32 = 115200\n PIN : Constant Signed_32 = 25\n State : Signed_32 = 1\nEnd Global\nBlock Main\nDeclares\n Msg : String = \"RP2040\"\n Count : Signed_32 = 10\n Local_Const : Constant Signed_32 = 999\nImplements\n Write_UART(\"Baud: <BAUD>, Pin: <PIN>, Local: <Local_Const>\")\n Write_UART(Msg)\n Write_UART(123)\n Write_UART(\"Count: <Count>\")\nEnd Main\n", ["@BAUD = constant i32 115200", "@PIN = constant i32 25", "@State = global i32 1", "call i32 (ptr, ...) @printf"]),
     "give_inside_loop": ("Block Value Produces Signed_8\nImplements\n Loop\n  Give 7\n End Loop\nEnd Value\n", ["define i8 @Value", "ret i8"]),
-    "pointer_address_and_deref": ("Block Main Declares\n X : Signed_32 = 10\n P : Pointer[Signed_32]\nImplements\n P = Address(X)\n Deref(P) = 42\n Write(X)\nEnd Main\n", ["store i32 42", "call i32 (ptr, ...) @printf"]),
-    "pointer_record_fields": ("Record Point\n X : Signed_32\n Y : Signed_32\nEnd Point\nBlock Main Declares\n Pt : Point\n Ptr : Pointer[Point]\nImplements\n Ptr = Address(Pt)\n Deref(Ptr).X = 100\n Deref(Ptr).Y = 200\n Write(Pt)\nEnd Main\n", ["getelementptr inbounds nuw %Point", "Point{"]),
-    "block_gives_record": ("Record Point\n X : Signed_32\n Y : Signed_32\nEnd Point\nBlock MakePoint Takes\n X : Signed_32\n Y : Signed_32\nProduces Point\nDeclares\n P : Point\nImplements\n P.X = X\n P.Y = Y\n Give P\nEnd MakePoint\nBlock Main Declares\n Pt : Point\nImplements\n Pt = MakePoint(1, 2)\n Write(Pt)\nEnd Main\n", ["define %Point @MakePoint", "call %Point @MakePoint", "ret %Point"]),
+    "pointer_address_and_deref": ("Block Main Declares\n X : Signed_32 = 10\n P : Pointer[Signed_32]\nImplements\n P = Address(X)\n Deref(P) = 42\n Print(X)\nEnd Main\n", ["store i32 42", "call i32 (ptr, ...) @printf"]),
+    "pointer_record_fields": ("Record Point\n X : Signed_32\n Y : Signed_32\nEnd Point\nBlock Main Declares\n Pt : Point\n Ptr : Pointer[Point]\nImplements\n Ptr = Address(Pt)\n Deref(Ptr).X = 100\n Deref(Ptr).Y = 200\n Print(Pt)\nEnd Main\n", ["getelementptr inbounds nuw %Point", "Point{"]),
+    "block_gives_record": ("Record Point\n X : Signed_32\n Y : Signed_32\nEnd Point\nBlock MakePoint Takes\n X : Signed_32\n Y : Signed_32\nProduces Point\nDeclares\n P : Point\nImplements\n P.X = X\n P.Y = Y\n Give P\nEnd MakePoint\nBlock Main Declares\n Pt : Point\nImplements\n Pt = MakePoint(1, 2)\n Print(Pt)\nEnd Main\n", ["define %Point @MakePoint", "call %Point @MakePoint", "ret %Point"]),
 }
 for bits in (8, 16, 32, 64):
     positive[f"signed_width_{bits}"] = (f"Block F Produces Signed_{bits}\nImplements\n Give 1\nEnd F\n", [f"define i{bits} @F"])
@@ -59,22 +59,22 @@ positive["shifts_lsl_lsr"] = ("Block Shifts Takes\n A : Signed_32\n B : Unsigned
 positive["shifts_unsigned_lsr"] = ("Block UShifts Takes\n A : Unsigned_32\nProduces Unsigned_32\nImplements\n Give A LSR 2\nEnd UShifts\n", ["lshr i32"])
 positive["modulo_operators"] = ("Block Rem Takes\n A : Signed_32\n B : Signed_32\nProduces Signed_32\nImplements\n Give (A Mod 10) + (B % 4)\nEnd Rem\n", ["srem i32"])
 positive["else_if_ladder"] = ("Block Classify Takes\n Score : Signed_32\nProduces Signed_32\nImplements\n If Score >= 90\n  Give 1\n Else If Score >= 75\n  Give 2\n Else If Score >= 50\n  Give 3\n Else\n  Give 4\n End If\nEnd Classify\n", ["if.then", "if.else", "ret i32 1", "ret i32 2", "ret i32 3", "ret i32 4"])
-positive["pointer_syntax_postfix"] = ("Block Main Declares\n X : Signed_32 = 42\n Ptr : Signed_32 Pointer = Address(X)\nImplements\n Write(Deref(Ptr))\nEnd Main\n", ["alloca i32", "store ptr", "call i32 (ptr, ...) @printf"])
-positive["array_and_slice"] = ("Block Main Declares\n Arr : Signed_32 Array[3]\n Slc : Signed_32 Slice\nImplements\n Arr[1] = 10\n Slc = Slice(Arr)\n Write(Slc[1])\n Write(Slc.Length)\nEnd Main\n", ["alloca [3 x i32]", "alloca { ptr, i64 }", "getelementptr"])
-positive["string_indexing_returns_byte"] = ("Block Main Declares\n S : String = \"Loom\"\n First : Unsigned_8\nImplements\n First = S[1]\n Write(First)\n Write(S.Length)\nEnd Main\n", ["str.byte", "call i64 @strlen"])
-positive["character_cast_valid_scalar"] = ("Block Main Declares\n C : Character = Cast[Character](233)\n Zero : Character = Cast[Character](-0)\nImplements\n Write(C)\n Write(Zero)\nEnd Main\n", ["store i32 233", "store i32 0"])
-positive["default_uninitialized_null_pointer"] = ("Block Main Declares\n Ptr : Signed_32 Pointer\nImplements\n Write(Ptr)\nEnd Main\n", ["ptr.null", "Null"])
-positive["ensure_statement"] = ("Block Main Implements\n Ensure { Write(1) }\n Write(2)\nEnd Main\n", ["call i32 (ptr, ...) @printf"])
-positive["cast_widening"] = ("Block Main Declares\n Small : Signed_16 = 12\n Big : Signed_64\nImplements\n Big = Cast[Signed_64](Small)\n Write(Big)\nEnd Main\n", ["sext i16", "to i64"])
-positive["null_pointer_and_short_circuit"] = ("Block Main Declares\n Ptr : Signed_32 Pointer = Null\nImplements\n If Ptr != Null And Deref(Ptr) == 100\n  Write(1)\n End If\nEnd Main\n", ["icmp ne ptr", "and.rhs", "and.merge"])
+positive["pointer_syntax_postfix"] = ("Block Main Declares\n X : Signed_32 = 42\n Ptr : Signed_32 Pointer = Address(X)\nImplements\n Print(Deref(Ptr))\nEnd Main\n", ["alloca i32", "store ptr", "call i32 (ptr, ...) @printf"])
+positive["array_and_slice"] = ("Block Main Declares\n Arr : Signed_32 Array[3]\n Slc : Signed_32 Slice\nImplements\n Arr[1] = 10\n Slc = Slice(Arr)\n Print(Slc[1])\n Print(Slc.Length)\nEnd Main\n", ["alloca [3 x i32]", "alloca { ptr, i64 }", "getelementptr"])
+positive["string_indexing_returns_byte"] = ("Block Main Declares\n S : String = \"Loom\"\n First : Unsigned_8\nImplements\n First = S[1]\n Print(First)\n Print(S.Length)\nEnd Main\n", ["str.byte", "call i64 @strlen"])
+positive["character_cast_valid_scalar"] = ("Block Main Declares\n C : Character = Cast[Character](233)\n Zero : Character = Cast[Character](-0)\nImplements\n Print(C)\n Print(Zero)\nEnd Main\n", ["store i32 233", "store i32 0"])
+positive["default_uninitialized_null_pointer"] = ("Block Main Declares\n Ptr : Signed_32 Pointer\nImplements\n Print(Ptr)\nEnd Main\n", ["ptr.null", "Null"])
+positive["ensure_statement"] = ("Block Main Implements\n Ensure { Print(1) }\n Print(2)\nEnd Main\n", ["call i32 (ptr, ...) @printf"])
+positive["cast_widening"] = ("Block Main Declares\n Small : Signed_16 = 12\n Big : Signed_64\nImplements\n Big = Cast[Signed_64](Small)\n Print(Big)\nEnd Main\n", ["sext i16", "to i64"])
+positive["null_pointer_and_short_circuit"] = ("Block Main Declares\n Ptr : Signed_32 Pointer = Null\nImplements\n If Ptr != Null And Deref(Ptr) == 100\n  Print(1)\n End If\nEnd Main\n", ["icmp ne ptr", "and.rhs", "and.merge"])
 positive["extern_block_puts"] = ("Extern Block puts Takes\n S : String\nProduces Signed_32\nEnd puts\nBlock Main Declares\n Res : Signed_32\nImplements\n Res = puts(\"Hello\")\nEnd Main\n", ["declare i32 @puts(ptr)", "call i32 @puts"])
-positive["array_literal_initializer"] = ("Block Main Declares\n Arr : Signed_32 Array[3] = {10, 20, 30}\nImplements\n Write(Arr[1])\n Write(Arr[2])\n Write(Arr[3])\nEnd Main\n", ["alloca [3 x i32]"])
-positive["write_string_interpolation"] = ("Record Vec\n X : Signed_32\n Y : Signed_32\nEnd Vec\nBlock Main Declares\n A : Signed_32 = 42\n V : Vec\nImplements\n V.X = 10\n V.Y = 20\n Write(\"Val: <A> | Vec: <V.X>, <V.Y>\")\nEnd Main\n", ["printf"])
-positive["string_null_escape"] = ("Block Main Declares\n S : String = \"abc\\0def\"\nImplements\n Write(S)\nEnd Main\n", ["@.loom.string"])
+positive["array_literal_initializer"] = ("Block Main Declares\n Arr : Signed_32 Array[3] = {10, 20, 30}\nImplements\n Print(Arr[1])\n Print(Arr[2])\n Print(Arr[3])\nEnd Main\n", ["alloca [3 x i32]"])
+positive["write_string_interpolation"] = ("Record Vec\n X : Signed_32\n Y : Signed_32\nEnd Vec\nBlock Main Declares\n A : Signed_32 = 42\n V : Vec\nImplements\n V.X = 10\n V.Y = 20\n Print(\"Val: <A> | Vec: <V.X>, <V.Y>\")\nEnd Main\n", ["printf"])
+positive["string_null_escape"] = ("Block Main Declares\n S : String = \"abc\\0def\"\nImplements\n Print(S)\nEnd Main\n", ["@.loom.string"])
 
 negative = {
-    "retired_defer_keyword": ("Block Main Implements\n Defer Write(1)\nEnd Main\n", "expected '=' in assignment"),
-    "ensure_requires_braces": ("Block Main Implements\n Ensure Write(1)\nEnd Main\n", "expected '{' after Ensure"),
+    "retired_defer_keyword": ("Block Main Implements\n Defer Print(1)\nEnd Main\n", "expected '=' in assignment"),
+    "ensure_requires_braces": ("Block Main Implements\n Ensure Print(1)\nEnd Main\n", "expected '{' after Ensure"),
     "incomplete_header": ("Block\n", "expected function name after Block"),
     "missing_nested_end": ("Block A Implements\n If True\nEnd A\n", "expected 'End If'"),
     "missing_end": ("Block Main\nImplements\n", "expected 'End Main'"),
@@ -104,14 +104,14 @@ negative = {
     "initializer_type_mismatch": ("Block Main Declares\n Value : Signed_32 = True\nImplements\nEnd Main\n", "expected Signed_32, found Boolean"),
     "unresolved_call": ("Block Main Declares\n X : Signed_32\nImplements\n X = Missing(1)\nEnd Main\n", "unresolved block call 'Missing'"),
     "call_keyword_function_rejected": ("Block Add Takes\n X : Signed_32\nProduces Signed_32\nImplements\n Give X + 1\nEnd Add\nBlock Main Declares\n Y : Signed_32\nImplements\n Y = Call Add(41)\nEnd Main\n", "the 'call' keyword has been removed"),
-    "call_keyword_procedure_rejected": ("Block Log Implements\n Write(\"hi\")\nEnd Log\nBlock Main Implements\n Call Log()\nEnd Main\n", "the 'call' keyword has been removed"),
+    "call_keyword_procedure_rejected": ("Block Log Implements\n Print(\"hi\")\nEnd Log\nBlock Main Implements\n Call Log()\nEnd Main\n", "the 'call' keyword has been removed"),
     "keyword_case_sensitivity": ("block Main Implements\nEnd Main\n", "expected Block"),
     "float32_without_underscore": ("Block Main Declares\n F : Float32\nImplements\nEnd Main\n", "unsupported type 'Float32'"),
-    "deref_non_pointer": ("Block Main Declares\n X : Signed_32 = 5\nImplements\n Write(Deref(X))\nEnd Main\n", "Deref() requires a pointer type"),
+    "deref_non_pointer": ("Block Main Declares\n X : Signed_32 = 5\nImplements\n Print(Deref(X))\nEnd Main\n", "Deref() requires a pointer type"),
     "wrong_call_arity": ("Block A Takes\n X : Signed_32\nProduces Signed_32\nImplements\n Give X\nEnd A\nBlock Main Declares\n Y : Signed_32\nImplements\n Y = A()\nEnd Main\n", "expects 1 arguments, got 0"),
     "wrong_call_argument_type": ("Block A Takes\n X : Boolean\nProduces Signed_32\nImplements\n Give 1\nEnd A\nBlock Main Declares\n Y : Signed_32\nImplements\n Y = A(2)\nEnd Main\n", "expected Boolean"),
     "procedure_as_value": ("Block P Implements\nEnd P\nBlock F Produces Signed_32\nImplements\n Give P()\nEnd F\n", "cannot be used as a value"),
-    "else_missing_return": ("Block Choose Takes\n B : Boolean\nProduces Signed_32\nImplements\n If B\n  Give 1\n Else\n  Write(\"no return\")\n End If\nEnd Choose\n", "reachable path without Give"),
+    "else_missing_return": ("Block Choose Takes\n B : Boolean\nProduces Signed_32\nImplements\n If B\n  Give 1\n Else\n  Print(\"no return\")\n End If\nEnd Choose\n", "reachable path without Give"),
     "invalid_loop_until_type": ("Block Main Implements\n Loop Until 4\n End Loop\nEnd Main\n", "expected Boolean, found Signed_32"),
     "constant_global_assignment": ("Block Global\nDeclares\n Limit : Constant Signed_32 = 4\nEnd Global\nBlock Main Implements\n Limit = 5\nEnd Main\n", "cannot assign to constant 'Limit'"),
     "constant_local_assignment": ("Block Main Declares\n Local_Const : Constant Signed_32 = 4\nImplements\n Local_Const = 5\nEnd Main\n", "cannot assign to constant 'Local_Const'"),
@@ -194,7 +194,7 @@ with tempfile.TemporaryDirectory(prefix="loom-tests-") as td:
     if diagnostic.stderr.count("error[") != 1 or "loomc:" in diagnostic.stderr:
         raise SystemExit(f"FAIL diagnostic_format: unexpected duplicate/generic compiler error:\n{diagnostic.stderr}")
     unicode_file = td / "unicode-column.loom"
-    unicode_file.write_text('Module UnicodeCol\nBlock Main\nImplements\n    Write("🚀") @\nEnd Main\n')
+    unicode_file.write_text('Module UnicodeCol\nBlock Main\nImplements\n    Print("🚀") @\nEnd Main\n')
     unicode_diagnostic = subprocess.run([str(compiler), str(unicode_file)], text=True, capture_output=True)
     if unicode_diagnostic.returncode == 0 or f"{unicode_file}:4:17" not in unicode_diagnostic.stderr:
         raise SystemExit(f"FAIL unicode_column: non-BMP characters should count as two UTF-16 columns; got:\n{unicode_diagnostic.stderr}")

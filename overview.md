@@ -1,4 +1,4 @@
-# Loom v1.2.0 — Project Overview
+# Loom v1.3.0 — Project Overview
 
 Loom is a statically typed, block-oriented programming language with a C++ frontend and LLVM-based code generation. The repository contains the compiler, command-line driver, SDK modules, RP2040 target files, documentation website, editor extension, and test suites.
 

@@ -27,6 +27,6 @@ Block Main
     End Loop
     Slc = Slice(Arr)
     Sum = SumSlice(Slc)
-    Write(Sum)
+    Print(Sum)
 End Main
 

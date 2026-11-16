@@ -1026,7 +1026,7 @@ void removeLibrary(const std::string& name) {
 struct ToolchainInfo {
     std::string name;
     std::string kind;
-    std::string version = "1.2.0";
+    std::string version = "1.3.0";
     std::string description;
     fs::path rootDir;
     fs::path loomcPath;
@@ -1190,7 +1190,7 @@ inline std::vector<ToolchainInfo> listInstalledToolchains(const char* argv0 = nu
             ToolchainInfo nat;
             nat.name = "native";
             nat.kind = "native";
-            nat.version = "1.2.0";
+            nat.version = "1.3.0";
             nat.description = "Loom Native Desktop Toolchain (workspace development)";
             nat.rootDir = fs::current_path();
             nat.loomcPath = localLoomc;
@@ -1201,7 +1201,7 @@ inline std::vector<ToolchainInfo> listInstalledToolchains(const char* argv0 = nu
             ToolchainInfo rp;
             rp.name = "rp2040";
             rp.kind = "rp2040";
-            rp.version = "1.2.0";
+            rp.version = "1.3.0";
             rp.description = "Loom RP2040 Embedded Bare-Metal Toolchain (workspace development)";
             rp.rootDir = fs::current_path();
             rp.loomcPath = localLoomc;
@@ -1287,7 +1287,7 @@ inline ToolchainInfo resolveActiveToolchain(
         if (fs::is_regular_file(fallbackLoomc, ec)) {
             activeTc.name = requested;
             activeTc.kind = (requested == "rp2040" || requested.find("cortex") != std::string::npos) ? "rp2040" : "native";
-            activeTc.version = "1.2.0";
+            activeTc.version = "1.3.0";
             activeTc.rootDir = fs::current_path();
             activeTc.loomcPath = fallbackLoomc;
             activeTc.sdkPath = fs::current_path() / "sdk";
@@ -1370,7 +1370,7 @@ void createProject(const std::string& name, bool rp2040 = false) {
             std::ofstream config(namePath / "config.toml");
             config << "[project]\n"
                    << "name = \"" << name << "\"\n"
-                   << "version = \"1.2.0\"\n\n"
+                   << "version = \"1.3.0\"\n\n"
                    << "[build]\n"
                    << "main = \"src/main.loom\"\n"
                    << "sources = [\"src/*.loom\"]\n"
@@ -1468,10 +1468,10 @@ void createProject(const std::string& name, bool rp2040 = false) {
         }
 
         std::ofstream config(namePath / "config.toml");
-        config << "[project]\nname = \"" << name << "\"\nversion = \"1.2.0\"\n\n[build]\nmain = \"src/main.loom\"\nsources = [\"src/*.loom\"]\ntarget-dir = \"target\"\nexecutable = \"" << name << "\"\n\n[toolchain]\nclang = \"clang\"\n";
+        config << "[project]\nname = \"" << name << "\"\nversion = \"1.3.0\"\n\n[build]\nmain = \"src/main.loom\"\nsources = [\"src/*.loom\"]\ntarget-dir = \"target\"\nexecutable = \"" << name << "\"\n\n[toolchain]\nclang = \"clang\"\n";
         if (!config) throw Error("failed to write config.toml");
         std::ofstream main(namePath / "src" / "main.loom");
-        main << "Module Main\n\nBlock Main\n    Implements\n        Write(\"Hello, Loom!\\n\")\nEnd Main\n";
+        main << "Module Main\n\nBlock Main\n    Implements\n        Print(\"Hello, Loom!\\n\")\nEnd Main\n";
         if (!main) throw Error("failed to write src/main.loom");
         std::ofstream gitignore(namePath / ".gitignore");
         gitignore << "target/\n";
@@ -1530,7 +1530,7 @@ void buildProject(const fs::path& configFile, const char* argv0, bool release, b
     const auto compiler = activeTc.loomcPath.empty() ? loomcPath(argv0) : activeTc.loomcPath;
     const Colors col = Colors::detect(false);
     if (!quiet) {
-        std::cout << col.bold << col.cyan << "Loom 1.2.0" << col.reset
+        std::cout << col.bold << col.cyan << "Loom 1.3.0" << col.reset
                   << col.dim << " | " << col.reset
                   << col.bold << "Building " << config.name << col.reset << "\n\n"
                   << col.bold << col.blue << "Configuration" << col.reset << "\n"
@@ -1732,6 +1732,20 @@ void buildProject(const fs::path& configFile, const char* argv0, bool release, b
             command.push_back("-Wl,--gc-sections");
 #endif
         }
+#if defined(__APPLE__)
+        command.push_back("-framework");
+        command.push_back("Accelerate");
+#endif
+        command.push_back("-pthread");
+        fs::path exeDir = weakCanonical(fs::path(argv0)).parent_path();
+        fs::path rtCand1 = exeDir / "libloom_rt.a";
+        fs::path rtCand2 = exeDir.parent_path() / "lib" / "libloom_rt.a";
+        fs::path rtCand3 = exeDir / ".build" / "libloom_rt.a";
+        fs::path rtCand4 = root / ".build" / "libloom_rt.a";
+        if (fs::is_regular_file(rtCand1)) command.push_back(rtCand1.string());
+        else if (fs::is_regular_file(rtCand2)) command.push_back(rtCand2.string());
+        else if (fs::is_regular_file(rtCand3)) command.push_back(rtCand3.string());
+        else if (fs::is_regular_file(rtCand4)) command.push_back(rtCand4.string());
     }
     command.push_back(object.string());
     for (const auto& extraObj : extraObjects) {
@@ -1948,38 +1962,279 @@ void fetchDependencies(const fs::path& configFile) {
     std::cout << col.bold << col.green << "Dependencies up to date." << col.reset << "\n";
 }
 
-void formatFile(const fs::path& filePath, bool checkOnly) {
-    std::string content = readFileContent(filePath.string());
-    std::istringstream stream(content);
-    std::string line;
-    std::ostringstream formatted;
-    int indent = 0;
-    while (std::getline(stream, line)) {
-        std::string trimmed = trim(line);
-        if (trimmed.empty()) {
-            formatted << "\n";
-            continue;
-        }
-        bool isDedent = false;
-        if (trimmed.rfind("End", 0) == 0 || trimmed.rfind("Else", 0) == 0 || trimmed.rfind("When", 0) == 0) {
-            isDedent = true;
-        }
-        int curIndent = std::max(0, isDedent ? indent - 1 : indent);
-        for (int i = 0; i < curIndent; ++i) formatted << "    ";
-        formatted << trimmed << "\n";
+std::string formatLoomSource(const std::string& content) {
+    static const std::unordered_map<std::string, std::string> keywords = {
+        {"block", "Block"}, {"takes", "Takes"}, {"produces", "Produces"},
+        {"declares", "Declares"}, {"implements", "Implements"}, {"end", "End"},
+        {"if", "If"}, {"else", "Else"}, {"loop", "Loop"}, {"match", "Match"},
+        {"when", "When"}, {"give", "Give"}, {"exit", "Exit"}, {"skip", "Skip"},
+        {"true", "True"}, {"false", "False"}, {"module", "Module"},
+        {"import", "Import"}, {"use", "use"}, {"ensure", "Ensure"}
+    };
 
-        if (trimmed.rfind("Block", 0) == 0 || trimmed.rfind("If", 0) == 0 || trimmed.rfind("Else", 0) == 0 ||
-            trimmed.rfind("Loop", 0) == 0 || trimmed.rfind("Match", 0) == 0 || trimmed.rfind("When", 0) == 0 ||
-            trimmed == "Declares" || trimmed == "Takes" || trimmed == "Implements" ||
-            trimmed.rfind("Record", 0) == 0 || trimmed.rfind("Enum", 0) == 0 || trimmed.rfind("Test", 0) == 0) {
-            if (trimmed.rfind("End", 0) != 0) {
-                indent = curIndent + 1;
-            }
-        } else if (trimmed.rfind("End", 0) == 0) {
-            indent = std::max(0, indent - 1);
+    std::vector<std::string> lines;
+    {
+        std::istringstream stream(content);
+        std::string l;
+        while (std::getline(stream, l)) {
+            if (!l.empty() && l.back() == '\r') l.pop_back();
+            lines.push_back(l);
         }
     }
-    std::string formattedStr = formatted.str();
+
+    std::vector<std::string> processedLines;
+    for (const auto& line : lines) {
+        std::string stripped = trim(line);
+        if (stripped.empty()) {
+            processedLines.push_back("");
+            continue;
+        }
+
+        std::string comment;
+        std::string codePart = stripped;
+        bool inQ = false;
+        int hashIdx = -1;
+        for (size_t idx = 0; idx < stripped.size(); ++idx) {
+            char ch = stripped[idx];
+            if (ch == '"') inQ = !inQ;
+            else if (ch == '#' && !inQ) {
+                hashIdx = static_cast<int>(idx);
+                break;
+            }
+        }
+        if (hashIdx >= 0) {
+            codePart = trim(stripped.substr(0, hashIdx));
+            comment = stripped.substr(hashIdx);
+        }
+
+        std::vector<std::pair<bool, std::string>> parts;
+        std::string cur;
+        inQ = false;
+        for (size_t i = 0; i < codePart.size(); ++i) {
+            char ch = codePart[i];
+            if (ch == '"') {
+                if (inQ) {
+                    cur.push_back(ch);
+                    parts.push_back({true, cur});
+                    cur.clear();
+                    inQ = false;
+                } else {
+                    if (!cur.empty()) {
+                        parts.push_back({false, cur});
+                        cur.clear();
+                    }
+                    cur.push_back(ch);
+                    inQ = true;
+                }
+            } else {
+                cur.push_back(ch);
+            }
+        }
+        if (!cur.empty()) parts.push_back({inQ, cur});
+
+        std::string rebuilt;
+        for (const auto& p : parts) {
+            if (p.first) {
+                rebuilt += p.second;
+            } else {
+                std::string s = p.second;
+                std::string wordNorm;
+                for (size_t i = 0; i < s.size(); ) {
+                    if (std::isalpha(static_cast<unsigned char>(s[i])) || s[i] == '_') {
+                        size_t start = i;
+                        while (i < s.size() && (std::isalnum(static_cast<unsigned char>(s[i])) || s[i] == '_')) i++;
+                        std::string word = s.substr(start, i - start);
+                        std::string lowerW = toLower(word);
+                        auto it = keywords.find(lowerW);
+                        if (it != keywords.end()) wordNorm += it->second;
+                        else wordNorm += word;
+                    } else {
+                        wordNorm.push_back(s[i++]);
+                    }
+                }
+                s = wordNorm;
+
+                static const std::vector<std::string> compoundOps = {
+                    "+=", "-=", "*=", "/=", "==", "!=", "<=", ">=", ".."
+                };
+                for (const auto& op : compoundOps) {
+                    size_t pos = 0;
+                    while ((pos = s.find(op, pos)) != std::string::npos) {
+                        s.replace(pos, op.size(), " " + op + " ");
+                        pos += op.size() + 2;
+                    }
+                }
+                for (size_t i = 0; i < s.size(); ++i) {
+                    if (s[i] == '=') {
+                        bool prevOp = (i > 0 && (s[i-1] == '+' || s[i-1] == '-' || s[i-1] == '*' || s[i-1] == '/' || s[i-1] == '=' || s[i-1] == '<' || s[i-1] == '>' || s[i-1] == '!'));
+                        bool nextOp = (i + 1 < s.size() && s[i+1] == '=');
+                        if (!prevOp && !nextOp) {
+                            s.replace(i, 1, " = ");
+                            i += 2;
+                        }
+                    }
+                }
+                for (size_t i = 0; i < s.size(); ++i) {
+                    if (s[i] == ',') {
+                        s.replace(i, 1, ", ");
+                        i += 1;
+                    }
+                }
+                std::string collapsed;
+                bool prevSpace = false;
+                for (char ch : s) {
+                    if (std::isspace(static_cast<unsigned char>(ch))) {
+                        if (!prevSpace) { collapsed.push_back(' '); prevSpace = true; }
+                    } else {
+                        collapsed.push_back(ch);
+                        prevSpace = false;
+                    }
+                }
+                rebuilt += collapsed;
+            }
+        }
+
+        std::string resLine = trim(rebuilt);
+        if (!comment.empty()) {
+            resLine = resLine.empty() ? comment : (resLine + " " + comment);
+        }
+        processedLines.push_back(resLine);
+    }
+
+    std::vector<std::string> outLines(processedLines.size());
+    struct DeclItem {
+        std::string id;
+        std::string type;
+        std::string comment;
+    };
+    std::vector<DeclItem> declGroup;
+    std::vector<size_t> declIndices;
+
+    auto flushDecls = [&](int baseIndent) {
+        if (declGroup.empty()) return;
+        size_t maxId = 0;
+        for (const auto& item : declGroup) {
+            maxId = std::max(maxId, item.id.size());
+        }
+        for (size_t k = 0; k < declGroup.size(); ++k) {
+            std::string pad(maxId - declGroup[k].id.size(), ' ');
+            std::string aligned = declGroup[k].id + pad + " : " + declGroup[k].type;
+            if (!declGroup[k].comment.empty()) aligned += " " + declGroup[k].comment;
+            outLines[declIndices[k]] = std::string(baseIndent * 4, ' ') + aligned;
+        }
+        declGroup.clear();
+        declIndices.clear();
+    };
+
+    int indent = 0;
+    bool inDecl = false;
+    bool inMatch = false;
+
+    for (size_t i = 0; i < processedLines.size(); ++i) {
+        const auto& line = processedLines[i];
+        if (line.empty()) {
+            outLines[i] = "";
+            continue;
+        }
+
+        std::istringstream ls(line);
+        std::string firstWord;
+        ls >> firstWord;
+        std::string secondWord;
+        ls >> secondWord;
+
+        if (firstWord == "Declares" || firstWord == "Takes" || firstWord == "Implements") {
+            flushDecls(1);
+            inDecl = (firstWord == "Declares" || firstWord == "Takes");
+            indent = 0;
+            outLines[i] = line;
+            indent = 1;
+            continue;
+        }
+        if (firstWord == "Block" || firstWord == "Record" || firstWord == "Enum") {
+            flushDecls(1);
+            inDecl = (firstWord == "Record");
+            indent = 0;
+            outLines[i] = line;
+            indent = 1;
+            continue;
+        }
+        if (firstWord == "End") {
+            flushDecls(1);
+            inDecl = false;
+            if (secondWord == "If" || secondWord == "Loop") {
+                indent = std::max(1, indent - 1);
+                outLines[i] = std::string(indent * 4, ' ') + line;
+            } else if (secondWord == "Match") {
+                indent = 1;
+                inMatch = false;
+                outLines[i] = std::string(indent * 4, ' ') + line;
+            } else {
+                indent = 0;
+                outLines[i] = line;
+            }
+            continue;
+        }
+        if (firstWord == "Produces") {
+            flushDecls(1);
+            inDecl = false;
+            outLines[i] = line;
+            continue;
+        }
+        if (firstWord == "Match") {
+            outLines[i] = std::string(indent * 4, ' ') + line;
+            inMatch = true;
+            continue;
+        }
+        if (firstWord == "When" && inMatch) {
+            outLines[i] = std::string(8, ' ') + line;
+            indent = 3;
+            continue;
+        }
+        if (firstWord == "Else" && inMatch) {
+            outLines[i] = std::string(8, ' ') + line;
+            indent = 3;
+            continue;
+        }
+        if (firstWord == "If" || firstWord == "Loop") {
+            outLines[i] = std::string(indent * 4, ' ') + line;
+            indent++;
+            continue;
+        }
+        if (firstWord == "Else") {
+            outLines[i] = std::string(std::max(0, indent - 1) * 4, ' ') + line;
+            continue;
+        }
+
+        if (inDecl && line.find(':') != std::string::npos) {
+            size_t colonPos = line.find(':');
+            std::string idPart = trim(line.substr(0, colonPos));
+            std::string rest = trim(line.substr(colonPos + 1));
+            std::string comm;
+            size_t commPos = rest.find('#');
+            if (commPos != std::string::npos) {
+                comm = rest.substr(commPos);
+                rest = trim(rest.substr(0, commPos));
+            }
+            declGroup.push_back({idPart, rest, comm});
+            declIndices.push_back(i);
+        } else {
+            flushDecls(1);
+            outLines[i] = std::string(indent * 4, ' ') + line;
+        }
+    }
+    flushDecls(1);
+
+    std::ostringstream result;
+    for (size_t i = 0; i < outLines.size(); ++i) {
+        result << outLines[i] << "\n";
+    }
+    return result.str();
+}
+
+void formatFile(const fs::path& filePath, bool checkOnly) {
+    std::string content = readFileContent(filePath.string());
+    std::string formattedStr = formatLoomSource(content);
     if (checkOnly) {
         if (content != formattedStr) {
             throw Error("formatting differences in " + filePath.string());
@@ -2088,7 +2343,7 @@ void runLsp(const char* argv0) {
 }
 
 void usage() {
-    std::cout << "Loom workspace tool 1.2.0\n\nUsage:\n"
+    std::cout << "Loom workspace tool 1.3.0\n\nUsage:\n"
                  "  loom new <name> [--rp2040]\n"
                  "  loom install <library> [--version <version>]\n"
                  "  loom install toolchain <name> [--version <version>]\n"
@@ -2134,7 +2389,7 @@ int main(int argc, char** argv) {
     try {
         if (argc == 1 || std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h") { usage(); return 0; }
         const std::string command = argv[1];
-        if (command == "--version" || command == "-V") { std::cout << "loom 1.2.0\n"; return 0; }
+        if (command == "--version" || command == "-V") { std::cout << "loom 1.3.0\n"; return 0; }
         if (command == "install") {
             if (argc < 3) throw Error("usage: loom install <library> [--version <version>] or loom install toolchain <name>");
             std::string kind = "library", name, version;

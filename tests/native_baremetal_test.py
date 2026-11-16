@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix="loom-native-baremetal-", dir=project / 
     (tc / "bin").mkdir(parents=True)
     (tc / "bin" / "loomc").symlink_to(loomc)
     (tc / "toolchain.toml").write_text(
-        'name = "native"\nkind = "native"\nversion = "1.2.0"\ndescription = "bare-metal test"\n'
+        'name = "native"\nkind = "native"\nversion = "1.3.0"\ndescription = "bare-metal test"\n'
     )
     env = os.environ.copy()
     env["HOME"] = str(home_path)

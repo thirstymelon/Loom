@@ -2,7 +2,7 @@
   "name": "loom-language-support",
   "displayName": "Loom Language Support",
   "description": "Syntax highlighting, formatting, snippets, completion and compiler-backed diagnostics for Loom.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "publisher": "loom-language",
   "license": "MIT",
   "engines": {
@@ -141,7 +141,7 @@
   },
   "scripts": {
     "test": "node ./test/smoke.js",
-    "package": "vsce package -o Loom-1.2.0.vsix"
+    "package": "vsce package -o Loom-1.3.0.vsix"
   },
   "devDependencies": {
     "@vscode/vsce": "^2.26.1"
