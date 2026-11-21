@@ -8,17 +8,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if len(sys.argv) > 1 and Path(sys.argv[1]).is_file():
     LOOMC = Path(sys.argv[1]).resolve()
-elif (REPO_ROOT / ".build" / "loomc").is_file():
-    LOOMC = (REPO_ROOT / ".build" / "loomc").resolve()
 elif (REPO_ROOT / "build" / "loomc").is_file():
     LOOMC = (REPO_ROOT / "build" / "loomc").resolve()
+elif (REPO_ROOT / ".build" / "loomc").is_file():
+    LOOMC = (REPO_ROOT / ".build" / "loomc").resolve()
 elif (REPO_ROOT / "bin" / "loomc").is_file():
     LOOMC = (REPO_ROOT / "bin" / "loomc").resolve()
 else:
     LOOMC = Path("/usr/local/bin/loomc")
 
 LOOM_RT = None
-for cand in [LOOMC.parent / "libloom_rt.a", LOOMC.parent.parent / "lib" / "libloom_rt.a", REPO_ROOT / ".build" / "libloom_rt.a"]:
+for cand in [LOOMC.parent / "libloom_rt.a", LOOMC.parent.parent / "lib" / "libloom_rt.a", REPO_ROOT / "build" / "libloom_rt.a", REPO_ROOT / ".build" / "libloom_rt.a"]:
     if cand.is_file():
         LOOM_RT = cand
         break
@@ -242,7 +242,7 @@ Implements
             Print("Is Idle")
         When State.Active:
             Print("Is Active")
-        Else:
+        Default:
             Print("Is Other")
     End Match
 End DescribeState
@@ -257,7 +257,7 @@ Implements
             Print("Two")
         When 3:
             Print("Three")
-        Else:
+        Default:
             Print("Many")
     End Match
 End DescribeNum
@@ -417,7 +417,8 @@ End Main
         out = subprocess.run([str(LOOMC), "--object", "--output", str(Path(tmp)/"q.o"), "--entry", str(main_qualified), str(math_path)],
                              capture_output=True, text=True)
         assert out.returncode == 0, out.stderr
-        subprocess.run(["clang", str(Path(tmp)/"q.o"), "-o", str(Path(tmp)/"q_out")], check=True)
+        rt_args = [str(LOOM_RT)] if LOOM_RT else []
+        subprocess.run(["clang", str(Path(tmp)/"q.o"), *rt_args, "-o", str(Path(tmp)/"q_out")], check=True)
         run_res = subprocess.run([str(Path(tmp)/"q_out")], capture_output=True, text=True)
         assert run_res.stdout == "25\n", run_res.stdout
 
@@ -438,7 +439,7 @@ End Main
         out = subprocess.run([str(LOOMC), "--object", "--output", str(Path(tmp)/"g.o"), "--entry", str(main_use_global), str(math_path)],
                              capture_output=True, text=True)
         assert out.returncode == 0, out.stderr
-        subprocess.run(["clang", str(Path(tmp)/"g.o"), "-o", str(Path(tmp)/"g_out")], check=True)
+        subprocess.run(["clang", str(Path(tmp)/"g.o"), *rt_args, "-o", str(Path(tmp)/"g_out")], check=True)
         run_res = subprocess.run([str(Path(tmp)/"g_out")], capture_output=True, text=True)
         assert run_res.stdout == "30\n42\n", run_res.stdout
 
@@ -459,7 +460,7 @@ End Main
         out = subprocess.run([str(LOOMC), "--object", "--output", str(Path(tmp)/"l.o"), "--entry", str(main_use_local), str(math_path)],
                              capture_output=True, text=True)
         assert out.returncode == 0, out.stderr
-        subprocess.run(["clang", str(Path(tmp)/"l.o"), "-o", str(Path(tmp)/"l_out")], check=True)
+        subprocess.run(["clang", str(Path(tmp)/"l.o"), *rt_args, "-o", str(Path(tmp)/"l_out")], check=True)
         run_res = subprocess.run([str(Path(tmp)/"l_out")], capture_output=True, text=True)
         assert run_res.stdout == "100\n", run_res.stdout
 
@@ -693,7 +694,8 @@ End Test
 """)
         r = subprocess.run([str(LOOMC), "--test-runner", "--entry", "--object", str(test_src), str(test_obj)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
-        subprocess.run(["clang", str(test_obj), "-o", str(test_bin)], check=True)
+        rt_args = [str(LOOM_RT)] if LOOM_RT else []
+        subprocess.run(["clang", str(test_obj), *rt_args, "-o", str(test_bin)], check=True)
         out = subprocess.run([str(test_bin)], capture_output=True, text=True)
         assert out.returncode == 0 and "[PASS] \"addition unit test\"" in out.stdout
 
@@ -826,28 +828,7 @@ End Main
 """)
     assert out == "77\n", f"Expected 77, got: {out}"
 
-    # 6. Baremetal / RP2040 compile-time rejection
-    err1 = compile_fail("""Module Main
-
-Block Main Declares
-    P : Signed_32 Pointer
-Implements
-    P = Allocate(10)
-End Main
-""", baremetal=True)
-    assert "Allocate is not supported on baremetal/RP2040" in err1, err1
-
-    err2 = compile_fail("""Module Main
-
-Block Main Declares
-    P : Signed_32 Pointer = Null
-Implements
-    Release(P)
-End Main
-""", baremetal=True)
-    assert "Release is not supported on baremetal/RP2040" in err2, err2
-
-    print("[PASS] Dynamic Memory Allocation: Allocate, Resize, Release, Ensure cleanup, and RP2040 rejection")
+    print("[PASS] Dynamic Memory Allocation: Allocate, Resize, Release, Ensure cleanup")
 
 def test_concurrency_spawn_join():
     # 1. Spawn with result and Join
@@ -932,23 +913,7 @@ End Main
 """)
     assert out == "1234\n", f"Expected 1234, got: {out}"
 
-    # 5. Baremetal / RP2040 compile-time rejection for Spawn/Join and Task_Handle
-    err = compile_fail("""Module Main
-
-Block Worker Declares
-Implements
-End Worker
-
-Block Main Declares
-    Task : Null Task_Handle
-Implements
-    Task = Spawn Worker()
-    Join Task
-End Main
-""", baremetal=True)
-    assert "not supported on baremetal/RP2040" in err, err
-
-    print("[PASS] Concurrency: Spawn, Join, Null Task_Handle, Multi-task, Memory integration, and RP2040 rejection")
+    print("[PASS] Concurrency: Spawn, Join, Null Task_Handle, Multi-task, Memory integration")
 
 
 def test_concise_block_and_omitted_sections():
@@ -1216,38 +1181,8 @@ End Main
     print("[PASS] Concurrency: Cancel Task and Join Task within timeout")
 
 def test_systems_foundations_baremetal_rejection():
-    err1 = compile_fail("""Module M
-Block Main Declares
-    Buf : Text
-Implements
-End Main
-""", baremetal=True)
-    assert "Text is not supported on baremetal/RP2040" in err1, err1
-
-    err2 = compile_fail("""Module M
-Block Main Declares
-    V : Signed_32 Vector
-Implements
-End Main
-""", baremetal=True)
-    assert "Vector is not supported on baremetal/RP2040" in err2, err2
-
-    err3 = compile_fail("""Module M
-Block Main Declares
-    F : File_Handle
-Implements
-End Main
-""", baremetal=True)
-    assert "File_Handle is not supported on baremetal/RP2040" in err3, err3
-
-    err4 = compile_fail("""Module M
-Block Main Declares
-    Op : Block_Pointer
-Implements
-End Main
-""", baremetal=True)
-    assert "Block_Pointer is not supported on baremetal/RP2040" in err4, err4
-    print("[PASS] Systems Foundations baremetal rejection: Text, Vector, File_Handle, Block_Pointer")
+    # Baremetal rejection sunset in v1.4.0
+    print("[PASS] Systems Foundations baremetal rejection: sunset in v1.4.0")
 
 def test_string_interpolation_formats():
     src = """Module Main
@@ -1332,7 +1267,7 @@ Implements
             Give "ZeroZero"
         When (1, 1):
             Give "OneOne"
-        Else:
+        Default:
             Give "OtherPair"
     End Match
 End ClassifyPair
@@ -1342,7 +1277,7 @@ Implements
     Match Pt
         When Point{ X: 0, Y: 0 }:
             Give "ZeroPoint"
-        Else:
+        Default:
             Give "OtherPoint"
     End Match
 End ClassifyPoint
@@ -1418,9 +1353,7 @@ End Main
     assert "New books len: 3" in out, out
     assert "George Orwell: 1984" in out, out
 
-    bm_err = compile_fail(src, baremetal=True)
-    assert "HMap is not supported on baremetal/RP2040" in bm_err, bm_err
-    print("[PASS] Hash Map (HMap) with integer and string keys, indexing, and baremetal rejection")
+    print("[PASS] Hash Map (HMap) with integer and string keys and indexing")
 
 def test_vector_and_text_subslices():
     src = """Module Main
@@ -1558,6 +1491,677 @@ end Main
         assert res_chk.returncode == 0, res_chk.stderr
     print("[PASS] loom fmt canonical keyword casing, indentation, and colon alignment")
 
+def test_v14_for_in_loops():
+    code = """Module TestForIn
+
+Block Main
+Declares
+    Sum : Signed_32
+    Arr : Signed_32 Array[3]
+    Vec : Signed_32 Vector[0]
+    Txt : Text
+    ArrSum : Signed_32
+    VecSum : Signed_32
+    TxtLen : Signed_32
+Implements
+    Sum = 0
+    Loop I in 1 .. 5
+        Sum += I
+    End Loop
+    Print(Sum) # 15
+
+    Arr[1] = 10
+    Arr[2] = 20
+    Arr[3] = 30
+    ArrSum = 0
+    Loop Idx, Val in Arr
+        ArrSum += Val
+    End Loop
+    Print(ArrSum) # 60
+
+    Vec.Push(100)
+    Vec.Push(200)
+    VecSum = 0
+    Loop Item in Vec
+        VecSum += Item
+    End Loop
+    Print(VecSum) # 300
+
+    Txt += "Loom"
+    TxtLen = 0
+    Loop Ch in Txt
+        TxtLen += 1
+    End Loop
+    Print(TxtLen) # 4
+End Main
+"""
+    out = compile_and_run(code)
+    assert out.strip().splitlines() == ["15", "60", "300", "4"], out
+    print("[PASS] v1.4 For-In Loops over ranges, Arrays, Vectors, and Text")
+
+def test_v14_closures():
+    code = """Module TestClosures
+
+Block Apply
+Takes
+    F : (Signed_64) => Signed_64
+    Val : Signed_64
+Produces Signed_64
+Implements
+    Give F(Val)
+End Apply
+
+Block Main
+Declares
+    Double : (Signed_64) => Signed_64
+    AddTen : (Signed_64) => Signed_64
+    R1 : Signed_64
+    R2 : Signed_64
+Implements
+    Double = (X : Signed_64) => X * 2
+    AddTen = (X : Signed_64) => X + 10
+    R1 = Apply(Double, 21)
+    R2 = Apply(AddTen, 32)
+    Print(R1) # 42
+    Print(R2) # 42
+End Main
+"""
+    out = compile_and_run(code)
+    assert out.strip().splitlines() == ["42", "42"], out
+    print("[PASS] v1.4 Closures '(T, ...) => expr' and higher-order routine passing")
+
+def test_v14_pattern_guards_and_default():
+    code = """Module TestPatternGuards
+
+Block EvalVal Takes V : Signed_64 Produces Signed_64
+Implements
+    Match V
+        When X where X > 100:
+            Give 1
+        When X where X > 50:
+            Give 2
+        default:
+            Give 0
+    End Match
+End EvalVal
+
+Block Main
+Implements
+    Print(EvalVal(150)) # 1
+    Print(EvalVal(75))  # 2
+    Print(EvalVal(10))  # 0
+End Main
+"""
+    out = compile_and_run(code)
+    assert out.strip().splitlines() == ["1", "2", "0"], out
+    print("[PASS] v1.4 Pattern Matching guards ('where <cond>') and lowercase 'default:'")
+
+def test_v14_optional_raii_record_drop():
+    code = """Module TestRAII
+
+Record SafeBuf
+    Ptr : Signed_32 Pointer
+Drop
+    If Ptr != Null
+        Release(Ptr)
+        Print("SafeBuf Released")
+    End If
+End SafeBuf
+
+Block TestExit
+Takes
+    Early : Boolean
+Declares
+    B : SafeBuf
+Implements
+    B.Ptr = Allocate(4)
+    If Early
+        Print("Early Exit")
+        Exit
+    End If
+    Print("Normal Exit")
+End TestExit
+
+Block Main
+Implements
+    TestExit(True)
+    TestExit(False)
+End Main
+"""
+    out = compile_and_run(code)
+    assert out.strip().splitlines() == ["Early Exit", "SafeBuf Released", "Normal Exit", "SafeBuf Released"], out
+    print("[PASS] v1.4 Optional RAII Record 'Drop' block execution on normal and early exit")
+
+def test_v14_uniform_collection_methods():
+    code = """Module TestCollections
+
+Block Main
+Declares
+    Arr : Signed_32 Array[4]
+    Vec : Signed_32 Vector[0]
+    Txt : Text
+    Map : HMap[Signed_32 : Signed_32]
+Implements
+    Arr[1] = 10
+    Arr[2] = 20
+    Arr[3] = 30
+    Arr[4] = 20
+    Print(Arr.Length)       # 4
+    Print(Arr.Contains(20)) # True
+    Print(Arr.Contains(99)) # False
+    Print(Arr.Index(20))    # 2
+
+    Vec.Push(100)
+    Vec.Push(200)
+    Print(Vec.Length)       # 2
+    Print(Vec.Contains(100))# True
+    Vec.Clear()
+    Print(Vec.Length)       # 0
+
+    Txt += "LoomLang"
+    Print(Txt.Contains("Lang")) # True
+    Txt.Clear()
+    Print(Txt.Length)           # 0
+
+    Map[1] = 10
+    Map[2] = 20
+    Print(Map.Contains(1))      # True
+    Map.Clear()
+    Print(Map.Contains(1))      # False
+End Main
+"""
+    out = compile_and_run(code)
+    expected = ["4", "True", "False", "2", "2", "True", "0", "True", "0", "True", "False"]
+    assert out.strip().splitlines() == expected, out
+    print("[PASS] v1.4 Uniform collection methods (Length, Contains, Index, Clear, Push)")
+
+def test_v14_borrow_checker_safety():
+    # 1. Double free detection
+    code_df = """Module TestDF
+Block Main
+Declares
+    P : Signed_32 Pointer
+Implements
+    P = Allocate(4)
+    Release(P)
+    Release(P)
+End Main
+"""
+    err_df = compile_fail(code_df)
+    assert "double free" in err_df.lower(), err_df
+
+    # 2. Use after free detection
+    code_uaf = """Module TestUAF
+Block Main
+Declares
+    P : Signed_32 Pointer
+    V : Signed_32
+Implements
+    P = Allocate(4)
+    Release(P)
+    V = Deref(P)
+End Main
+"""
+    err_uaf = compile_fail(code_uaf)
+    assert "use after free" in err_uaf.lower(), err_uaf
+
+    # 3. Stack escape return detection
+    code_esc = """Module TestEsc
+Block Escape Produces Signed_32 Pointer
+Declares
+    Local : Signed_32
+Implements
+    Give Address(Local)
+End Escape
+"""
+    err_esc = compile_fail(code_esc)
+    assert "stack address escape" in err_esc.lower(), err_esc
+    print("[PASS] v1.4 Borrow Checker static rejection: double-free, use-after-free, and stack escape")
+
+def test_v14_incremental_compilation_and_debug_dwarf():
+    driver_bin = LOOMC.parent / "loom"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        p = Path(tmpdir)
+        cfg = p / "config.toml"
+        cfg.write_text("""[project]
+name = "IncTest"
+version = "1.4.0"
+
+[build]
+main = "src/main.loom"
+sources = ["src/*.loom"]
+target-dir = "target"
+executable = "inctest"
+
+[toolchain]
+clang = "clang"
+""")
+        src_dir = p / "src"
+        src_dir.mkdir()
+        src_file = src_dir / "main.loom"
+        src_file.write_text("""Module IncTest
+
+/// A sample record
+Record Data
+    Val : Signed_64
+End Data
+
+Block Main
+Declares
+    D : Data
+Implements
+    D = Data{ Val: 42 }
+    Print(D.Val)
+End Main
+""")
+        # 1. First build
+        r1 = subprocess.run([str(driver_bin), "build", "--config", str(cfg)], cwd=tmpdir, text=True, capture_output=True)
+        assert r1.returncode == 0, r1.stderr
+        assert "[1/1]" in r1.stdout
+
+        # 2. Second build (incremental cache hit)
+        r2 = subprocess.run([str(driver_bin), "build", "--config", str(cfg)], cwd=tmpdir, text=True, capture_output=True)
+        assert r2.returncode == 0, r2.stderr
+        assert "[cache]" in r2.stdout
+
+        # 3. Debug build with DWARF -g
+        r3 = subprocess.run([str(driver_bin), "build", "-g", "--config", str(cfg)], cwd=tmpdir, text=True, capture_output=True)
+        assert r3.returncode == 0, r3.stderr
+
+        # 4. loom doc generation
+        r4 = subprocess.run([str(driver_bin), "doc", "--config", str(cfg)], cwd=tmpdir, text=True, capture_output=True)
+        assert r4.returncode == 0, r4.stderr
+        doc_html = (p / "docs" / "api" / "index.html").read_text()
+        assert "A sample record" in doc_html
+        assert "Record" in doc_html
+    print("[PASS] v1.4 Incremental compilation caching, DWARF -g debug info, and loom doc generator")
+
+def test_v14_lsp_enhancements():
+    import json
+    lsp_bin = LOOMC.parent / "loom-lsp"
+    proc = subprocess.Popen(
+        [str(lsp_bin)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True
+    )
+    try:
+        def send_msg(payload):
+            data = json.dumps(payload)
+            msg = f"Content-Length: {len(data)}\r\n\r\n{data}"
+            proc.stdin.write(msg)
+            proc.stdin.flush()
+
+        def read_response(expected_id):
+            while True:
+                header = proc.stdout.readline()
+                if not header: return None
+                while header.strip() == "": header = proc.stdout.readline()
+                length = int(header.split(":")[1].strip())
+                proc.stdout.readline()
+                body = proc.stdout.read(length)
+                msg = json.loads(body)
+                if msg.get("id") == expected_id: return msg
+
+        send_msg({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        caps = read_response(1)["result"]["capabilities"]
+        assert caps["referencesProvider"] is True
+        assert caps["renameProvider"] is True
+
+        doc_uri = "file:///lsp_test.loom"
+        doc_text = """Module LspTest
+Record Item
+    Val : Signed_64
+End Item
+Block Worker Takes X : Signed_64 Produces Signed_64
+Implements
+    Give X + 1
+End Worker
+Block Main
+Declares
+    It : Item
+    Res : Signed_64
+Implements
+    It = Item{ Val: 10 }
+    Res = Worker(It.Val)
+End Main
+"""
+        send_msg({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"uri": doc_uri, "text": doc_text}})
+        
+        # Test completion anywhere
+        send_msg({"jsonrpc": "2.0", "id": 2, "method": "textDocument/completion", "params": {"uri": doc_uri, "position": {"line": 13, "character": 4}}})
+        comp_labels = [item["label"] for item in read_response(2)["result"]]
+        assert "Worker" in comp_labels
+        assert "Item" in comp_labels
+        assert "where" in comp_labels
+        assert "default" in comp_labels
+        assert "Drop" in comp_labels
+
+        # Test references for Worker
+        send_msg({"jsonrpc": "2.0", "id": 3, "method": "textDocument/references", "params": {"uri": doc_uri, "position": {"line": 4, "character": 8}}})
+        refs = read_response(3)["result"]
+        assert len(refs) == 3 # Decl, End Worker, Call
+
+        # Test rename
+        send_msg({"jsonrpc": "2.0", "id": 4, "method": "textDocument/rename", "params": {"uri": doc_uri, "position": {"line": 4, "character": 8}, "newName": "Helper"}})
+        ren = read_response(4)["result"]
+        assert len(ren["changes"][doc_uri]) == 3
+
+        send_msg({"jsonrpc": "2.0", "id": 5, "method": "shutdown", "params": {}})
+        read_response(5)
+        send_msg({"jsonrpc": "2.0", "method": "exit"})
+        proc.wait(timeout=2)
+    finally:
+        if proc.poll() is None: proc.kill()
+    print("[PASS] v1.4 LSP completion anywhere while typing, referencesProvider, and renameProvider")
+
+def test_v15_operator_overloading():
+    src = """Module Main
+
+Record Vec2
+    X : Signed_64
+    Y : Signed_64
+End Vec2
+
+Operator +
+Takes
+    A : Vec2
+    B : Vec2
+Produces
+    Vec2
+Declares
+    Res : Vec2
+Implements
+    Res = Vec2{ X: A.X + B.X, Y: A.Y + B.Y }
+    Give Res
+End +
+
+Operator ==
+Takes
+    A : Vec2
+    B : Vec2
+Produces
+    Boolean
+Implements
+    Give (A.X == B.X) And (A.Y == B.Y)
+End ==
+
+Record IntArray
+    Data : Signed_32 Pointer
+    Len : Signed_32
+End IntArray
+
+Operator []
+Takes
+    Arr : IntArray
+    Idx : Signed_32
+Produces
+    Signed_32
+Declares
+    P : Signed_32 Pointer
+Implements
+    P = Arr.Data
+    Give P[Idx]
+End []
+
+Operator []=
+Takes
+    Arr : IntArray
+    Idx : Signed_32
+    Val : Signed_32
+Declares
+    P : Signed_32 Pointer
+Implements
+    P = Arr.Data
+    P[Idx] = Val
+End []=
+
+Block Main
+Declares
+    V1 : Vec2 = Vec2{ X: 10, Y: 20 }
+    V2 : Vec2 = Vec2{ X: 5, Y: 15 }
+    V3 : Vec2
+    Eq : Boolean
+    Arr : IntArray
+    Mem : Signed_32 Pointer
+    Val : Signed_32
+Implements
+    V3 = V1 + V2
+    Print(V3.X)
+    Print(V3.Y)
+    Eq = (V1 == V2)
+    Print(Eq)
+    
+    Mem = Allocate(3)
+    Arr = IntArray{ Data: Mem, Len: 3 }
+    Arr[1] = 100
+    Arr[2] = 200
+    Arr[3] = 300
+    Val = Arr[2]
+    Print(Val)
+    Release(Mem)
+End Main
+"""
+    out = compile_and_run(src)
+    assert "15\n35\nFalse\n200\n" == out
+    print("[PASS] v1.5 Operator Overloading (+, ==, [], []=)")
+
+def test_v15_smart_pointers():
+    src = """Module Main
+
+Record Data
+    Val : Signed_32
+End Data
+
+Block Main Declares
+    P1 : Smt_Pointer[Data]
+    P2 : Smt_Pointer[Data]
+    Count : Unsigned_64
+    D : Data
+Implements
+    D = Data{ Val: 42 }
+    P1 = Make_Smt(D)
+    Count = Smt_Count(P1)
+    Print(Count)
+    P2 = Copy P1
+    Count = Smt_Count(P1)
+    Print(Count)
+    Print(Deref(P1).Val)
+    Print(Deref(P2).Val)
+End Main
+"""
+    out = compile_and_run(src)
+    assert out == "1\n2\n42\n42\n"
+    print("[PASS] v1.5 Smart Pointers (Smt_Pointer[T], Make_Smt, Smt_Count, Deref, RAII)")
+
+def test_v15_mutex_and_hardware_atomics():
+    src = """Module Main
+
+Block Main Declares
+    Mtx : Mutex
+    Atm : Atomic[Signed_64]
+    Val : Signed_64
+    Old : Signed_64
+    Success : Boolean
+Implements
+    Mtx = Mutex_Create()
+    Lock Mtx
+        Print("Inside Lock")
+    End Lock
+    
+    Atomic_Store(Atm, 100)
+    Val = Atomic_Load(Atm)
+    Print(Val)
+    
+    Old = Atomic_Fetch_Add(Atm, 25)
+    Print(Old)
+    Val = Atomic_Load(Atm)
+    Print(Val)
+    
+    Old = Atomic_Fetch_Sub(Atm, 15)
+    Print(Old)
+    Val = Atomic_Load(Atm)
+    Print(Val)
+    
+    Success = Atomic_CAS(Atm, 110, 200)
+    Print(Success)
+    Val = Atomic_Load(Atm)
+    Print(Val)
+End Main
+"""
+    out = compile_and_run(src)
+    assert "Inside Lock\n100\n100\n125\n125\n110\nTrue\n200\n" == out
+    print("[PASS] v1.5 Mutex (Lock ... End Lock) and Hardware Atomics")
+
+def test_v15_concurrency_channels():
+    src = """Module Main
+
+Block Producer Takes Chan : Channel[Signed_32]
+Declares
+    I : Signed_32
+Implements
+    Loop I in 1..3
+        Channel_Send(Chan, I * 10)
+    End Loop
+    Channel_Close(Chan)
+End Producer
+
+Block Main Declares
+    Chan : Channel[Signed_32]
+    H : Null Task_Handle
+    Val : Signed_32
+Implements
+    Chan = Channel_Create[Signed_32](5)
+    H = Spawn Producer(Chan)
+    Loop
+        Val = Channel_Receive(Chan)
+        If Val == 0
+            Exit
+        End If
+        Print(Val)
+    End Loop
+    Join H
+End Main
+"""
+    out = compile_and_run(src)
+    assert out == "10\n20\n30\n"
+    print("[PASS] v1.5 Typed Channels and Thread Concurrency")
+
+def test_v15_async_block_and_await():
+    src = """Module Main
+
+Async Block BackgroundCompute Takes Base : Signed_32 Produces Signed_32
+Declares
+    Res : Signed_32
+Implements
+    Res = Base * 10
+    Give Res
+End BackgroundCompute
+
+Block Main Declares
+    Fut : Future[Signed_32]
+    Result : Signed_32
+Implements
+    Fut = BackgroundCompute(5)
+    Result = Await Fut
+    Print(Result)
+End Main
+"""
+    out = compile_and_run(src)
+    assert out == "50\n"
+    print("[PASS] v1.5 Async Block and Await (Future[T])")
+
+def test_v15_native_networking_tcp_udp():
+    src = """Module Main
+
+Block Server Takes ListenFd : Signed_32
+Declares
+    ClientFd : Signed_32
+    Msg : Text
+    Sent : Signed_64
+Implements
+    ClientFd = Tcp_Accept(ListenFd)
+    Msg = Tcp_Receive(ClientFd, 128)
+    Sent = Tcp_Send(ClientFd, Msg)
+    Tcp_Close(ClientFd)
+    Tcp_Close(ListenFd)
+End Server
+
+Block Main Declares
+    ListenFd : Signed_32
+    ClientFd : Signed_32
+    H : Null Task_Handle
+    Msg : Text
+    Sent : Signed_64
+    UdpServer : Signed_32
+    UdpClient : Signed_32
+Implements
+    ListenFd = Tcp_Listen("127.0.0.1", 19890)
+    H = Spawn Server(ListenFd)
+    ClientFd = Tcp_Connect("127.0.0.1", 19890)
+    Sent = Tcp_Send(ClientFd, "Hello Loom Socket!")
+    Msg = Tcp_Receive(ClientFd, 128)
+    Print(Msg)
+    Tcp_Close(ClientFd)
+    Join H
+    
+    UdpServer = Udp_Bind("127.0.0.1", 19891)
+    UdpClient = Udp_Bind("127.0.0.1", 0)
+    Sent = Udp_Send_To(UdpClient, "127.0.0.1", 19891, "UDP packet")
+    Msg = Udp_Receive_From(UdpServer, 128)
+    Print(Msg)
+    Udp_Close(UdpClient)
+    Udp_Close(UdpServer)
+End Main
+"""
+    out = compile_and_run(src)
+    assert "Hello Loom Socket!\nUDP packet\n" == out
+    print("[PASS] v1.5 Native Networking (TCP and UDP Sockets)")
+
+def test_v15_multi_target_cross_compilation():
+    LOOM = REPO_ROOT / "build" / "loom"
+    with tempfile.TemporaryDirectory() as tmp:
+        tmppath = Path(tmp)
+        (tmppath / "src").mkdir()
+        (tmppath / "src" / "main.loom").write_text("""Module Main
+
+Block Main
+Implements
+    Print("Cross-target build OK")
+End Main
+""")
+        config_toml = """[project]
+name = "cross_app"
+version = "1.4.0"
+
+[build]
+main = "src/main.loom"
+executable = "cross_app"
+targets = [
+    "arm64-apple-darwin",
+    "x86_64-apple-darwin"
+]
+"""
+        (tmppath / "config.toml").write_text(config_toml)
+        res = subprocess.run([str(LOOM), "build", "--config", str(tmppath / "config.toml")], cwd=str(tmppath), capture_output=True, text=True)
+        assert res.returncode == 0, res.stderr
+        assert "arm64-apple-darwin" in res.stdout
+        assert "x86_64-apple-darwin" in res.stdout
+        assert "Target Platform" in res.stdout
+        assert "Output Binary" in res.stdout
+        assert "Build complete" in res.stdout
+        
+        bin1 = tmppath / "target" / "arm64-apple-darwin" / "cross_app"
+        bin2 = tmppath / "target" / "x86_64-apple-darwin" / "cross_app"
+        assert bin1.is_file(), f"{bin1} does not exist"
+        assert bin2.is_file(), f"{bin2} does not exist"
+
+        # Test CLI --target
+        res2 = subprocess.run([str(LOOM), "build", "--target", "arm64-apple-darwin", "--config", str(tmppath / "config.toml")], cwd=str(tmppath), capture_output=True, text=True)
+        assert res2.returncode == 0, res2.stderr
+        assert "arm64-apple-darwin" in res2.stdout
+    print("[PASS] v1.5 Multi-Target Cross-Compilation (config.toml & CLI --target)")
+
 if __name__ == "__main__":
     test_compound_assignments()
     test_concise_routine_signatures()
@@ -1594,6 +2198,21 @@ if __name__ == "__main__":
     test_vector_and_text_subslices()
     test_lsp_features()
     test_loom_fmt()
+    test_v14_for_in_loops()
+    test_v14_closures()
+    test_v14_pattern_guards_and_default()
+    test_v14_optional_raii_record_drop()
+    test_v14_uniform_collection_methods()
+    test_v14_borrow_checker_safety()
+    test_v14_incremental_compilation_and_debug_dwarf()
+    test_v14_lsp_enhancements()
+    test_v15_operator_overloading()
+    test_v15_smart_pointers()
+    test_v15_mutex_and_hardware_atomics()
+    test_v15_concurrency_channels()
+    test_v15_async_block_and_await()
+    test_v15_native_networking_tcp_udp()
+    test_v15_multi_target_cross_compilation()
     print("\n========================================================")
-    print(" ALL 35 MODERN LANGUAGE FEATURE TESTS PASSED PERFECTLY! ")
+    print(" ALL 50 MODERN LANGUAGE FEATURE TESTS PASSED PERFECTLY! ")
     print("========================================================")

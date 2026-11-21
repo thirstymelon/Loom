@@ -1,7 +1,6 @@
 {
   "comments": {
-    "lineComment": "#",
-    "additionalLineComment": "//"
+    "lineComment": "#"
   },
   "brackets": [
     [
@@ -62,12 +61,12 @@
     }
   ],
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(?:Block\\b.*|Record\\b.*|Enum\\b.*|Extern\\s+Block\\b.*|Takes\\s*$|Declares\\s*$|Implements\\s*$|Produces\\s*$|If\\b.*|Else\\b.*|Loop\\b.*|Match\\b.*|When\\b.*:\\s*$|Else:\\s*$|Ensure(?:\\s*\\{)?)(?:\\s*(?:#|//).*)?$",
-    "decreaseIndentPattern": "^\\s*(?:End\\b.*|Else\\b.*|When\\b.*:\\s*$|Else:\\s*|Declares\\s*$|Implements\\s*$|Produces\\s*$)(?:\\s*(?:#|//).*)?$"
+    "increaseIndentPattern": "^\\s*(?:Block\\b.*|Record\\b.*|Enum\\b.*|Extern\\s+Block\\b.*|Takes\\s*$|Declares\\s*$|Implements\\s*$|Produces\\s*$|If\\b.*|Else\\b.*|Loop\\b.*|Match\\b.*|When\\b.*:\\s*$|Default:\\s*$|Else:\\s*$|Ensure(?:\\s*\\{)?)(?:\\s*(?:#|//).*)?$",
+    "decreaseIndentPattern": "^\\s*(?:End\\b.*|Else\\b.*|When\\b.*:\\s*$|Default:\\s*$|Else:\\s*|Declares\\s*$|Implements\\s*$|Produces\\s*$)(?:\\s*(?:#|//).*)?$"
   },
   "onEnterRules": [
     {
-      "beforeText": "^\\s*(?:Block\\b.*|Record\\b.*|Enum\\b.*|Extern\\s+Block\\b.*|Takes\\s*$|Declares\\s*$|Implements\\s*$|Produces\\s*$|If\\b.*|Else\\b.*|Loop\\b.*|Match\\b.*|When\\b.*:\\s*$|Else:\\s*$|Ensure(?:\\s*\\{)?)(?:\\s*(?:#|//).*)?$",
+      "beforeText": "^\\s*(?:Block\\b.*|Record\\b.*|Enum\\b.*|Extern\\s+Block\\b.*|Takes\\s*$|Declares\\s*$|Implements\\s*$|Produces\\s*$|If\\b.*|Else\\b.*|Loop\\b.*|Match\\b.*|When\\b.*:\\s*$|Default:\\s*$|Else:\\s*$|Ensure(?:\\s*\\{)?)(?:\\s*(?:#|//).*)?$",
       "action": {
         "indent": "indent"
       }

@@ -27,7 +27,7 @@ Block Main
         B : Signed_8
         C : Signed_8
     Implements
-        A = Wrap8(127, 1)
+        A = Wrap8(120, 7)
         B = ShiftLeft8()
         C = ShiftRight8()
         Print(A)

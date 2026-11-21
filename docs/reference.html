@@ -1,261 +1,48 @@
-<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Reference · Loom 1.3.0</title><link rel=stylesheet href="styles.css"><link rel="icon" type="image/png" href="assets/logo.png"></head><body data-r=""><header><div class=w><a class=brand href="index.html"><img src="assets/logo.png" alt="Loom"><span>Loom<i>.</i><sup>1.3.0</sup></span></a><nav><a href="getting-started.html">Start</a><a href="tutorials/index.html">Tutorials</a><a href="developer-overview.html">Developer</a><a href="rp2040-reference.html">RP2040 BSP</a><a href="reference.html" class=on>Reference</a></nav><button class=sb id=sk>Search <kbd>Ctrl K</kbd></button><button class=mb id=mb aria-label=Menu>≡</button></div></header><div class="w doc"><article>
-<p class=eb>Technical Language Specification</p><h1>Loom 1.3.0 language reference</h1>
-<p class=lead>The authoritative specification of Loom v1.3.0: type system, literal forms, keyword directory, operator precedence, volatile memory intrinsics, compiler diagnostics, CLI options, and formal EBNF grammar.</p>
-
-<h2 id="types">The type system</h2>
-<p>Loom provides explicit, fixed-width primitive and composite types. There are no implicit promotions or silent coercions:</p>
-<table>
-<tr><th>Type<th>Size (Bits)<th>Alignment<th>Representation & Value Range</tr>
-<tr><td><code>Signed_8</code><td>8<td>1 byte<td>Two's complement signed integer (-128 to 127).</tr>
-<tr><td><code>Signed_16</code><td>16<td>2 bytes<td>Two's complement signed integer (-32,768 to 32,767).</tr>
-<tr><td><code>Signed_32</code><td>32<td>4 bytes<td>Two's complement signed integer (-2,147,483,648 to 2,147,483,647). Default integer type.</tr>
-<tr><td><code>Signed_64</code><td>64<td>8 bytes<td>Two's complement signed integer (-9,223,372,036,854,775,808 to 9,223,372,036,854,775,807).</tr>
-<tr><td><code>Unsigned_8</code><td>8<td>1 byte<td>Unsigned integer (0 to 255). Byte value.</tr>
-<tr><td><code>Unsigned_16</code><td>16<td>2 bytes<td>Unsigned integer (0 to 65,535).</tr>
-<tr><td><code>Unsigned_32</code><td>32<td>4 bytes<td>Unsigned integer (0 to 4,294,967,295).</tr>
-<tr><td><code>Unsigned_64</code><td>64<td>8 bytes<td>Unsigned integer (0 to 18,446,744,073,709,551,615).</tr>
-<tr><td><code>Float_32</code><td>32<td>4 bytes<td>IEEE 754 single-precision floating point.</tr>
-<tr><td><code>Float_64</code><td>64<td>8 bytes<td>IEEE 754 double-precision floating point. Default float type.</tr>
-<tr><td><code>Boolean</code><td>1 (in i8)<td>1 byte<td>Boolean truth value: <code>True</code> or <code>False</code>.</tr>
-<tr><td><code>Character</code><td>32<td>4 bytes<td>Unicode scalar value (UCS-4 / UTF-32 code point), e.g. <code>'A'</code> or <code>'⚡'</code>.</tr>
-<tr><td><code>String</code><td>Variable<td>1 byte<td>Immutable UTF-8 encoded string literal. Indexing returns <code>Unsigned_8</code> byte.</tr>
-<tr><td><code>T Pointer</code> / <code>Pointer[T]</code><td>64 (or 32 on ARM)<td>Pointer size<td>Raw, unmanaged memory address. Compatible with literal <code>Null</code>.</tr>
-<tr><td><code>T Array[N]</code><td>$N \times \text{sizeof}(T)$<td>$\text{alignof}(T)$<td>Contiguous stack or global fixed array. Indexed 1-based. Provides <code>.Length</code>.</tr>
-<tr><td><code>T Slice</code><td>16 bytes (or 8 on ARM)<td>Pointer size<td>Non-owning fat pointer struct (pointer to element 1 + unsigned 64-bit element count). Provides <code>.Length</code>.</tr>
-<tr><td><code>Record</code><td>Sum of fields + pad<td>Max field align<td>Structured value type. Field order preserved. Copied by value.</tr>
-<tr><td><code>Enum</code><td>Underlying type<td>Underlying align<td>Named integer enumeration with explicit underlying scalar type.</tr>
-<tr><td><code>T Vector[N]</code> / <code>T Vector = {...}</code><td>24 bytes (or 16 on ARM)<td>Pointer size<td>Growable dynamic heap vector. 1-based indexing, <code>.Append()</code>, <code>.Pop()</code>, <code>.Index()</code>, <code>.Index_All()</code>, <code>.Contains()</code>, <code>.Length</code>, and <code>.Capacity</code>.</tr>
-<tr><td><code>HMap[K : V]</code><td>Pointer size<td>Pointer size<td>Open-addressing dynamic hash map with integer or string keys. Supports indexing <code>Map[K]</code>, <code>.Length</code>, <code>.Contains(K)</code>, and <code>.Remove(K)</code>. Restricted to Loom Native.</tr>
-<tr><td><code>(T1, T2, ...)</code><td>Sum of elements<td>Max element align<td>Lightweight anonymous tuple value type. Used for multi-value returns and unpacking assignments.</tr>
-<tr><td><code>Text</code> / <code>Text[N]</code><td>24 bytes (or 16 on ARM)<td>Pointer size<td>Growable dynamic string builder. In-place appending via <code>+=</code>, <code>.Length</code>, <code>.Capacity</code>, and <code>To_String()</code>.</tr>
-<tr><td><code>Block_Pointer(...)</code><td>Pointer size<td>Pointer size<td>First-class indirect block (function or procedure) pointer. Null keyword omitted on non-producing pointers.</tr>
-<tr><td><code>File_Handle</code><td>Pointer size<td>Pointer size<td>OS file descriptor handle. Created via <code>Open_File</code>, closed via <code>Close_File</code>.</tr>
-<tr><td><code>Task_Handle</code><td>Pointer size<td>Pointer size<td>Preemptive OS thread/fiber concurrency handle for <code>Spawn</code>, <code>Join Task</code>, and <code>Cancel Task</code>.</tr>
-</table>
-
-<h2 id="literals">Literal expressions & representations</h2>
-<table>
-<tr><th>Literal Form<th>Syntax & Examples<th>Semantics</tr>
-<tr><td><b>Decimal Integers</b><td><code>42</code>, <code>-100</code>, <code>100_000</code><td>Arbitrary underscores permitted between digits for visual grouping. Type inferred by context or magnitude.</tr>
-<tr><td><b>Hexadecimal</b><td><code>0xAF</code>, <code>0x1000_0000</code>, <code>0xFF_AA_00</code><td>Base-16 integer literal. Case-insensitive digits.</tr>
-<tr><td><b>Binary</b><td><code>0b0100_1101</code>, <code>0b1111_0000</code><td>Base-2 integer literal. Underscores permitted.</tr>
-<tr><td><b>Floating Point</b><td><code>3.14159</code>, <code>-0.005</code>, <code>1_000.50</code><td>Standard IEEE decimal float literal. Requires explicit <code>Float_32</code> or <code>Float_64</code> context.</tr>
-<tr><td><b>Characters</b><td><code>'A'</code>, <code>'\n'</code>, <code>'\t'</code>, <code>'\\'</code>, <code>'\''</code>, <code>'⚡'</code><td>Single quotes enclosing a single Unicode scalar or escape sequence.</tr>
-<tr><td><b>Strings</b><td><code>"Hello, World!\n"</code><td>Double quotes enclosing UTF-8 character sequence. Supports standard escapes (<code>\n</code>, <code>\t</code>, <code>\r</code>, <code>\\</code>, <code>\"</code>).</tr>
-<tr><td><b>String Interpolation</b><td><code>"Count: &lt;Count&gt;, Hex: &lt;Val:04X&gt;, Float: &lt;F:.2f&gt;"</code><td>Angle brackets inside string literals interpolate expressions dynamically at runtime with optional format specifiers (e.g. <code>:04X</code>, <code>:.2f</code>, <code>:6d</code>).</tr>
-<tr><td><b>Hash Map Literal</b><td><code>{ 1 : "Alex", 2 : "Adam" }</code><td>Constructs an initialized <code>HMap</code> with key-value pairs separated by colons.</tr>
-<tr><td><b>Tuple Literal</b><td><code>(10, True, "OK")</code><td>Constructs a lightweight tuple value with comma-separated elements in parentheses.</tr>
-<tr><td><b>Null Pointer</b><td><code>Null</code><td>Typed null pointer literal compatible with all pointer types. Uninitialized pointers default to <code>Null</code>.</tr>
-<tr><td><b>Record Struct Literal</b><td><code>Point{ X: 10, Y: 20 }</code><td>Constructs an initialized record by specifying field names and initial values.</tr>
-</table>
-
-<h2 id="keywords">Complete keyword directory</h2>
-<p>Loom enforces strict case-sensitivity. Keywords are strictly capitalized, with only three reserved lowercase tokens (<code>while</code>, <code>until</code>, <code>use</code>):</p>
-<table>
-<tr><th>Keyword<th>Category<th>Syntax Pattern & Description</tr>
-<tr><td><code>Module</code><td>Structure<td><code>Module &lt;Name&gt;</code> — First line of every source file.</tr>
-<tr><td><code>Block</code><td>Structure<td><code>Block &lt;Name&gt; ... End &lt;Name&gt;</code> — Defines an executable procedure or function.</tr>
-<tr><td><code>Global</code><td>Structure<td><code>Block Global ... End Global</code> — Declares global variables and constants.</tr>
-<tr><td><code>Takes</code><td>Header<td><code>Takes &lt;Name&gt; : &lt;Type&gt;</code> — Declares parameter list for a block.</tr>
-<tr><td><code>Produces</code><td>Header<td><code>Produces &lt;Type&gt;</code>, multi-value <code>Produces (&lt;T1&gt;, &lt;T2&gt;)</code>, or concise <code>Produces (&lt;Expr&gt;)</code> / <code>Produces &lt;Expr&gt;</code> — Declares return type or concise return expression.</tr>
-<tr><td><code>Declares</code><td>Header<td><code>Declares &lt;Name&gt; : &lt;Type&gt; [= &lt;Init&gt;]</code> — Declares local variable block.</tr>
-<tr><td><code>Implements</code><td>Header<td><code>Implements</code> — Begins block statement execution body.</tr>
-<tr><td><code>End</code><td>Structure<td><code>End &lt;Name&gt;</code> / <code>End If</code> / <code>End Loop</code> / <code>End Match</code> — Closes a block or control structure.</tr>
-<tr><td><code>Give</code><td>Control<td><code>Give &lt;Expr&gt;</code> or multi-value <code>Give (&lt;Expr1&gt;, &lt;Expr2&gt;)</code> — Returns a value from a value-producing block.</tr>
-<tr><td><code>If</code> / <code>Else If</code> / <code>Else</code><td>Control<td><code>If &lt;Cond&gt; ... Else If &lt;Cond&gt; ... Else ... End If</code> — Conditional branching.</tr>
-<tr><td><code>Loop</code><td>Control<td><code>Loop ... End Loop</code>, <code>Loop while &lt;Cond&gt;</code>, or <code>Loop until &lt;Cond&gt;</code> — Loop execution.</tr>
-<tr><td><code>Exit</code><td>Control<td><code>Exit</code> / <code>Exit(&lt;Code&gt;)</code> — Terminates the nearest enclosing loop or exits the process with an optional status code.</tr>
-<tr><td><code>Skip</code><td>Control<td><code>Skip</code> — Advances immediately to the next loop iteration check.</tr>
-<tr><td><code>Match</code> / <code>When</code><td>Control<td><code>Match &lt;Expr&gt; When &lt;Pattern&gt;: ... When &lt;A&gt; .. &lt;B&gt;: ... When _: ... Else: ... End Match</code> — Pattern matching over values, ranges, tuples, records, and wildcard.</tr>
-<tr><td><code>Ensure</code><td>Memory<td><code>Ensure { &lt;Statements&gt; }</code> — Single multi-line block per function for deterministic LIFO cleanup.</tr>
-<tr><td><code>Address</code><td>Memory<td><code>Address(&lt;Var&gt;)</code> — Returns <code>T Pointer</code> to an lvalue variable.</tr>
-<tr><td><code>Deref</code><td>Memory<td><code>Deref(&lt;Ptr&gt;)</code> — Dereferences a pointer for read or assignment (<code>Deref(P) = 42</code>).</tr>
-<tr><td><code>as</code><td>Type<td><code>&lt;Expr&gt; as &lt;Target_Type&gt;</code> or constructor <code>&lt;Target_Type&gt;(&lt;Expr&gt;)</code> — Ergonomic type conversion.</tr>
-<tr><td><code>try</code> / <code>or</code><td>Error<td><code>Produces &lt;T&gt; or &lt;Err&gt;</code>, <code>try &lt;Expr&gt;</code> — Zero-cost typed error propagation with automatic cleanup unwinding.</tr>
-<tr><td><code>Packed</code> / <code>Align</code><td>Hardware<td><code>Packed Record &lt;Name&gt; Align &lt;N&gt;</code> — Byte-packed memory layout with explicit boundary alignment.</tr>
-<tr><td><code>Slice</code><td>Type<td><code>Arr[Start .. End]</code>, <code>Slice(&lt;Arr&gt;)</code>, or <code>Slice(&lt;Ptr&gt;, &lt;Len&gt;)</code> — Fat pointer slice subview.</tr>
-<tr><td><code>Record</code><td>Type<td><code>Record &lt;Name&gt;[T] ... End &lt;Name&gt;</code> — Defines a composite struct type (supports monomorphized generics).</tr>
-<tr><td><code>Enum</code><td>Type<td><code>Enum &lt;Name&gt; : &lt;Type&gt; ... End &lt;Name&gt;</code> — Defines an enumerated type with explicit underlying scalar.</tr>
-<tr><td><code>Constant</code><td>Type<td><code>&lt;Name&gt; : Constant &lt;Type&gt; = &lt;Value&gt;</code> — Compile-time immutable constant.</tr>
-<tr><td><code>Extern</code><td>Interop<td><code>Extern Block &lt;Name&gt; ... End &lt;Name&gt;</code> — Declares a C ABI foreign function.</tr>
-<tr><td><code>Import</code><td>Module<td><code>Import &lt;Module&gt;</code> — Imports an external source file or SDK module.</tr>
-<tr><td><code>use</code><td>Module<td><code>use &lt;Module&gt;</code> — Unqualified namespace import (module-scoped or block-scoped).</tr>
-<tr><td><code>Spawn</code><td>Concurrency<td><code>Task = Spawn &lt;Block&gt;(&lt;Args&gt;)</code> — Spawns an asynchronous background task, returning a <code>Task_Handle</code>.</tr>
-<tr><td><code>Join</code><td>Concurrency<td><code>Result = Join Task &lt;Handle&gt; [within &lt;Ms&gt;]</code> — Suspends until task completes (optional timeout in ms).</tr>
-<tr><td><code>Cancel</code><td>Concurrency<td><code>Cancel Task &lt;Handle&gt;</code> — Aborts an active concurrent task.</tr>
-<tr><td><code>Print</code><td>I/O<td><code>Print(...)</code> — Exclusively outputs formatted, interpolated text to terminal standard output (stdout).</tr>
-<tr><td><code>Write</code><td>I/O<td><code>Write(File, ...)</code> — Exclusively outputs formatted text to an open <code>File_Handle</code> stream.</tr>
-</table>
-
-<div class=note><p><b>Direct Block Invocations:</b> Loom does <b>not</b> have a <code>Call</code> keyword. Procedures and functions are called directly by their identifier: <code>My_Procedure()</code> or <code>Result = My_Function(Arg)</code>. If a value-producing block's result is not needed, call it as a statement and Loom discards that value. The compiler still checks visibility and argument types.</p><pre><code>RP2040_Init() # The Boolean return value is intentionally unused.
-OLED_I2C = I2C_Init(4, 5)</code></pre></div>
-
-<h2 id="operators">Operator precedence & compound assignments</h2>
-<p>Binary operators associate left to right. Precedence is organized into 10 descending levels:</p>
-<table>
-<tr><th>Precedence Level<th>Operators<th>Category & Behavior</tr>
-<tr><td>1 (Highest)<td><code>-</code> (unary), <code>Not</code>, <code>~</code> (bitwise NOT)<td>Unary negation, logical inversion, and bitwise NOT.</tr>
-<tr><td>2<td><code>pow</code><td>Infix exponentiation power operator (<code>2 pow 8 == 256</code>).</tr>
-<tr><td>3<td><code>*</code>, <code>/</code>, <code>Mod</code>, <code>%</code><td>Multiplication, integer/float division, and modulo / remainder.</tr>
-<tr><td>4<td><code>+</code>, <code>-</code><td>Addition and subtraction. Fixed integer overflow wraps.</tr>
-<tr><td>5<td><code>LSL</code>, <code>LSR</code><td>Logical Shift Left and Shift Right (sign-extended for signed types).</tr>
-<tr><td>6<td><code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code><td>Relational equality and ordering comparisons. Evaluates to <code>Boolean</code>.</tr>
-<tr><td>7<td><code>&amp;</code><td>Bitwise AND.</tr>
-<tr><td>8<td><code>^</code><td>Bitwise XOR.</tr>
-<tr><td>9<td><code>|</code><td>Bitwise OR.</tr>
-<tr><td>10<td><code>And</code><td>Logical AND.</tr>
-<tr><td>11 (Lowest)<td><code>Or</code><td>Logical OR.</tr>
-</table>
-
-<h3>Compound Assignment Operators</h3>
-<p>Loom provides in-place mutating assignment operators: <code>+=</code>, <code>-=</code>, <code>*=</code>, <code>/=</code>, <code>&amp;=</code>, <code>|=</code>, and <code>^=</code>:</p>
-<pre><code>Total += Value     # Equivalent to: Total = Total + Value
-Mask  &amp;= ~0x04     # Equivalent to: Mask = Mask &amp; ~0x04
-Flags |= 0x80      # Equivalent to: Flags = Flags | 0x80
-Bits  ^= 0xFF      # Equivalent to: Bits = Bits ^ 0xFF</code></pre>
-
-<h2 id="volatile-intrinsics">Volatile memory intrinsics</h2>
-<p>Hardware registers, memory-mapped I/O (MMIO), and DMA control buffers must be accessed using volatile intrinsics that prevent the compiler from optimizing, reordering, or caching accesses:</p>
-<table>
-<tr><th>Access Width<th>Volatile Read Function<th>Volatile Write Function</tr>
-<tr><td>8-Bit (Byte)<td><code>Vol_Read_8(Address : Signed_64) : Unsigned_8</code><td><code>Vol_Write_8(Address : Signed_64, Value : Unsigned_8)</code></tr>
-<tr><td>16-Bit (Half-Word)<td><code>Vol_Read_16(Address : Signed_64) : Unsigned_16</code><td><code>Vol_Write_16(Address : Signed_64, Value : Unsigned_16)</code></tr>
-<tr><td>32-Bit (Word)<td><code>Vol_Read_32(Address : Signed_64) : Unsigned_32</code><td><code>Vol_Write_32(Address : Signed_64, Value : Unsigned_32)</code></tr>
-<tr><td>64-Bit (Double-Word)<td><code>Vol_Read_64(Address : Signed_64) : Unsigned_64</code><td><code>Vol_Write_64(Address : Signed_64, Value : Unsigned_64)</code></tr>
-</table>
-
-<h2 id="cli">Command-line interface (CLI) reference</h2>
-<h3>The <code>loom</code> Workspace Tool</h3>
-<table>
-<tr><th>Command / Flag<th>Description</tr>
-<tr><td><code>loom new &lt;name&gt; [--rp2040]</code><td>Scaffolds a new workspace. Adding <code>--rp2040</code> configures bare-metal Raspberry Pi Pico firmware using the SDK.</tr>
-<tr><td><code>loom build [--release] [--opt-report] [--verbose]</code><td>Compiles all sources and links the native executable or bare-metal ELF/UF2.</tr>
-<tr><td><code>loom run [--release] [--verbose]</code><td>Builds and immediately executes the target binary (or displays Pico flashing instructions).</tr>
-<tr><td><code>loom test [files...] [--verbose]</code><td>Executes unit and integration test blocks declared via <code>Test "name" ... End Test</code>.</tr>
-<tr><td><code>loom fmt [files...] [--check]</code><td>Formats Loom source files with canonical indentation and block styling.</tr>
-<tr><td><code>loom fetch</code><td>Fetches and caches remote git dependencies specified in <code>config.toml</code> under <code>[dependencies]</code>.</tr>
-<tr><td><code>loom lsp</code><td>Starts the native Loom Language Server Protocol (LSP) daemon for IDE integration.</tr>
-<tr><td><code>loom clean</code><td>Deletes the <code>target/</code> directory and all intermediate object files.</tr>
-<tr><td><code>loom graph [--view calls|data] [--format mermaid|json]</code><td>Generates an architectural call graph or data access model from semantic analysis.</tr>
-<tr><td><code>loom --version</code> / <code>-V</code><td>Prints driver version string (e.g. <code>loom 1.3.0</code>).</tr>
-</table>
-
-<h3>The <code>loomc</code> Native Compiler</h3>
-<table>
-<tr><th>Flag / Argument<th>Purpose</tr>
-<tr><td><code>loomc &lt;sources...&gt; &lt;output.ll&gt;</code><td>Compiles Loom source files to LLVM IR.</tr>
-<tr><td><code>--object --output &lt;file.o&gt;</code><td>Compiles directly to a native machine object file.</tr>
-<tr><td><code>--baremetal</code><td>Compiles without standard hosted OS entry points or C runtime assumptions.</tr>
-<tr><td><code>--target &lt;triple&gt;</code><td>Specifies target LLVM triple (e.g. <code>thumbv6m-none-eabi</code> or <code>arm64-apple-darwin</code>).</tr>
-<tr><td><code>--cpu &lt;cpu&gt;</code><td>Specifies target CPU architecture (e.g. <code>cortex-m0plus</code>).</tr>
-<tr><td><code>--release</code><td>Enables full <code>-O3</code> optimization, aggressive inlining, and dead-code stripping.</tr>
-<tr><td><code>--opt-report</code><td>Prints compiler optimization diagnostics (loop vectorization, parallel loop detection, bounds-check removal).</tr>
-<tr><td><code>--emit-c-header &lt;header.h&gt;</code><td>Generates ANSI C header with matching record structs and extern block declarations.</tr>
-<tr><td><code>--test-runner</code><td>Synthesizes and compiles test execution harness for all declared <code>Test</code> blocks.</tr>
-<tr><td><code>-I &lt;dir&gt;</code><td>Adds an SDK or header include directory for module resolution.</tr>
-<tr><td><code>--version</code><td>Prints compiler version and linked LLVM version (e.g. <code>loomc 1.3.0 (LLVM 23.1.4)</code>).</tr>
-</table>
-
-<h2 id="grammar">Formal EBNF grammar specification</h2>
-<pre class=raw><code>ModuleDecl     ::= "Module" Identifier
-TopLevel       ::= ModuleDecl ( ImportDecl | UseDecl | BlockDecl | EnumDecl | RecordDecl | ExternBlock )*
-
-ImportDecl     ::= "Import" Identifier
-UseDecl        ::= "use" Identifier
-
-EnumDecl       ::= "Enum" Identifier ":" Type ( Identifier "=" IntegerLiteral )+ "End" Identifier
-RecordDecl     ::= "Record" Identifier ( Identifier ":" Type )+ "End" Identifier
-
-BlockDecl      ::= "Block" Identifier
-                   [ "Takes" ( Identifier ":" Type )+ ]
-                   ( "Produces" Type [ "Declares" VarDecl* ] "Implements" Statement* "End" Identifier
-                   | "Produces" "(" Expression ")" "End" Identifier
-                   | [ "Declares" VarDecl* ] "Implements" Statement* "End" Identifier )
-
-VarDecl        ::= Identifier ":" [ "Constant" ] Type [ "=" Expression ]
-
-Statement      ::= Assignment
-                 | CompoundAssign
-                 | CallStmt
-                 | WriteStmt
-                 | IfStmt
-                 | LoopStmt
-                 | MatchStmt
-                 | EnsureStmt
-                 | "Exit"
-                 | "Skip"
-                 | "Give" Expression
-
-CompoundAssign ::= LValue ( "+=" | "-=" | "*=" | "/=" | "&amp;=" | "|=" | "^=" ) Expression
-LoopStmt       ::= "Loop" [ ( "while" | "until" ) Expression ] Statement* "End" "Loop"
-
-MatchStmt      ::= "Match" Expression ( "When" Expression ":" Statement* )+ [ "Else" ":" Statement* ] "End" "Match"
-EnsureStmt     ::= "Ensure" "{" Statement "}"
-CallStmt       ::= [ Identifier "." ] Identifier "(" [ Expression ( "," Expression )* ] ")"
-WriteStmt      ::= "Write" "(" [ Expression ( "," Expression )* ] ")" | "Write_UART" "(" Expression ")"</code></pre>
-
-<div class=pn><a href="embedded-rp2040.html"><small>← Previous</small>Embedded RP2040</a><span></span></div></article><aside id=toc></aside></div><footer><div class=w><span>Loom 1.3.0</span><span>loomc 1.3.0 (LLVM 23.1.4)</span></div></footer><div id=pal><div><input id=pi placeholder="Search the docs…"><div id=pl></div></div></div><script>const IDX=[["Overview", "index.html", "Page"], ["Getting started", "getting-started.html", "Page"], ["Tutorials", "tutorials/index.html", "Page"], ["Beginner guide", "tutorials/beginner-guide.html", "Page"], ["Developer overview", "developer-overview.html", "Page"], ["Embedded RP2040", "embedded-rp2040.html", "Page"], ["RP2040 BSP reference", "rp2040-reference.html", "Page"], ["Reference", "reference.html", "Page"], ["Pillars", "index.html#pillars", "Overview"], ["Features", "index.html#features", "Overview"], ["Quick start", "index.html#quick-start", "Overview"], ["Explore", "index.html#explore", "Overview"], ["Install", "getting-started.html#install", "Getting started"], ["Toolchain", "getting-started.html#toolchain", "Getting started"], ["Editor setup", "getting-started.html#editor-setup", "Getting started"], ["Project anatomy", "getting-started.html#project-anatomy", "Getting started"], ["Your first project", "getting-started.html#your-first-project", "Getting started"], ["1. Hello, World", "tutorials/beginner-guide.html#l1", "Beginner guide"], ["2. Variables, types and literals", "tutorials/beginner-guide.html#l2", "Beginner guide"], ["3. Operators", "tutorials/beginner-guide.html#l3", "Beginner guide"], ["4. Decisions", "tutorials/beginner-guide.html#l4", "Beginner guide"], ["5. Loops", "tutorials/beginner-guide.html#l5", "Beginner guide"], ["6. Procedures", "tutorials/beginner-guide.html#l6", "Beginner guide"], ["7. Records, enums and Match", "tutorials/beginner-guide.html#l7", "Beginner guide"], ["8. Arrays and slices", "tutorials/beginner-guide.html#l8", "Beginner guide"], ["9. Pointers, Cast and Ensure", "tutorials/beginner-guide.html#l9", "Beginner guide"], ["10. Modules", "tutorials/beginner-guide.html#l10", "Beginner guide"], ["Memory model", "developer-overview.html#memory-model", "Developer overview"], ["Safety rules", "developer-overview.html#safety-rules", "Developer overview"], ["Deterministic cleanup", "developer-overview.html#deterministic-cleanup", "Developer overview"], ["Why one-based indexing", "developer-overview.html#why-one-based-indexing", "Developer overview"], ["Compiler pipeline", "developer-overview.html#compiler-pipeline", "Developer overview"], ["Volatile I/O", "developer-overview.html#volatile-i-o", "Developer overview"], ["C FFI", "developer-overview.html#c-ffi", "Developer overview"], ["Module graphs", "developer-overview.html#module-graphs", "Developer overview"], ["The chip", "embedded-rp2040.html#the-chip", "Embedded RP2040"], ["Create a project", "embedded-rp2040.html#create-a-project", "Embedded RP2040"], ["The SDK", "embedded-rp2040.html#the-sdk", "Embedded RP2040"], ["RP2040 function guide", "rp2040-reference.html", "RP2040 BSP"], ["Hardware abstraction layer", "embedded-rp2040.html#hardware-abstraction-layer", "Embedded RP2040"], ["Blink firmware", "embedded-rp2040.html#blink-firmware", "Embedded RP2040"], ["Direct register access", "embedded-rp2040.html#direct-register-access", "Embedded RP2040"], ["Build and flash", "embedded-rp2040.html#build-and-flash", "Embedded RP2040"], ["Simulate with Wokwi", "embedded-rp2040.html#simulate-with-wokwi", "Embedded RP2040"], ["Types", "reference.html#types", "Reference"], ["Literals", "reference.html#literals", "Reference"], ["Keywords", "reference.html#keywords", "Reference"], ["Operators", "reference.html#operators", "Reference"], ["Volatile intrinsics", "reference.html#volatile-intrinsics", "Reference"], ["CLI", "reference.html#cli", "Reference"], ["Grammar", "reference.html#grammar", "Reference"]];
-const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],R=document.body.dataset.r;
-const RE=/(#[^\n]*)|("(?:[^"\\]|\\.)*"|'[^'\n]*')|\b(0x[0-9a-fA-F_]+|0b[01_]+|\d[\d_]*(?:\.\d+)?)\b|\b(Module|Block|Global|Takes|Produces|Declares|Implements|End|Give|If|Else|Loop|While|Until|For|In|Exit|Skip|Ensure|Match|With|When|Import|Use|Constant|Record|Enum|Extern)\b|\b(Address|Deref|Cast|Slice|Null|True|False|And|Or|Not|Mod|LSL|LSR|ASR)\b|\b(Signed_\d+|Unsigned_\d+|Float_\d+|Boolean|Character|String|Pointer|Array|Int\d*|Uint\d*|Float\d*|Bool|Char|Byte|Word|Usize|Isize)\b|([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()|(\+=|-=|\*=|\/=|%=|:=|==|!=|<=|>=|->|=>|::|@|\^)/g;
-const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-
-$$('pre').forEach(p=>{
-  const c=p.querySelector('code');
-  if(!c)return;
-  const raw=c.textContent;
-  const isSh=p.classList.contains('sh');
-  const isRaw=p.classList.contains('raw');
-  let title='main.loom';
-  const m=raw.match(/\bModule\s+([A-Za-z0-9_]+)/);
-  if(m)title=m[1]+'.loom';
-  else if(isSh)title='Terminal — zsh';
-  else if(isRaw)title='grammar.ebnf';
-  else if(raw.includes('[project]')||raw.includes('config.toml'))title='config.toml';
-  else if(raw.includes('Block '))title='routine.loom';
-  else if(raw.includes('Record '))title='types.loom';
-
-  if(!isSh&&!isRaw){
-    const hl=esc(raw).replace(RE,(match,cm,st,nu,kw,bl,ty,fn,op)=>
-      cm?`<span class="c">${cm}</span>`:
-      st?`<span class="s">${st}</span>`:
-      nu?`<span class="n">${nu}</span>`:
-      kw?`<span class="k">${kw}</span>`:
-      bl?`<span class="b">${bl}</span>`:
-      ty?`<span class="t">${ty}</span>`:
-      fn?`<span class="f">${fn}</span>`:
-      op?`<span class="o">${op}</span>`:match
-    );
-    const lines=hl.split('\n');
-    c.innerHTML=lines.map(l=>`<span class="line">${l||' '}</span>`).join('');
-  }else if(isSh){
-    c.innerHTML=esc(raw).replace(/(#[^\n]*)|("(?:[^"\\]|\\.)*")|(--?[a-zA-Z0-9_-]+)|\b(loom|cd|sudo|cp|mkdir|curl|code|python3|ctest)\b|\b(new|build|run|clean|test|install)\b/g,(match,cm,st,fl,cmd,sc)=>
-      cm?`<span class="c">${cm}</span>`:
-      st?`<span class="s">${st}</span>`:
-      fl?`<span class="flg">${fl}</span>`:
-      cmd?`<span class="cmd">${cmd}</span>`:
-      sc?`<span class="sc">${sc}</span>`:match
-    );
-  }
-
-  const bar=document.createElement('div');
-  bar.className='mac-bar';
-  bar.innerHTML=`<div class="mac-dots"><span class="mac-dot r"></span><span class="mac-dot y"></span><span class="mac-dot g"></span></div><div class="mac-title">${title}</div><button class="cb" type="button">Copy</button>`;
-  const btn=bar.querySelector('.cb');
-  btn.onclick=()=>navigator.clipboard.writeText(raw).then(()=>{
-    btn.textContent='Copied';
-    setTimeout(()=>btn.textContent='Copy',1200);
-  });
-  p.prepend(bar);
-});
-
-const hs=$$('article h2');if(hs.length>1){$('#toc').innerHTML='<b>ON THIS PAGE</b>'+hs.map(h=>`<a href="#${h.id}">${h.textContent}</a>`).join('');const o=new IntersectionObserver(e=>e.forEach(x=>x.isIntersecting&&$$('#toc a').forEach(a=>a.classList.toggle('on',a.hash=='#'+x.target.id))),{rootMargin:'-20% 0px -70% 0px'});hs.forEach(h=>o.observe(h))}
-$('#mb').onclick=()=>document.body.classList.toggle('open');
-const P=$('#pal'),pi=$('#pi'),pl=$('#pl');let cur=[],sel=0;
-const pr=()=>{const q=pi.value.toLowerCase();cur=IDX.filter(i=>(i[0]+' '+i[2]).toLowerCase().includes(q)).slice(0,9);sel=Math.min(sel,Math.max(cur.length-1,0));pl.innerHTML=cur.map((c,i)=>`<a href="${R+c[1]}" class="${i==sel?'on':''}">${c[0]}<small>${c[2]}</small></a>`).join('')};
-const op=v=>{P.classList.toggle('on',v);if(v){pi.value='';sel=0;pr();pi.focus()}};
-$('#sk').onclick=()=>op(1);P.onclick=e=>e.target==P&&op(0);pi.oninput=()=>{sel=0;pr()};
-addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key=='k'){e.preventDefault();op(1)}else if(e.key=='Escape')op(0);else if(P.classList.contains('on')){if(e.key=='ArrowDown'){sel=Math.min(sel+1,cur.length-1);pr()}else if(e.key=='ArrowUp'){sel=Math.max(sel-1,0);pr()}else if(e.key=='Enter'&&cur[sel])location.href=R+cur[sel][1]}});
-const ds=$$('.done');if(ds.length){let S={};try{S=JSON.parse(localStorage.loomDone||'{}')}catch(e){}
-const up=()=>{const n=ds.filter(d=>d.classList.contains('on')).length;$('#pc').textContent=n+' / '+ds.length+' lessons complete';$('#pb').style.width=n/ds.length*100+'%';try{localStorage.loomDone=JSON.stringify(S)}catch(e){}};
-ds.forEach((d,i)=>{d.classList.toggle('on',!!S[i]);d.textContent=S[i]?'✓ Completed':'Mark complete';d.onclick=()=>{S[i]=!S[i];d.classList.toggle('on',S[i]);d.textContent=S[i]?'✓ Completed':'Mark complete';up()}});up()}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Language reference · Loom</title><style>
+:root{--bg:#fff;--fg:#16181d;--mut:#6a6f7a;--line:#e7e9ee;--acc:#3451d1;--code:#f5f6f8;--k:#c2255c;--t:#0b7285;--s:#2b8a3e;--n:#d9480f;--c:#868e96}
+@media(prefers-color-scheme:dark){:root{--bg:#0e0f12;--fg:#e6e8ec;--mut:#8b919c;--line:#22252b;--acc:#8fa6ff;--code:#15171b;--k:#ff8fab;--t:#66d9e8;--s:#8ce99a;--n:#ffa94d;--c:#6b7280}}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.7 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline;text-underline-offset:3px}
+.side{position:fixed;inset:0 auto 0 0;width:248px;padding:28px 22px;border-right:1px solid var(--line);overflow:auto;background:var(--bg)}
+.brand{font-weight:650;font-size:17px;letter-spacing:-.01em;color:var(--fg);display:block;margin-bottom:22px}.brand span{color:var(--mut);font-weight:400;font-size:12px;margin-left:6px}
+.side input{width:100%;font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);margin-bottom:18px}
+.side input:focus{outline:2px solid var(--acc);outline-offset:1px}
+.side h6{margin:20px 0 6px;font:600 11px/1 inherit;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.side a{display:block;padding:4px 0;font-size:14px;color:var(--mut)}.side a:hover{color:var(--fg);text-decoration:none}.side a.on{color:var(--fg);font-weight:600}.side a.sub{padding-left:12px;font-size:13px}
+main{margin-left:248px;padding:64px 32px 120px}article{max-width:700px;margin:0 auto}
+.top{display:none}
+h1{font-size:2.35rem;line-height:1.15;letter-spacing:-.03em;margin:0 0 14px;font-weight:650}
+h2{font-size:1.45rem;letter-spacing:-.02em;margin:3.2rem 0 .6rem;font-weight:650;padding-top:1.6rem;border-top:1px solid var(--line)}
+h3{font-size:1.05rem;margin:2rem 0 .3rem;font-weight:650}
+.lead{font-size:1.15rem;color:var(--mut);margin:0 0 2rem}
+p,li{color:var(--fg)}li{margin:.3rem 0}
+code{font:.86em ui-monospace,"SF Mono",Menlo,Consolas,monospace;background:var(--code);padding:.15em .4em;border-radius:5px}
+pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;margin:1.2rem 0;line-height:1.6}
+pre code{background:none;padding:0;font-size:13.5px;white-space:pre}
+.cp{position:absolute;top:8px;right:8px;font:12px inherit;color:var(--mut);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer;opacity:0;transition:.15s}pre:hover .cp,.cp:focus{opacity:1}
+.k{color:var(--k)}.t{color:var(--t)}.s{color:var(--s)}.n{color:var(--n)}.c{color:var(--c);font-style:italic}
+table{width:100%;border-collapse:collapse;margin:1.2rem 0;font-size:14.5px}th{text-align:left;font-weight:600;color:var(--mut);font-size:12px;letter-spacing:.05em;text-transform:uppercase}
+th,td{padding:9px 12px 9px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.note{border-left:2px solid var(--acc);padding:2px 0 2px 16px;margin:1.4rem 0;color:var(--mut)}.note p{color:var(--mut);margin:.4rem 0}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:1.6rem 0}
+.cards a{border:1px solid var(--line);border-radius:12px;padding:16px;color:var(--fg);display:block}.cards a:hover{border-color:var(--acc);text-decoration:none}
+.cards b{display:block;margin-bottom:2px}.cards span{color:var(--mut);font-size:14px}
+.pn{display:flex;justify-content:space-between;gap:12px;margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-size:14px}.pn small{display:block;color:var(--mut)}
+@media(max-width:860px){.side{transform:translateX(-100%);transition:.2s;z-index:5;width:270px}body.o .side{transform:none;box-shadow:0 0 40px rgba(0,0,0,.25)}main{margin:0;padding:24px 20px 80px}.top{display:flex;align-items:center;justify-content:space-between;margin:-8px 0 24px;font-weight:650}.top button{font:inherit;background:none;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:4px 12px}h1{font-size:1.9rem}}
+</style></head><body><nav class="side"><a class="brand" href="index.html">Loom<span>v1.4.0</span></a><input id="q" placeholder="Filter pages…" aria-label="Filter"><h6>Docs</h6><a href="index.html" class="">Overview</a><a href="start.html" class="">Getting started</a><a href="learn.html" class="">Learn Loom</a><a href="reference.html" class="on">Language reference</a><a class="sub" href="#types">Types</a><a class="sub" href="#literals">Literals</a><a class="sub" href="#keywords">Keywords</a><a class="sub" href="#operators">Operators</a><a class="sub" href="#hardware">Volatile</a><a class="sub" href="#tools">Tools</a><a href="internals.html" class="">Compiler & targets</a></nav><main><div class="top"><span>Loom</span><button id="mb">Menu</button></div><article><h1>Language reference</h1><p class="lead">Types, literals, keywords, operators and tools for Loom 1.4.0.</p><h2 id="types">Types</h2><table><tr><th>Type</th><th>Meaning</th></tr><tr><td><code>Signed_8 … Signed_64</code></td><td>Two’s-complement integers</td></tr><tr><td><code>Unsigned_8 … Unsigned_64</code></td><td>Unsigned integers; <code>Unsigned_8</code> is a byte</td></tr><tr><td><code>Float_32, Float_64</code></td><td>IEEE 754 floats</td></tr><tr><td><code>Boolean</code></td><td><code>True</code> or <code>False</code></td></tr><tr><td><code>Character</code></td><td>A Unicode scalar value</td></tr><tr><td><code>String</code></td><td>Immutable UTF-8 text; indexing yields a byte</td></tr><tr><td><code>T Pointer</code></td><td>Raw address; literal <code>Null</code></td></tr><tr><td><code>T Array[N]</code></td><td>Fixed array, 1-based, has <code>.Length</code></td></tr><tr><td><code>T Slice</code></td><td>Non-owning pointer plus length</td></tr><tr><td><code>Record</code></td><td>Value type, copied on assignment</td></tr><tr><td><code>Enum</code></td><td>Named integers over an explicit underlying type</td></tr><tr><td><code>(T1, T2)</code></td><td>Tuples for multiple return values</td></tr><tr><td><code>T Vector, Text, HMap[K : V]</code></td><td>Growable dynamic collections</td></tr><tr><td><code>Block_Pointer(…)</code></td><td>Function pointer</td></tr><tr><td><code>Task_Handle</code></td><td>Handle for <code>Spawn</code> / <code>Join</code></td></tr><tr><td><code>No_Type</code></td><td>Bottom/handle type (e.g. <code>Null Task_Handle</code>)</td></tr></table><p>There are no implicit numeric conversions. Integer overflow wraps. Declared locals start zeroed.</p><h2 id="literals">Literals</h2><pre><code class="l">42    100_000    0xFF_AA    0b0100_1101
+3.14159    &#x27;A&#x27;    &#x27;\n&#x27;    &quot;text with &lt;Expr:04X&gt;&quot;
+Point{ X: 10, Y: 20 }    (10, True, &quot;OK&quot;)    Null</code></pre><h2 id="keywords">Keywords</h2><p>Keywords are case-sensitive and capitalized. Only <code>while</code>, <code>until</code>, <code>use</code>, <code>as</code>, <code>try</code> and <code>or</code> are lowercase.</p><table><tr><th>Group</th><th>Keywords</th></tr><tr><td>Structure</td><td>Module, Import, use, Block, Takes, Produces, Declares, Implements, End</td></tr><tr><td>Flow</td><td>If, Else If, Else, Loop, while, until, Exit, Skip, Give, Match, When, Default</td></tr><tr><td>Data</td><td>Record, Enum, Constant, Packed, Align, Array, Slice, Vector, Text, HMap</td></tr><tr><td>Memory</td><td>Address, Deref, Pointer, Allocate, Resize, Release, Ensure, Volatile, Move, Copy, Borrow</td></tr><tr><td>Conversion &amp; errors</td><td>as, Cast, try, or</td></tr><tr><td>Concurrency</td><td>Spawn, Join, Cancel, Task_Handle</td></tr><tr><td>I/O</td><td>Print, Write</td></tr></table><h2 id="operators">Operators</h2><p>Highest to lowest precedence; binary operators associate left to right.</p><table><tr><th>Operators</th><th>Kind</th></tr><tr><td><code>-</code> (unary) <code>Not</code> <code>~</code></td><td>Unary</td></tr><tr><td><code>pow</code></td><td>Exponent</td></tr><tr><td><code>*</code> <code>/</code> <code>Mod</code> <code>%</code></td><td>Multiplicative</td></tr><tr><td><code>+</code> <code>-</code></td><td>Additive</td></tr><tr><td><code>LSL</code> <code>LSR</code></td><td>Shifts</td></tr><tr><td><code>==</code> <code>!=</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code></td><td>Comparison</td></tr><tr><td><code>&amp;</code>, then <code>^</code>, then <code>|</code></td><td>Bitwise</td></tr><tr><td><code>And</code>, then <code>Or</code></td><td>Logical</td></tr></table><p>Compound assignment: <code>+=  -=  *=  /=  &amp;=  |=  ^=</code>.</p><h2 id="hardware">Volatile access</h2><p>Registers are read and written with width-specific intrinsics that the optimizer will not reorder or remove.</p><pre><code class="l">Value = Vol_Read_32(0x40014000)
+Vol_Write_32(0x40014000, Value | 1)</code></pre><h2 id="tools">Tools</h2><table><tr><th>Tool</th><th>Role</th></tr><tr><td><code>loom</code></td><td>Project driver: new, build, run, test, fmt, graph, get, toolchains</td></tr><tr><td><code>loomc</code></td><td>Compiler: sources to LLVM IR or object files; <code>--baremetal</code>, <code>--target</code>, <code>--release</code>, <code>--opt-report</code></td></tr><tr><td><code>loom-lsp</code></td><td>Language server: diagnostics, hover, completion, go-to-definition</td></tr></table><div class="pn"><a href="learn.html"><small>Previous</small>Learn Loom</a><a href="internals.html" style="text-align:right"><small>Next</small>Compiler & targets</a></div></article></main><script>
+const K=/\b(Module|Import|use|Block|Takes|Produces|Declares|Implements|End|Give|If|Else|Default|Loop|while|until|Exit|Skip|Match|When|Ensure|Record|Enum|Constant|Address|Deref|Cast|as|try|or|Print|Spawn|Join|Allocate|Resize|Release|Packed|Align|Volatile|And|Or|Not|Mod|LSL|LSR|True|False|Null|Pointer|Array|Slice|Vector|Text|HMap|Block_Pointer|Task_Handle|Move|Copy|Borrow)\b/g;
+const T=/\b(Signed_(?:8|16|32|64)|Unsigned_(?:8|16|32|64)|Float_(?:32|64)|Boolean|Character|String|No_Type)\b/g;
+document.querySelectorAll('code.l').forEach(el=>{let s=el.textContent,o=[],re=/(#.*)|("(?:[^"\\]|\\.)*")|(\b0x[0-9A-Fa-f_]+\b|\b\d[\d_]*(?:\.\d+)?\b)|([A-Za-z_][A-Za-z_0-9]*)|([\s\S])/g,m;
+const E=x=>x.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+while(m=re.exec(s)){let x=m[0],e=E(x);
+if(m[1])o.push('<span class=c>'+e+'</span>');else if(m[2])o.push('<span class=s>'+e+'</span>');else if(m[3])o.push('<span class=n>'+e+'</span>');
+else if(m[4]){K.lastIndex=0;T.lastIndex=0;o.push(K.test(x)?'<span class=k>'+e+'</span>':T.test(x)?'<span class=t>'+e+'</span>':e)}else o.push(e)}
+el.innerHTML=o.join('')});
+document.querySelectorAll('pre').forEach(p=>{const b=document.createElement('button');b.className='cp';b.textContent='Copy';b.onclick=()=>{navigator.clipboard.writeText(p.innerText.replace(/Copy$/,'').trimEnd());b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1200)};p.appendChild(b)});
+const q=document.getElementById('q');q&&q.addEventListener('input',()=>{const v=q.value.toLowerCase();document.querySelectorAll('.side a').forEach(a=>a.style.display=a.textContent.toLowerCase().includes(v)?'':'none')});
+document.getElementById('mb')&&(mb.onclick=()=>document.body.classList.toggle('o'));
 </script></body></html>

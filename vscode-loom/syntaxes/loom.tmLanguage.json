@@ -102,6 +102,10 @@
                   }
                 },
                 {
+                  "match": ":([^>\\n]*)",
+                  "name": "constant.other.format-spec.loom"
+                },
+                {
                   "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b",
                   "name": "variable.other.interpolation.loom"
                 },
@@ -248,7 +252,7 @@
       "patterns": [
         {
           "name": "keyword.control.section.loom",
-          "match": "\\b(Takes|Produces|Declares|Implements)\\b"
+          "match": "\\b(Takes|Produces|Declares|Implements|Drop)\\b"
         }
       ]
     },
@@ -256,7 +260,7 @@
       "patterns": [
         {
           "name": "keyword.control.loom",
-          "match": "\\b(If|Else\\s+If|Else|Until|until|While|while|Loop|Exit|Skip|Give|Ensure|Match|match|When|when|Use|use|try|Try|as)\\b"
+          "match": "\\b(If|Else\\s+If|Else|Until|until|While|while|Loop|Exit|Skip|Give|Ensure|Match|match|When|when|where|Where|default|Default|in|In|Use|use|try|Try|as|Cancel|Within|To_String|Move|move|Copy|copy|Borrow|borrow)\\b"
         }
       ]
     },
@@ -320,15 +324,15 @@
     "declarations": {
       "patterns": [
         {
-          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*(Constant\\b)?",
+          "match": "^(\\s*)([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*(Constant\\b)?",
           "captures": {
-            "1": {
+            "2": {
               "name": "variable.other.declaration.loom"
             },
-            "2": {
+            "3": {
               "name": "punctuation.separator.colon.loom"
             },
-            "3": {
+            "4": {
               "name": "storage.modifier.constant.loom"
             }
           }
@@ -356,7 +360,7 @@
         },
         {
           "name": "support.function.builtin.loom",
-          "match": "\\b(Write|Write_UART|Address|Deref|Cast|Slice|Vol_Read_(8|16|32|64)|Vol_Write_(8|16|32|64)|Nop|WaitForInterrupt|MemoryBarrier)\\b"
+          "match": "\\b(Write|Print|Write_UART|Address|Deref|Cast|Slice|Allocate|Resize|Release|Spawn|Join|Pow|Vol_Read_(8|16|32|64)|Vol_Write_(8|16|32|64)|Nop|WaitForInterrupt|MemoryBarrier)\\b"
         }
       ]
     },
@@ -376,11 +380,11 @@
       "patterns": [
         {
           "name": "support.type.primitive.loom",
-          "match": "\\b(Volatile|Boolean|Signed_(8|16|32|64)|Unsigned_(8|16|32|64)|Float_(32|64)|String|Character|Integer|Int)\\b"
+          "match": "\\b(Volatile|Boolean|Signed_(8|16|32|64)|Unsigned_(8|16|32|64)|Float_(32|64)|String|String_Builder|Text|Character|Integer|Int|File|File_Handle|Task_Handle|No_Type)\\b"
         },
         {
           "name": "support.type.constructor.loom",
-          "match": "\\b(Pointer|Slice|Array)\\b"
+          "match": "\\b(Pointer|Block_Pointer|Slice|Array|Vector|HMap)\\b"
         }
       ]
     },
@@ -396,7 +400,7 @@
       "patterns": [
         {
           "name": "keyword.operator.word.loom",
-          "match": "\\b(And|and|Or|or|Not|not|LSL|LSR|Mod|as)\\b"
+          "match": "\\b(And|and|Or|or|Not|not|LSL|LSR|Mod|pow|Pow|as)\\b"
         }
       ]
     },
@@ -404,7 +408,7 @@
       "patterns": [
         {
           "name": "keyword.operator.loom",
-          "match": "\\+=|-=|\\*=|/=|&=|\\|=|\\^=|==|!=|<=|>=|[=+*/<>&|^~%]"
+          "match": "\\.\\.|\\+=|-=|\\*=|/=|&=|\\|=|\\^=|==|!=|<=|>=|[=+*/<>&|^~%]"
         }
       ]
     },

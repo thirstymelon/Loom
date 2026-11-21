@@ -32,6 +32,7 @@ __pycache__/
 # VS Code extension build output
 vscode-loom/node_modules/
 vscode-loom/out/
+vscode-loom/*.vsix
 
 # OS and Editor
 .DS_Store

@@ -3,80 +3,185 @@ const cp = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { promisify } = require('util');
+const execFile = promisify(cp.execFile);
+const { LoomLanguageClient } = require('./lsp-client');
+const { parseCompilerDiagnostics } = require('./diagnostics');
+let activeCleanup = () => {};
 
-function parseCompilerDiagnostics(text, lineCount) {
-  const found = [];
-  const seen = new Set();
-  for (const raw of text.split(/\r?\n/)) {
-    const diagnosticText = raw.trim();
-    if (!diagnosticText || /^LLVM (?:function|module) verification/i.test(diagnosticText) || /^usage:/i.test(diagnosticText)) continue;
-    let modern = /^\s*(error|warning|note)\[([A-Z]\d{4})\]:\s*(.*)$/i.exec(raw);
-    if (modern) {
-      const level = modern[1].toLowerCase();
-      const item = {
-        line: 0, column: 0, length: 1, code: modern[2], message: modern[3],
-        severity: level === 'warning' ? vscode.DiagnosticSeverity.Warning : level === 'note' ? vscode.DiagnosticSeverity.Information : vscode.DiagnosticSeverity.Error
-      };
-      found.push(item);
-      continue;
-    }
-    let sourceLocation = /^\s*-->\s+(.*?)(?::(\d+):(\d+))?\s*$/.exec(raw);
-    if (sourceLocation) {
-      if (found.length) {
-        const item = found[found.length - 1];
-        item.file = sourceLocation[1];
-        if (sourceLocation[2]) item.line = Math.max(0, Number(sourceLocation[2]) - 1);
-        if (sourceLocation[3]) item.column = Math.max(0, Number(sourceLocation[3]) - 1);
+function registerLspProviders(context, client, vscode, semanticLegend) {
+  const td = document => ({ uri: document.uri.toString() });
+  const position = p => ({ line: p.line, character: p.character });
+  const lspPosition = p => ({ line: p.line, character: p.character });
+  const lspRange = r => new vscode.Range(lspPosition(r.start), lspPosition(r.end));
+  const location = value => new vscode.Location(vscode.Uri.parse(value.uri || value.targetUri), lspRange(value.range || value.targetSelectionRange || value.targetRange));
+  const request = (method, params, token) => client.request(method, params, token);
+  context.subscriptions.push(
+    vscode.languages.registerCompletionItemProvider('loom', {
+      provideCompletionItems(document, pos, token) { return request('textDocument/completion', { textDocument: td(document), position: position(pos) }, token).then(result => (result?.items || []).map(item => {
+        if (item.documentation && typeof item.documentation === 'object' && item.documentation.value) item.documentation = item.documentation.kind === 'markdown' ? new vscode.MarkdownString(item.documentation.value) : item.documentation.value;
+        if (item.textEdit?.range) item.textEdit.range = lspRange(item.textEdit.range);
+        return item;
+      })); }
+    }, '.', '[', ':'),
+    vscode.languages.registerDocumentSymbolProvider('loom', {
+      async provideDocumentSymbols(document, token) {
+        const symbols = await request('textDocument/documentSymbol', { textDocument: td(document) }, token);
+        const convert = symbol => { const item = new vscode.DocumentSymbol(symbol.name, symbol.detail || '', symbol.kind, lspRange(symbol.range), lspRange(symbol.selectionRange || symbol.range)); item.children = (symbol.children || []).map(convert); return item; };
+        return (symbols || []).map(convert);
       }
-      continue;
-    }
-    const caret = /^\s*\|\s*(\^~*)/.exec(raw);
-    if (caret && found.length) { found[found.length - 1].length = caret[1].length; continue; }
-    if (/^\s*(?:\d+\s*\||\|)\s*$/.test(raw) || /^\s*\d+\s*\|/.test(raw)) continue;
-    let line = 0, column = 0, severity = vscode.DiagnosticSeverity.Error, message = diagnosticText;
-    let match = /(?:^|\b)line\s+(\d+)(?::(\d+))?:\s*(?:(error|warning|note):\s*)?(.*)$/i.exec(diagnosticText);
-    if (match) {
-      line = Math.max(0, Number(match[1]) - 1);
-      column = match[2] ? Math.max(0, Number(match[2]) - 1) : 0;
-      const level = (match[3] || 'error').toLowerCase();
-      message = match[4] || diagnosticText;
-      severity = level === 'warning' ? vscode.DiagnosticSeverity.Warning : level === 'note' ? vscode.DiagnosticSeverity.Information : vscode.DiagnosticSeverity.Error;
-    } else {
-      match = /:(\d+):(\d+):\s*(error|warning|note):\s*(.*)$/i.exec(diagnosticText);
-      if (match) {
-        line = Math.max(0, Number(match[1]) - 1);
-        column = Math.max(0, Number(match[2]) - 1);
-        const level = match[3].toLowerCase();
-        message = match[4];
-        severity = level === 'warning' ? vscode.DiagnosticSeverity.Warning : level === 'note' ? vscode.DiagnosticSeverity.Information : vscode.DiagnosticSeverity.Error;
-      } else {
-        const generic = /(?:loomc:\s*)?(warning|error|note):\s*(.*)$/i.exec(diagnosticText);
-        if (generic) {
-          const level = generic[1].toLowerCase();
-          message = generic[2];
-          severity = level === 'warning' ? vscode.DiagnosticSeverity.Warning : level === 'note' ? vscode.DiagnosticSeverity.Information : vscode.DiagnosticSeverity.Error;
+    }),
+    vscode.languages.registerHoverProvider('loom', {
+      async provideHover(document, pos, token) { const result = await request('textDocument/hover', { textDocument: td(document), position: position(pos) }, token); if (!result) return; const contents = result.contents?.value || result.contents; return new vscode.Hover(contents, result.range && lspRange(result.range)); }
+    }),
+    vscode.languages.registerDefinitionProvider('loom', {
+      async provideDefinition(document, pos, token) { const result = await request('textDocument/definition', { textDocument: td(document), position: position(pos) }, token); return Array.isArray(result) ? result.map(location) : result && location(result); }
+    }),
+    vscode.languages.registerReferenceProvider('loom', {
+      async provideReferences(document, pos, options, token) { const result = await request('textDocument/references', { textDocument: td(document), position: position(pos), context: { includeDeclaration: options.includeDeclaration } }, token); return (result || []).map(location); }
+    }),
+    vscode.languages.registerRenameProvider('loom', {
+      async prepareRename(document, pos, token) { const result = await request('textDocument/prepareRename', { textDocument: td(document), position: position(pos) }, token); return result?.range ? { ...result, range: lspRange(result.range) } : result && lspRange(result); },
+      async provideRenameEdits(document, pos, newName, token) {
+        const result = await request('textDocument/rename', { textDocument: td(document), position: position(pos), newName }, token);
+        if (!result) return;
+        const edit = new vscode.WorkspaceEdit();
+        for (const [uri, edits] of Object.entries(result.changes || {})) for (const item of edits) edit.replace(vscode.Uri.parse(uri), lspRange(item.range), item.newText);
+        for (const item of result.documentChanges || []) for (const change of item.edits || []) edit.replace(vscode.Uri.parse(item.textDocument.uri), lspRange(change.range), change.newText);
+        return edit;
+      }
+    }),
+    vscode.languages.registerWorkspaceSymbolProvider('loom', {
+      async provideWorkspaceSymbols(query, token) { const result = await request('workspace/symbol', { query }, token); return (result || []).map(s => new vscode.SymbolInformation(s.name, s.kind, s.containerName || '', location(s.location))); }
+    }),
+    vscode.languages.registerDocumentSemanticTokensProvider('loom', {
+      async provideDocumentSemanticTokens(document, token) {
+        const result = await request('textDocument/semanticTokens/full', { textDocument: td(document) }, token);
+        const builder = new vscode.SemanticTokensBuilder(semanticLegend); let line = 0, character = 0;
+        for (let i = 0; i < (result?.data || []).length; i += 5) {
+          line += result.data[i]; character = result.data[i] ? result.data[i + 1] : character + result.data[i + 1];
+          const modifiers = semanticLegend.tokenModifiers.filter((_, bit) => (result.data[i + 4] & (1 << bit)) !== 0);
+          builder.push(line, character, result.data[i + 2], result.data[i + 3], modifiers);
         }
+        return builder.build();
       }
-    }
-    line = Math.min(line, Math.max(0, lineCount - 1));
-    const key = `${line}:${column}:${severity}:${message}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    found.push({ line, column, message, severity, length: 1 });
-  }
-  return found;
+    }, semanticLegend),
+    vscode.languages.registerSignatureHelpProvider('loom', {
+      async provideSignatureHelp(document, pos, token) { const result = await request('textDocument/signatureHelp', { textDocument: td(document), position: position(pos) }, token); if (!result) return; const markdown = value => value && typeof value === 'object' ? (value.value || '') : value; const help = new vscode.SignatureHelp(); help.signatures = (result.signatures || []).map(s => { const info = new vscode.SignatureInformation(s.label, markdown(s.documentation)); info.parameters = (s.parameters || []).map(p => new vscode.ParameterInformation(p.label, markdown(p.documentation))); return info; }); help.activeSignature = result.activeSignature || 0; help.activeParameter = result.activeParameter || 0; return help; }
+    }, '(', ','),
+    vscode.languages.registerCodeActionsProvider('loom', {
+      provideCodeActions(document, range, context, token) { return request('textDocument/codeAction', { textDocument: td(document), range: { start: position(range.start), end: position(range.end) }, context: { diagnostics: context.diagnostics || [] } }, token); }
+    }),
+    vscode.languages.registerDocumentHighlightProvider('loom', {
+      async provideDocumentHighlights(document, pos, token) { const items = await request('textDocument/documentHighlight', { textDocument: td(document), position: position(pos) }, token); return (items || []).map(item => new vscode.DocumentHighlight(lspRange(item.range), item.kind)); }
+    })
+  );
 }
 
 function activate(context) {
-  const diagnostics = vscode.languages.createDiagnosticCollection('loom');
   const output = vscode.window.createOutputChannel('Loom');
-  const timers = new Map();
-  const processes = new Map();
-  const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
+  const lspDiagnostics = vscode.languages.createDiagnosticCollection('loom-language-server');
+  const buildDiagnostics = vscode.languages.createDiagnosticCollection('loom-build');
+  const rootPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+  const languageClient = new LoomLanguageClient(process.execPath, path.join(__dirname, 'server.js'));
+  let lastLanguageServerState = 'stopped';
+  let languageServerRestartTimer;
+  let extensionDisposed = false;
+
+  const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   status.text = '$(check) Loom';
-  status.tooltip = 'Loom language support';
-  context.subscriptions.push(diagnostics, output, status);
+  status.tooltip = 'Loom Language Server: Ready';
+  status.command = 'loom.showOutput';
+
+  languageClient.on('state', state => {
+    output.appendLine(`Language server: ${state}`);
+    if (state === 'running') {
+      status.text = '$(check) Loom';
+      status.tooltip = 'Loom Language Server: Ready';
+    } else if (state === 'starting') {
+      status.text = '$(sync~spin) Loom';
+      status.tooltip = 'Loom Language Server: Starting...';
+    } else {
+      status.text = '$(circle-slash) Loom';
+      status.tooltip = `Loom Language Server: ${state}`;
+    }
+    if (lastLanguageServerState === 'running' && state === 'stopped' && !extensionDisposed) {
+      output.appendLine('Language server exited unexpectedly; restarting it.');
+      clearTimeout(languageServerRestartTimer);
+      languageServerRestartTimer = setTimeout(() => { if (!extensionDisposed) startLanguageServer(); }, 1000);
+    }
+    lastLanguageServerState = state;
+  });
+  languageClient.on('log', line => output.append(line));
+  languageClient.on('error', error => vscode.window.showErrorMessage(`Loom language server failed: ${error.message}`));
+  languageClient.on('notification', (method, params) => {
+    if (method === 'textDocument/publishDiagnostics') {
+      const uri = vscode.Uri.parse(params.uri);
+      const diagnostics = (params.diagnostics || []).map(d => {
+        const item = new vscode.Diagnostic(new vscode.Range(d.range.start.line, d.range.start.character, d.range.end.line, d.range.end.character), d.message,
+          d.severity === 1 ? vscode.DiagnosticSeverity.Error : d.severity === 2 ? vscode.DiagnosticSeverity.Warning : d.severity === 3 ? vscode.DiagnosticSeverity.Information : vscode.DiagnosticSeverity.Hint);
+        item.code = d.code; item.source = d.source || 'Loom'; return item;
+      });
+      lspDiagnostics.set(uri, diagnostics);
+    } else if (method === 'loom/indexStatus') {
+      if (params.status === 'indexing') {
+        status.text = '$(sync~spin) Loom';
+        status.tooltip = `Loom: Indexing ${params.fileCount || 0} workspace files...`;
+      } else {
+        status.text = '$(check) Loom';
+        status.tooltip = `Loom: Language Server Ready (${params.fileCount || 0} files indexed)`;
+      }
+    }
+  });
+
+  let workspaceProcess;
+  context.subscriptions.push(lspDiagnostics, buildDiagnostics, output, status, { dispose: () => { extensionDisposed = true; clearTimeout(languageServerRestartTimer); languageClient.stop(); } });
+
+  function currentServerOptions() {
+    const config = vscode.workspace.getConfiguration('loom');
+    const configured = config.get('compilerPath', '').trim();
+    const activeDocument = vscode.window.activeTextEditor?.document;
+    return {
+      compilerPath: configured || compilerPath(activeDocument),
+      includePaths: findSdkPaths(activeDocument),
+      lintRun: config.get('lint.run', 'onType'),
+      lintDelay: config.get('lint.delay', 500),
+      workspaceFolders: (vscode.workspace.workspaceFolders || []).map(folder => ({ uri: folder.uri.toString(), name: folder.name }))
+    };
+  }
+  function synchronizeOpenDocuments() {
+    for (const doc of vscode.workspace.textDocuments) if (doc.languageId === 'loom') languageClient.notify('textDocument/didOpen', { textDocument: { uri: doc.uri.toString(), languageId: 'loom', version: doc.version, text: doc.getText() } });
+  }
+  function startLanguageServer() {
+    return languageClient.start(rootPath, currentServerOptions()).then(synchronizeOpenDocuments).catch(error => output.appendLine(`Language server initialization failed: ${error.message}`));
+  }
+  startLanguageServer();
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument(doc => { if (doc.languageId === 'loom') languageClient.notify('textDocument/didOpen', { textDocument: { uri: doc.uri.toString(), languageId: 'loom', version: doc.version, text: doc.getText() } }); }),
+    vscode.workspace.onDidChangeTextDocument(e => { if (e.document.languageId === 'loom') languageClient.notify('textDocument/didChange', { textDocument: { uri: e.document.uri.toString(), version: e.document.version }, contentChanges: [{ text: e.document.getText() }] }); }),
+    vscode.workspace.onDidSaveTextDocument(doc => { if (doc.languageId === 'loom') languageClient.notify('textDocument/didSave', { textDocument: { uri: doc.uri.toString() }, text: doc.getText() }); }),
+    vscode.workspace.onDidCloseTextDocument(doc => { if (doc.languageId === 'loom') languageClient.notify('textDocument/didClose', { textDocument: { uri: doc.uri.toString() } }); }),
+    vscode.workspace.onDidChangeConfiguration(event => { if (event.affectsConfiguration('loom')) startLanguageServer(); })
+  );
+  if (typeof vscode.workspace.createFileSystemWatcher === 'function') {
+    const watcher = vscode.workspace.createFileSystemWatcher('**/*.loom');
+    context.subscriptions.push(watcher,
+      watcher.onDidCreate(uri => { languageClient.notify('workspace/didChangeWatchedFiles', { changes: [{ uri: uri.toString(), type: 1 }] }); }),
+      watcher.onDidChange(uri => { languageClient.notify('workspace/didChangeWatchedFiles', { changes: [{ uri: uri.toString(), type: 2 }] }); }),
+      watcher.onDidDelete(uri => { languageClient.notify('workspace/didChangeWatchedFiles', { changes: [{ uri: uri.toString(), type: 3 }] }); }),
+      vscode.workspace.onDidChangeWorkspaceFolders(event => languageClient.notify('workspace/didChangeWorkspaceFolders', { event: {
+        added: event.added.map(folder => ({ uri: folder.uri.toString(), name: folder.name })),
+        removed: event.removed.map(folder => ({ uri: folder.uri.toString(), name: folder.name }))
+      } }))
+    );
+  }
   status.show();
+
+  const semanticLegend = new vscode.SemanticTokensLegend(
+    ['namespace', 'type', 'class', 'function', 'parameter', 'variable', 'property', 'keyword', 'number', 'string', 'comment'],
+    ['declaration']
+  );
+  registerLspProviders(context, languageClient, vscode, semanticLegend);
 
   function defaultToolchainKind() {
     const candidates = [];
@@ -123,26 +228,32 @@ function activate(context) {
     if (configured) return configured;
     const kind = projectToolchainKind(document);
     const candidates = [];
-    if (process.env.HOME) candidates.push(path.join(process.env.HOME, '.loom', 'toolchains', kind, 'bin', 'loomc'));
-    for (const prefix of ['/usr/local/share/loom/toolchains', '/usr/share/loom/toolchains', '/opt/loom/toolchains']) {
-      candidates.push(path.join(prefix, kind, 'bin', 'loomc'));
-    }
-    candidates.push('/usr/local/bin/loomc', '/usr/bin/loomc');
+    // Prefer compiler binaries shipped with the opened project or its parent
+    // Loom checkout. This keeps the editor on the same compiler build used by
+    // `loom build` and avoids silently selecting a stale global toolchain.
     for (const folder of vscode.workspace.workspaceFolders || []) {
       let current = folder.uri.fsPath;
       for (let depth = 0; depth < 6; depth++) {
         candidates.push(path.join(current, 'bin', 'loomc'));
         candidates.push(path.join(current, 'loomc'));
+        candidates.push(path.join(current, '.build', 'loomc'));
         const parent = path.dirname(current);
         if (parent === current) break;
         current = parent;
       }
     }
+    candidates.push('/usr/local/bin/loomc', '/opt/homebrew/bin/loomc', '/usr/bin/loomc');
+    if (process.env.HOME) candidates.push(path.join(process.env.HOME, '.loom', 'toolchains', kind, 'bin', 'loomc'));
+    for (const prefix of ['/usr/local/share/loom/toolchains', '/usr/share/loom/toolchains', '/opt/loom/toolchains']) {
+      candidates.push(path.join(prefix, kind, 'bin', 'loomc'));
+    }
     if (context.extensionPath) candidates.push(path.resolve(context.extensionPath, '..', 'bin', 'loomc'));
     for (const candidate of candidates) {
       try { if (fs.statSync(candidate).isFile()) return candidate; } catch (_) {}
     }
-    return 'loomc';
+    // An empty value lets the language server run its own discovery instead
+    // of pinning it to an unresolvable literal command name.
+    return '';
   }
 
   function findSdkPaths(document) {
@@ -195,97 +306,7 @@ function activate(context) {
 
   async function check(document) {
     if (document.languageId !== 'loom' || document.isUntitled) return;
-    const key = document.uri.toString();
-    const version = document.version;
-    clearTimeout(timers.get(key));
-    timers.delete(key);
-    processes.get(key)?.kill();
-    let tmp;
-    let proc;
-    const cleanup = () => { if (tmp) fs.promises.rm(tmp, { recursive: true, force: true }).catch(() => {}); };
-    try {
-      tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'loom-vscode-'));
-      const input = path.join(tmp, path.basename(document.fileName || 'untitled.loom'));
-      const result = path.join(tmp, 'output.ll');
-      await fs.promises.writeFile(input, document.getText(), 'utf8');
-
-      // Sync other unsaved open Loom documents in workspace into tmp
-      for (const openDoc of vscode.workspace.textDocuments || []) {
-        if (openDoc !== document && openDoc.languageId === 'loom' && openDoc.isDirty && openDoc.fileName) {
-          const dirtyCopy = path.join(tmp, path.basename(openDoc.fileName));
-          fs.promises.writeFile(dirtyCopy, openDoc.getText(), 'utf8').catch(() => {});
-        }
-      }
-
-      if (document.version !== version) { cleanup(); schedule(document); return; }
-        const executable = compilerPath(document);
-      const docDir = document.fileName ? path.dirname(document.fileName) : undefined;
-      const root = findWorkspaceRoot(document);
-      const cwd = root || docDir || (vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath) || process.cwd();
-
-      const args = ['--check', input, result];
-      if (docDir) args.push('-I', docDir);
-      if (root) {
-        args.push('-I', path.join(root, 'src'));
-        args.push('-I', root);
-        const bspSrc = path.join(root, 'src', 'bsp');
-        if (fs.existsSync(bspSrc)) args.push('-I', bspSrc);
-        const bspRoot = path.join(root, 'bsp');
-        if (fs.existsSync(bspRoot)) args.push('-I', bspRoot);
-      }
-      for (const folder of vscode.workspace.workspaceFolders || []) {
-        const fPath = folder.uri.fsPath;
-        args.push('-I', path.join(fPath, 'src'));
-        args.push('-I', fPath);
-        const bspSrc = path.join(fPath, 'src', 'bsp');
-        if (fs.existsSync(bspSrc)) args.push('-I', bspSrc);
-        const bspRoot = path.join(fPath, 'bsp');
-        if (fs.existsSync(bspRoot)) args.push('-I', bspRoot);
-      }
-      for (const sdkPath of findSdkPaths(document)) {
-        args.push('-I', sdkPath);
-      }
-
-      proc = cp.spawn(executable, args, { cwd, windowsHide: true });
-      processes.set(key, proc);
-      let stderr = '', stdout = '';
-      proc.stderr.setEncoding('utf8').on('data', s => stderr += s);
-      proc.stdout.setEncoding('utf8').on('data', s => stdout += s);
-      proc.on('error', err => {
-        if (processes.get(key) !== proc) return;
-        processes.delete(key);
-        const message = `Cannot start loomc at '${executable}': ${err.message}. Set loom.compilerPath or install the Loom toolchain for this project.`;
-        const diagnostic = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), message, vscode.DiagnosticSeverity.Error);
-        diagnostic.source = 'Loom';
-        diagnostics.set(document.uri, [diagnostic]);
-        output.appendLine(message);
-        cleanup();
-      });
-      proc.on('close', code => {
-        cleanup();
-        if (processes.get(key) !== proc) return;
-        processes.delete(key);
-        if (code === null) return;
-        if (document.version !== version) { schedule(document); return; }
-        const text = `${stderr}\n${stdout}`;
-        if (code === 0 && !/\b(?:error|warning):/i.test(text)) { diagnostics.set(document.uri, []); return; }
-        const found = parseCompilerDiagnostics(text, document.lineCount).map(item => {
-          const line = Math.min(item.line, Math.max(0, document.lineCount - 1));
-          const lineText = document.lineAt(line);
-          const start = Math.min(item.column, lineText.text.length);
-          const end = lineText.isEmpty ? start : Math.min(lineText.text.length, start + (item.length || lineText.text.length - start));
-          const diagnostic = new vscode.Diagnostic(new vscode.Range(line, start, line, Math.max(start, end)), item.message, item.severity);
-          if (item.code) diagnostic.code = item.code;
-          diagnostic.source = 'loomc';
-          return diagnostic;
-        });
-        if (!found.length) found.push(new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), text.trim() || 'Loom compilation failed without a diagnostic.', vscode.DiagnosticSeverity.Error));
-        diagnostics.set(document.uri, found);
-      });
-    } catch (err) {
-      cleanup();
-      output.appendLine(`Loom check failed: ${err.message}`);
-    }
+    languageClient.notify('loom/checkDocument', { uri: document.uri.toString() });
   }
 
   function findWorkspaceRoot(document) {
@@ -309,12 +330,14 @@ function activate(context) {
     const configured = vscode.workspace.getConfiguration('loom').get('toolPath', '').trim();
     if (configured) return configured;
     const selectedCompiler = compilerPath(vscode.window.activeTextEditor?.document);
-    const candidates = ['/usr/local/bin/loom', '/opt/homebrew/bin/loom', '/usr/bin/loom', path.join(path.dirname(selectedCompiler), 'loom'), path.join(root, 'bin', 'loom'), path.join(root, 'loom')];
+    const candidates = ['/usr/local/bin/loom', '/opt/homebrew/bin/loom', '/usr/bin/loom', path.join(root, 'bin', 'loom'), path.join(root, 'loom'), path.join(root, '.build', 'loom')];
+    if (selectedCompiler) candidates.push(path.join(path.dirname(selectedCompiler), 'loom'));
     if (process.env.HOME) candidates.push(path.join(process.env.HOME, '.loom', 'bin', 'loom'));
     let current = root;
     for (let depth = 0; depth < 6; depth++) {
       candidates.push(path.join(current, 'bin', 'loom'));
       candidates.push(path.join(current, 'loom'));
+      candidates.push(path.join(current, '.build', 'loom'));
       const parent = path.dirname(current);
       if (parent === current) break;
       current = parent;
@@ -326,6 +349,42 @@ function activate(context) {
     return 'loom';
   }
 
+  async function formatWithLoomFmt(document) {
+    if (document.isUntitled || document.uri?.scheme !== 'file') return undefined;
+    const root = findWorkspaceRoot(document) || path.dirname(document.uri.fsPath);
+    const executable = loomToolPath(root);
+    const temp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'loom-fmt-'));
+    const target = path.join(temp, path.basename(document.uri.fsPath) || 'document.loom');
+    try {
+      await fs.promises.writeFile(target, document.getText(), 'utf8');
+      await execFile(executable, ['fmt', target], { cwd: root, windowsHide: true });
+      const text = await fs.promises.readFile(target, 'utf8');
+      if (text === document.getText()) return [];
+      return [vscode.TextEdit.replace(new vscode.Range(0, 0, document.lineCount, 0), text)];
+    } catch (error) {
+      output.appendLine(`loom fmt unavailable (${error.message}); using built-in indentation.`);
+      return undefined;
+    } finally {
+      await fs.promises.rm(temp, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  function updateBuildDiagnostics(text, root) {
+    buildDiagnostics.clear();
+    const grouped = new Map();
+    for (const item of parseCompilerDiagnostics(text, Number.MAX_SAFE_INTEGER)) {
+      if (!item.file) continue;
+      const file = path.isAbsolute(item.file) ? item.file : path.resolve(root, item.file);
+      const uri = vscode.Uri.file(file);
+      const severity = item.severity === 1 ? vscode.DiagnosticSeverity.Error : item.severity === 2 ? vscode.DiagnosticSeverity.Warning : item.severity === 3 ? vscode.DiagnosticSeverity.Information : vscode.DiagnosticSeverity.Hint;
+      const diagnostic = new vscode.Diagnostic(new vscode.Range(item.line, item.column, item.line, item.column + Math.max(1, item.length || 1)), item.message, severity);
+      diagnostic.code = item.code; diagnostic.source = 'Loom Build';
+      const entries = grouped.get(uri.toString()) || { uri, items: [] };
+      entries.items.push(diagnostic); grouped.set(uri.toString(), entries);
+    }
+    for (const entry of grouped.values()) buildDiagnostics.set(entry.uri, entry.items);
+  }
+
   async function runWorkspaceCommand(command) {
     const root = findWorkspaceRoot(vscode.window.activeTextEditor?.document);
     if (!root) {
@@ -334,21 +393,35 @@ function activate(context) {
     }
     const executable = loomToolPath(root);
     const config = path.join(root, 'config.toml');
+    buildDiagnostics.clear();
+    workspaceProcess?.kill();
     output.clear(); output.show(true);
     output.appendLine(`> ${executable} ${command} --config ${config}`);
     status.text = `$(sync~spin) Loom ${command}`;
     return new Promise(resolve => {
       const proc = cp.spawn(executable, [command, '--config', config], { cwd: root, windowsHide: true });
-      let stderr = '';
-      proc.stdout.setEncoding('utf8').on('data', chunk => output.append(chunk));
+      workspaceProcess = proc;
+      let stderr = '', stdout = '';
+      let finished = false;
+      const finish = () => {
+        if (finished) return false;
+        finished = true;
+        if (workspaceProcess !== proc) return false;
+        workspaceProcess = undefined;
+        return true;
+      };
+      proc.stdout.setEncoding('utf8').on('data', chunk => { stdout += chunk; output.append(chunk); });
       proc.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; output.append(chunk); });
       proc.on('error', err => {
+        if (!finish()) return;
         status.text = '$(error) Loom';
         output.appendLine(`Could not run '${executable}': ${err.message}. Set loom.toolPath.`);
         vscode.window.showErrorMessage(`Loom ${command} failed to start. See the Loom output channel.`);
         resolve();
       });
       proc.on('close', code => {
+        if (!finish()) return;
+        if (code !== null) updateBuildDiagnostics(`${stderr}\n${stdout}`, root);
         status.text = code === 0 ? '$(check) Loom' : '$(error) Loom';
         output.appendLine(code === 0 ? `Loom ${command} completed.` : `Loom ${command} exited with code ${code}.`);
         if (code === 0) vscode.window.showInformationMessage(`Loom ${command} completed.`);
@@ -358,61 +431,14 @@ function activate(context) {
     });
   }
 
-  async function openDependencyGraph() {
-    const root = findWorkspaceRoot(vscode.window.activeTextEditor?.document);
-    if (!root) { vscode.window.showErrorMessage('Loom: open a workspace containing config.toml to inspect dependencies.'); return; }
-    const view = await vscode.window.showQuickPick(['calls', 'data'], { placeHolder: 'Choose a semantic dependency view' });
-    if (!view) return;
-    const executable = loomToolPath(root);
-    output.clear(); output.show(true);
-    const graphPath = path.join(root, 'loom-graph.json');
-    const model = await new Promise((resolve, reject) => {
-      const proc = cp.spawn(executable, ['graph', '--view', view, '--format', 'json'], { cwd: root, windowsHide: true });
-      let stderr = '';
-      proc.stdout.setEncoding('utf8').on('data', chunk => output.append(chunk));
-      proc.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; output.append(chunk); });
-      proc.on('error', reject);
-      proc.on('close', code => {
-        if (code !== 0) reject(new Error(stderr || `loom graph exited with status ${code}`));
-        else fs.promises.readFile(graphPath, 'utf8').then(text => resolve(JSON.parse(text)), reject);
-      });
-    }).catch(error => { vscode.window.showErrorMessage(`Loom graph failed: ${error.message}`); return undefined; });
-    if (!model) return;
-    const panel = vscode.window.createWebviewPanel('loomDependencyGraph', `Loom ${view} graph`, vscode.ViewColumn.Beside, { enableScripts: true, retainContextWhenHidden: true });
-    panel.webview.html = dependencyGraphHtml(panel.webview, model, view);
-    panel.webview.onDidReceiveMessage(async message => {
-      if (message?.type !== 'view' || !['calls', 'data'].includes(message.view)) return;
-      const next = await new Promise((resolve, reject) => {
-        const proc = cp.spawn(executable, ['graph', '--view', message.view, '--format', 'json'], { cwd: root, windowsHide: true });
-        let stderr = '';
-        proc.stderr.setEncoding('utf8').on('data', chunk => stderr += chunk);
-        proc.on('error', reject);
-        proc.on('close', code => code === 0 ? fs.promises.readFile(graphPath, 'utf8').then(text => resolve(JSON.parse(text)), reject) : reject(new Error(stderr || `loom graph exited with status ${code}`)));
-      }).catch(error => { vscode.window.showErrorMessage(`Loom graph failed: ${error.message}`); return undefined; });
-      if (next) panel.webview.postMessage({ type: 'model', model: next, view: message.view });
-    });
-  }
-
-  function dependencyGraphHtml(webview, model, view) {
-    const nonce = require('crypto').randomBytes(16).toString('hex');
-    const payload = JSON.stringify(model).replace(/</g, '\\u003c');
-    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';"><style>
-      body{font:13px var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-editor-background);margin:18px}header{display:flex;gap:10px;align-items:center;flex-wrap:wrap}h1{font-size:18px;font-weight:600;margin:0 auto 0 0}button{color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:0;border-radius:4px;padding:6px 11px;cursor:pointer}button:focus-visible{outline:2px solid var(--vscode-focusBorder)}.note{color:var(--vscode-descriptionForeground);margin:12px 0}svg{width:100%;min-height:440px;border:1px solid var(--vscode-panel-border);border-radius:7px}text{fill:var(--vscode-foreground);font:12px var(--vscode-font-family)}.node rect{fill:var(--vscode-editorWidget-background);stroke:var(--vscode-editorWidget-border);rx:6}.edge{stroke:var(--vscode-descriptionForeground);stroke-width:1.4;fill:none;marker-end:url(#arrow)}.edge-label{font-size:10px;fill:var(--vscode-descriptionForeground)}
-      </style></head><body><header><h1>Loom semantic dependencies</h1><button id="calls">Call graph</button><button id="data">Data accesses</button></header><p class="note" id="note"></p><svg role="img" aria-label="Loom semantic dependency graph" id="graph" viewBox="0 0 900 500"></svg><script nonce="${nonce}">const api=acquireVsCodeApi();let model=${payload};let view=${JSON.stringify(view)};const ns='http://www.w3.org/2000/svg';for(const v of ['calls','data'])document.getElementById(v).onclick=()=>api.postMessage({type:'view',view:v});window.addEventListener('message',e=>{if(e.data?.type==='model'){model=e.data.model;view=e.data.view;render()}});function el(tag,attrs={}){const x=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))x.setAttribute(k,v);return x}function render(){const svg=document.getElementById('graph');svg.replaceChildren();document.getElementById('note').textContent=view==='calls'?'Blocks and validated call relationships.':'Aggregated variable reads and writes per block; this is not a statement-level dataflow or parallel-safety analysis.';const blocks=model.nodes.filter(n=>n.kind==='block'),vars=model.nodes.filter(n=>n.kind!=='block');const nodes=[...blocks,...vars],pos=new Map();let height=Math.max(440,Math.max(blocks.length,vars.length,1)*76+60);svg.setAttribute('viewBox','0 0 900 '+height);const defs=el('defs'),marker=el('marker',{id:'arrow',markerWidth:8,markerHeight:8,refX:7,refY:3,orient:'auto'});marker.append(el('path',{d:'M0,0 L0,6 L8,3 z',fill:'currentColor'}));defs.append(marker);svg.append(defs);nodes.forEach((n,i)=>{const col=n.kind==='block'?0:1,row=n.kind==='block'?blocks.indexOf(n):vars.indexOf(n),x=col?520:90,y=40+row*76;pos.set(n.id,{x,y});const g=el('g',{class:'node'}),r=el('rect',{x,y,width:290,height:44});const t=el('text',{x:x+12,y:y+27});t.textContent=n.name;g.append(r,t);svg.append(g)});for(const edge of model.edges){const a=pos.get(edge.from),b=pos.get(edge.to);if(!a||!b)continue;const x1=a.x+(edge.kind==='calls'?290:290),y1=a.y+22,x2=b.x,y2=b.y+22;const path=el('path',{class:'edge',d:'M'+x1+' '+y1+' C '+((x1+x2)/2)+' '+y1+', '+((x1+x2)/2)+' '+y2+', '+x2+' '+y2});svg.append(path);const label=el('text',{class:'edge-label',x:(x1+x2)/2,y:(y1+y2)/2-5,'text-anchor':'middle'});label.textContent=edge.kind;svg.append(label)}}render();</script></body></html>`;
-  }
-
-  function schedule(document) {
-    if (vscode.workspace.getConfiguration('loom').get('lint.run') === 'onSave') return;
-    clearTimeout(timers.get(document.uri.toString()));
-    const delay = vscode.workspace.getConfiguration('loom').get('lint.delay', 500);
-    timers.set(document.uri.toString(), setTimeout(() => check(document), delay));
-  }
+  activeCleanup = () => {
+    workspaceProcess?.kill();
+    workspaceProcess = undefined;
+  };
 
   context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument(doc => { if (doc.languageId === 'loom') schedule(doc); }),
-    vscode.workspace.onDidChangeTextDocument(e => { if (e.document.languageId === 'loom') schedule(e.document); }),
-    vscode.workspace.onDidSaveTextDocument(doc => { if (doc.languageId === 'loom') check(doc); }),
-    vscode.workspace.onDidCloseTextDocument(doc => { const key = doc.uri.toString(); diagnostics.delete(doc.uri); clearTimeout(timers.get(key)); timers.delete(key); processes.get(key)?.kill(); processes.delete(key); }),
+    vscode.workspace.onDidCloseTextDocument(doc => { lspDiagnostics.delete(doc.uri); }),
+    vscode.commands.registerCommand('loom.showOutput', () => output.show(true)),
     vscode.commands.registerCommand('loom.checkFile', () => { const ed = vscode.window.activeTextEditor; if (ed?.document.languageId === 'loom') return check(ed.document); }),
     vscode.commands.registerCommand('loom.setCompilerPath', async () => {
       const pick = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false, canSelectMany: false, openLabel: 'Select loomc' });
@@ -424,9 +450,15 @@ function activate(context) {
     vscode.commands.registerCommand('loom.run', () => runWorkspaceCommand('run')),
     vscode.commands.registerCommand('loom.test', () => runWorkspaceCommand('test')),
     vscode.commands.registerCommand('loom.fetch', () => runWorkspaceCommand('fetch')),
-    vscode.commands.registerCommand('loom.showDependencyGraph', openDependencyGraph),
+    vscode.commands.registerCommand('loom.restartLanguageServer', async () => { await startLanguageServer(); }),
+    vscode.commands.registerCommand('loom.refreshWorkspaceIndex', () => { languageClient.notify('loom/refreshIndex', {}); }),
     vscode.languages.registerDocumentFormattingEditProvider('loom', {
-      provideDocumentFormattingEdits(document, options) {
+      async provideDocumentFormattingEdits(document, options) {
+        // `loom fmt` is the canonical formatter (keyword casing, colon
+        // alignment, declarations). The indenter below is only a fallback for
+        // machines where the workspace tool is unavailable.
+        const formatted = await formatWithLoomFmt(document);
+        if (formatted !== undefined) return formatted;
         const size = vscode.workspace.getConfiguration('loom').get('format.indentSize', 4);
         const unit = options.insertSpaces ? ' '.repeat(size) : '\t';
         let inBlock = false;
@@ -435,6 +467,7 @@ function activate(context) {
         let blockHasInlineTakes = false;
         let currentSection = '';
         let controlStack = [];
+        let ensureDepth = 0;
         const edits = [];
 
         for (let i = 0; i < document.lineCount; i++) {
@@ -452,11 +485,16 @@ function activate(context) {
           const isElseIf = /^else\s+if\b/i.test(raw);
           const isElse = /^(else\b|else\s*:)/i.test(raw);
           const isWhen = /^when\b/i.test(raw);
+          const isDefault = /^default\s*:/i.test(raw);
           const isEndGeneral = /^end\s+[a-z_][a-z0-9_]*\s*$/i.test(raw) && !isEndIf && !isEndLoop && !isEndMatch && !isEndEnsure;
 
+          const closesEnsure = ensureDepth > 0 && /^\}/.test(raw);
           let lineDepth = 0;
 
-          if (isEndIf || isEndLoop || isEndMatch || isEndEnsure) {
+          if (closesEnsure) {
+            const base = blockHasInlineImplements ? 1 : 2;
+            lineDepth = base + controlStack.length + ensureDepth - 1;
+          } else if (isEndIf || isEndLoop || isEndMatch || isEndEnsure) {
             if (controlStack.length > 0 && controlStack[controlStack.length - 1].type === 'when') controlStack.pop();
             if (controlStack.length > 0) controlStack.pop();
             const base = blockHasInlineImplements ? 1 : 2;
@@ -465,7 +503,7 @@ function activate(context) {
             if (controlStack.length > 0 && controlStack[controlStack.length - 1].type === 'when') controlStack.pop();
             const base = blockHasInlineImplements ? 1 : 2;
             lineDepth = base + (controlStack.length > 0 ? controlStack.length - 1 : 0);
-          } else if (isWhen) {
+          } else if (isWhen || isDefault) {
             if (controlStack.length > 0 && controlStack[controlStack.length - 1].type === 'when') controlStack.pop();
             const base = blockHasInlineImplements ? 1 : 2;
             lineDepth = base + controlStack.length;
@@ -501,7 +539,7 @@ function activate(context) {
               lineDepth = 1;
             } else {
               const base = blockHasInlineImplements ? 1 : 2;
-              lineDepth = base + controlStack.length;
+              lineDepth = base + controlStack.length + ensureDepth;
             }
           } else {
             lineDepth = 0;
@@ -510,135 +548,19 @@ function activate(context) {
           const desired = unit.repeat(Math.max(0, lineDepth)) + raw;
           if (line.text !== desired) edits.push(vscode.TextEdit.replace(line.range, desired));
 
+          if (closesEnsure) ensureDepth = Math.max(0, ensureDepth - 1);
+          else if (/^ensure\b.*\{\s*$/i.test(raw)) ensureDepth++;
           if (/^if\b/i.test(raw)) controlStack.push({ type: 'if' });
           else if (/^loop\b/i.test(raw)) controlStack.push({ type: 'loop' });
           else if (/^match\b/i.test(raw)) controlStack.push({ type: 'match' });
-          else if (/^ensure\s*$/i.test(raw)) controlStack.push({ type: 'ensure' });
-          else if (isWhen || /^else\s*:\s*$/i.test(raw)) controlStack.push({ type: 'when' });
+          else if (isWhen || isDefault || /^else\s*:\s*$/i.test(raw)) controlStack.push({ type: 'when' });
         }
         return edits;
       }
     }),
-    vscode.languages.registerCompletionItemProvider('loom', {
-      provideCompletionItems() {
-        const words = [
-          'Block','Takes','Produces','Declares','Implements','End','If','Else','Until','While','Loop','Exit','Skip','Give','Write','Write_UART',
-          'Match','When','use','Use','while','until',
-          'Address','Deref','Pointer','Slice','Array','Ensure','Cast','Null','Extern','Import','Record','Enum','Module','Constant',
-          'And','Or','Not','LSL','LSR','Mod','True','False',
-          'Signed_8','Signed_16','Signed_32','Signed_64','Unsigned_8','Unsigned_16','Unsigned_32','Unsigned_64',
-          'Float_32','Float_64','Boolean','String','Character','Integer','Int',
-          'Vol_Read_8','Vol_Read_16','Vol_Read_32','Vol_Read_64',
-          'Vol_Write_8','Vol_Write_16','Vol_Write_32','Vol_Write_64',
-          'Nop','WaitForInterrupt','MemoryBarrier'
-        ];
-        return words.map(word => { const item = new vscode.CompletionItem(word, vscode.CompletionItemKind.Keyword); item.insertText = word; return item; });
-      }
-    }, /[A-Za-z_]/),
-    vscode.languages.registerDocumentSymbolProvider('loom', {
-      provideDocumentSymbols(document) {
-        const symbols = [];
-        for (let i = 0; i < document.lineCount; i++) {
-          const match = /^\s*Block\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(document.lineAt(i).text);
-          if (!match) continue;
-          let end = i;
-          for (let j = i + 1; j < document.lineCount; j++) {
-            if (new RegExp('^\\s*End\\s+' + match[1] + '\\s*$').test(document.lineAt(j).text)) { end = j; break; }
-          }
-          const range = new vscode.Range(i, 0, end, document.lineAt(end).text.length);
-          const selection = new vscode.Range(i, match[0].indexOf(match[1]), i, match[0].indexOf(match[1]) + match[1].length);
-          symbols.push(new vscode.DocumentSymbol(match[1], 'Block', vscode.SymbolKind.Function, range, selection));
-        }
-        return symbols;
-      }
-    }),
-    vscode.languages.registerHoverProvider('loom', {
-      provideHover(document, position) {
-        const range = document.getWordRangeAtPosition(position); if (!range) return;
-        const word = document.getText(range), key = word.toLowerCase();
-        const help = {
-          block:'`Block Name` begins a function or procedure. Close it with `End Name`.',
-          takes:'Starts the multiline parameter list. Each entry is `Name : Type`.',
-          produces:'Declares the function result type (supports scalars, pointers, and Records).',
-          declares:'Begins local variable declarations.',
-          implements:'Begins the function body.',
-          call:'Note: The `Call` keyword has been removed from Loom. Invoke functions and procedures directly: `FunctionName(...)` or `Var = FunctionName(...)`.',
-          address:'`Address(Variable)` takes the memory address of an lvalue and produces a `T Pointer`.',
-          deref:'`Deref(Pointer)` accesses the value pointed to by a pointer. Can be read or assigned (`Deref(P) = Val`).',
-          pointer:'`T Pointer` represents a typed raw memory pointer to type `T`.',
-          slice:'`T Slice` represents a fat-pointer slice view containing a data pointer and 64-bit length (`Slice(Arr)`).',
-          array:'`T Array[N]` represents a contiguous fixed-size array of `N` elements on stack or global storage.',
-          ensure:'`Ensure { ... }` registers a single multi-line cleanup block that is guaranteed to execute upon block exit.',
-          as:'`expr as Type` performs an explicit type conversion with compile-time safety and range checks.',
-          try:'`try expr` unwinds on error, returning the error to the caller while executing active `Ensure` cleanup.',
-          or:'`Produces T or ErrorType` declares an error union return type.',
-          test:'`Test "description" ... End Test` defines an executable unit or integration test block executed by `loom test`.',
-          volatile:'`Volatile Type` qualifies a variable or field for atomic/volatile hardware load and store instructions without register caching.',
-          packed:'`Packed Record Align N` defines a byte-aligned packed memory layout with zero implicit padding.',
-          cast:'`expr as Target_Type` or constructor-style `Target_Type(expr)` explicitly converts between types.',
-          null:'`Null` is the typed null pointer literal compatible with all pointer types.',
-          extern:'`Extern Block Name ... End Name` declares an external C ABI function without a body.',
-          import:'`Import ModuleName` automatically resolves and includes an external Loom file.',
-          record:'`Record Name ... End Name` declares a structured data type with named fields.',
-          enum:'`Enum Name : IntegerType ... End Name` declares an enumeration with explicit numeric values.',
-          constant:'`Constant` marks global declarations as immutable read-only values.',
-          write:'Prints a value to stdout. Formats scalars, pointers (%p), and structured Records.',
-          give:'Returns a value from a value-producing block.',
-          exit:'Immediately exits a `Loop` or exits early from a procedure (executing active `Ensure` cleanup in LIFO order).',
-          skip:'Continues at the start of the nearest enclosing `Loop`.',
-          if:'Begins a conditional block. Close it with `End If`.',
-          else:'Alternative branch for `If`. Supports chained `Else If`.',
-          loop:'Begins a loop. Can be infinite, `Loop while <condition>`, or `Loop until <condition>`.',
-          until:'Conditional exit clause for `Loop until <condition>`.',
-          while:'`Loop while <condition>` executes the loop body while the condition is true.',
-          match:'`Match <expression>` multi-way branching over enums, integers, characters, or booleans. Close with `End Match`.',
-          when:'`When <pattern>:` defines a case arm inside a `Match` block.',
-          use:'`use <ModuleName>` imports external routines into the current file or block scope without qualification.',
-          boolean:'Boolean value type; literals are `True` and `False`.',
-          float_32:'32-bit single-precision floating point number (IEEE 754).',
-          float_64:'64-bit double-precision floating point number (IEEE 754).',
-          signed_8:'Signed 8-bit integer type.', signed_16:'Signed 16-bit integer type.', signed_32:'Signed 32-bit integer type.', signed_64:'Signed 64-bit integer type.',
-          unsigned_8:'Unsigned 8-bit integer type.', unsigned_16:'Unsigned 16-bit integer type.', unsigned_32:'Unsigned 32-bit integer type.', unsigned_64:'Unsigned 64-bit integer type.',
-          string:'Null-terminated immutable UTF-8 string pointer.',
-          character:'32-bit Unicode scalar character literal, e.g. `\'é\'`.',
-          integer:'`Integer` is a built-in scalar type alias for `Signed_64`.',
-          int:'`Int` is a built-in scalar type alias for `Signed_64`.',
-          vol_read_8:'`Vol_Read_8(Address)` performs a volatile 8-bit memory-mapped I/O load.',
-          vol_read_16:'`Vol_Read_16(Address)` performs a volatile 16-bit memory-mapped I/O load.',
-          vol_read_32:'`Vol_Read_32(Address)` performs a volatile 32-bit memory-mapped I/O load.',
-          vol_read_64:'`Vol_Read_64(Address)` performs a volatile 64-bit memory-mapped I/O load.',
-          vol_write_8:'`Vol_Write_8(Address, Value)` performs a volatile 8-bit memory-mapped I/O store.',
-          vol_write_16:'`Vol_Write_16(Address, Value)` performs a volatile 16-bit memory-mapped I/O store.',
-          vol_write_32:'`Vol_Write_32(Address, Value)` performs a volatile 32-bit memory-mapped I/O store.',
-          vol_write_64:'`Vol_Write_64(Address, Value)` performs a volatile 64-bit memory-mapped I/O store.',
-          nop:'`Nop()` emits a hardware no-operation instruction.',
-          waitforinterrupt:'`WaitForInterrupt()` enters low-power standby until an interrupt occurs (`wfi`).',
-          memorybarrier:'`MemoryBarrier()` emits a full hardware data memory barrier (`dmb sy`).'
-        };
-        return help[key] ? new vscode.Hover(new vscode.MarkdownString(help[key]), range) : undefined;
-      }
-    })
   );
 
-  const snippets = [
-    ['block', 'Block ${1:Name}\n    Takes\n        ${2:Value} : ${3:Signed_32}\n    Produces ${4:Signed_32}\n    Implements\n        Give ${2:Value}\nEnd ${1:Name}', 'Block with parameter and result'],
-    ['concise', 'Block ${1:Name} Takes\n    ${2:A} : ${3:Signed_32}\nProduces (${4:$2 + 1})\nEnd ${1:Name}', 'Concise single-line routine'],
-    ['procedure', 'Block ${1:Name}\n    Implements\n        $0\nEnd ${1:Name}', 'Parameterless procedure'],
-    ['if', 'If ${1:condition}\n    $0\nEnd If', 'If block'],
-    ['loop', 'Loop\n    $0\nEnd Loop', 'Infinite loop'],
-    ['loopwhile', 'Loop while ${1:condition}\n    $0\nEnd Loop', 'Conditional while loop'],
-    ['loopuntil', 'Loop until ${1:condition}\n    $0\nEnd Loop', 'Conditional until loop'],
-    ['match', 'Match ${1:Expression}\n    When ${2:Pattern}:\n        $0\n    Else:\n        \nEnd Match', 'Pattern matching block'],
-    ['declares', 'Declares\n    ${1:Name} : ${2:Signed_32}', 'Local declaration'],
-    ['write', 'Write(\"${1:text}\")$0', 'Print a string literal'],
-    ['use', 'use ${1:ModuleName}', 'Unqualified module import directive']
-  ];
-  context.subscriptions.push(vscode.languages.registerCompletionItemProvider('loom', {
-    provideCompletionItems() { return snippets.map(([label, body, detail]) => { const i = new vscode.CompletionItem(label, vscode.CompletionItemKind.Snippet); i.insertText = new vscode.SnippetString(body); i.detail = detail; return i; }); }
-  }, ' '));
-
-  for (const doc of vscode.workspace.textDocuments) if (doc.languageId === 'loom') schedule(doc);
 }
 
-function deactivate() {}
+function deactivate() { activeCleanup(); }
 module.exports = { activate, deactivate, parseCompilerDiagnostics };

@@ -4,6 +4,7 @@
 #include <sstream>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
@@ -63,7 +64,12 @@ static const std::unordered_map<std::string, std::string> KEYWORD_DOCS = {
     {"to_string", "**To_String**: Converts expression or Text buffer to a String.\n\n```loom\nstr : String = To_String(buf)\n```"},
     {"allocate", "**Allocate**: Dynamically allocates heap memory with size and alignment.\n\n```loom\nptr : Signed_32 Pointer = Allocate(4, 4)\n```"},
     {"resize", "**Resize**: Reallocates a dynamically allocated heap block.\n\n```loom\nptr = Resize(ptr, 8, 4)\n```"},
-    {"release", "**Release**: Deallocates a dynamically allocated heap block.\n\n```loom\nRelease(ptr)\n```"}
+    {"release", "**Release**: Deallocates a dynamically allocated heap block.\n\n```loom\nRelease(ptr)\n```"},
+    {"where", "**where**: Pattern guard condition.\n\n```loom\nMatch val\n    When X where X > 10:\n        ...\nEnd Match\n```"},
+    {"default", "**default**: Default catch-all branch for pattern matching.\n\n```loom\nMatch val\n    ...\n    default:\n        ...\nEnd Match\n```"},
+    {"drop", "**Drop**: Optional automatic cleanup destructor inside Record.\n\n```loom\nRecord Buffer\n    Data : Unsigned_8 Pointer\nDrop\n    If Data != Null\n        Release(Data)\n    End If\nEnd Buffer\n```"},
+    {"in", "**in**: Iteration operator for ranges or collections in `Loop`.\n\n```loom\nLoop I in 1 .. 10\n    ...\nEnd Loop\n```"},
+    {"constant", "**Constant**: Declares an immutable constant value.\n\n```loom\nConstant Max_Retries : Signed_32 = 5\n```"}
 };
 
 static const std::unordered_map<std::string, std::string> TYPE_DOCS = {
@@ -329,8 +335,12 @@ int main() {
                 << "\"capabilities\":{"
                 << "\"textDocumentSync\":1,"
                 << "\"hoverProvider\":true,"
-                << "\"completionProvider\":{\"triggerCharacters\":[\".\",\":\",\"[\"]},"
-                << "\"definitionProvider\":true"
+                << "\"completionProvider\":{\"triggerCharacters\":[\".\",\":\",\"[\",\"(\",\" \","
+                << "\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\",\"p\",\"q\",\"r\",\"s\",\"t\",\"u\",\"v\",\"w\",\"x\",\"y\",\"z\","
+                << "\"A\",\"B\",\"C\",\"D\",\"E\",\"F\",\"G\",\"H\",\"I\",\"J\",\"K\",\"L\",\"M\",\"N\",\"O\",\"P\",\"Q\",\"R\",\"S\",\"T\",\"U\",\"V\",\"W\",\"X\",\"Y\",\"Z\",\"_\"]},"
+                << "\"definitionProvider\":true,"
+                << "\"referencesProvider\":true,"
+                << "\"renameProvider\":true"
                 << "}}}";
             loom::lsp::sendResponse(res.str());
         } else if (method == "initialized") {
@@ -415,9 +425,11 @@ int main() {
                 addCompletion("Length", 10, "collection element count or string length");
                 addCompletion("Capacity", 10, "allocated buffer capacity");
                 addCompletion("Append", 2, "Append(elem): appends an element to Vector");
+                addCompletion("Push", 2, "Push(elem): appends an element to Vector");
                 addCompletion("Pop", 2, "Pop(): removes and returns last element from Vector");
                 addCompletion("Contains", 2, "Contains(key/elem): checks presence in Vector or HMap");
                 addCompletion("Remove", 2, "Remove(key): removes key from HMap");
+                addCompletion("Clear", 2, "Clear(): empties collection buffer");
                 addCompletion("Index", 2, "Index(elem): returns 1-based index of first match (or 0)");
                 addCompletion("Index_All", 2, "Index_All(elem): returns Vector of all matching 1-based indices");
             } else if (trimmed.find("use ") != std::string::npos || trimmed.find("Import ") != std::string::npos) {
@@ -427,12 +439,23 @@ int main() {
             } else {
                 for (const auto& [kw, doc] : loom::lsp::KEYWORD_DOCS) addCompletion(kw, 14, "keyword");
                 for (const auto& [ty, doc] : loom::lsp::TYPE_DOCS) addCompletion(ty, 7, "type");
+                for (const char* canonicalType : {"Signed_8", "Signed_16", "Signed_32", "Signed_64",
+                                                  "Unsigned_8", "Unsigned_16", "Unsigned_32", "Unsigned_64",
+                                                  "Float_32", "Float_64", "Boolean", "Character", "String",
+                                                  "Pointer", "Slice", "Array", "Vector", "Text", "HMap"}) {
+                    addCompletion(canonicalType, 7, "type");
+                }
                 addCompletion("Block", 14, "procedure/function declaration");
                 addCompletion("Takes", 14, "parameter list");
                 addCompletion("Produces", 14, "return type");
                 addCompletion("Declares", 14, "local variable declarations");
                 addCompletion("Implements", 14, "executable body");
                 addCompletion("Ensure", 14, "guaranteed cleanup block");
+                addCompletion("Constant", 14, "constant declaration");
+                addCompletion("where", 14, "pattern guard condition");
+                addCompletion("default", 14, "pattern match default catch-all branch");
+                addCompletion("Drop", 14, "optional record cleanup destructor");
+                addCompletion("In", 14, "range or collection iteration keyword");
                 addCompletion("as", 14, "type casting expression");
                 addCompletion("try", 14, "error unwrapping expression");
                 addCompletion("Packed Record", 14, "packed structure layout");
@@ -441,6 +464,43 @@ int main() {
                 addCompletion("Print", 3, "Print(msg): standard output with newline");
                 addCompletion("Write", 3, "Write(msg): standard output without newline");
                 addCompletion("To_String", 3, "To_String(val): converts value to String");
+
+                if (loom::lsp::documents.count(uri)) {
+                    const std::string& docText = loom::lsp::documents[uri].text;
+                    std::istringstream stream(docText);
+                    std::string lineStr;
+                    std::unordered_set<std::string> seen;
+                    std::regex blockRegex(R"(\bBlock\s+([A-Za-z0-9_]+))");
+                    std::regex recordRegex(R"(\bRecord\s+([A-Za-z0-9_]+))");
+                    std::regex enumRegex(R"(\bEnum\s+([A-Za-z0-9_]+))");
+                    std::regex constRegex(R"(\bConstant\s+([A-Za-z0-9_]+))");
+                    std::regex varRegex(R"(\b([A-Za-z0-9_]+)\s*:)");
+                    while (std::getline(stream, lineStr)) {
+                        std::smatch m;
+                        if (std::regex_search(lineStr, m, blockRegex)) {
+                            std::string s = m[1].str();
+                            if (seen.insert(s).second) addCompletion(s, 3, "user-defined procedure/function");
+                        }
+                        if (std::regex_search(lineStr, m, recordRegex)) {
+                            std::string s = m[1].str();
+                            if (seen.insert(s).second) addCompletion(s, 22, "user-defined record");
+                        }
+                        if (std::regex_search(lineStr, m, enumRegex)) {
+                            std::string s = m[1].str();
+                            if (seen.insert(s).second) addCompletion(s, 13, "user-defined enum");
+                        }
+                        if (std::regex_search(lineStr, m, constRegex)) {
+                            std::string s = m[1].str();
+                            if (seen.insert(s).second) addCompletion(s, 21, "constant");
+                        }
+                        if (std::regex_search(lineStr, m, varRegex)) {
+                            std::string s = m[1].str();
+                            if (s != "Record" && s != "Enum" && s != "Block" && s != "Constant" && s != "Takes" && s != "Produces" && seen.insert(s).second) {
+                                addCompletion(s, 6, "variable");
+                            }
+                        }
+                    }
+                }
             }
             res << "]}";
             loom::lsp::sendResponse(res.str());
@@ -472,6 +532,86 @@ int main() {
                 res << "null";
             }
             res << "}";
+            loom::lsp::sendResponse(res.str());
+        } else if (method == "textDocument/references") {
+            auto uri = loom::lsp::getJsonStringField(msg, "uri");
+            auto posPos = msg.find("\"position\"");
+            int line = 0, character = 0;
+            if (posPos != std::string::npos) {
+                line = loom::lsp::getJsonIntField(msg.substr(posPos), "line", 0);
+                character = loom::lsp::getJsonIntField(msg.substr(posPos), "character", 0);
+            }
+            std::string word;
+            if (loom::lsp::documents.count(uri)) {
+                word = loom::lsp::getWordAt(loom::lsp::documents[uri].text, line, character);
+            }
+            std::ostringstream res;
+            res << "{\"jsonrpc\":\"2.0\",\"id\":" << id << ",\"result\":[";
+            if (!word.empty() && loom::lsp::documents.count(uri)) {
+                const auto& doc = loom::lsp::documents[uri];
+                std::istringstream stream(doc.text);
+                std::string curLine;
+                int cl = 0;
+                bool first = true;
+                std::regex wordRegex(R"(\b)" + word + R"(\b)");
+                while (std::getline(stream, curLine)) {
+                    auto words_begin = std::sregex_iterator(curLine.begin(), curLine.end(), wordRegex);
+                    auto words_end = std::sregex_iterator();
+                    for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
+                        std::smatch match = *i;
+                        int col = static_cast<int>(match.position());
+                        if (!first) res << ",";
+                        first = false;
+                        res << "{\"uri\":\"" << loom::lsp::escapeJson(uri) << "\",\"range\":{"
+                            << "\"start\":{\"line\":" << cl << ",\"character\":" << col << "},"
+                            << "\"end\":{\"line\":" << cl << ",\"character\":" << (col + (int)word.size()) << "}"
+                            << "}}";
+                    }
+                    cl++;
+                }
+            }
+            res << "]}";
+            loom::lsp::sendResponse(res.str());
+        } else if (method == "textDocument/rename") {
+            auto uri = loom::lsp::getJsonStringField(msg, "uri");
+            auto newName = loom::lsp::getJsonStringField(msg, "newName");
+            auto posPos = msg.find("\"position\"");
+            int line = 0, character = 0;
+            if (posPos != std::string::npos) {
+                line = loom::lsp::getJsonIntField(msg.substr(posPos), "line", 0);
+                character = loom::lsp::getJsonIntField(msg.substr(posPos), "character", 0);
+            }
+            std::string word;
+            if (loom::lsp::documents.count(uri)) {
+                word = loom::lsp::getWordAt(loom::lsp::documents[uri].text, line, character);
+            }
+            std::ostringstream res;
+            res << "{\"jsonrpc\":\"2.0\",\"id\":" << id << ",\"result\":{\"changes\":{\""
+                << loom::lsp::escapeJson(uri) << "\":[";
+            if (!word.empty() && !newName.empty() && loom::lsp::documents.count(uri)) {
+                const auto& doc = loom::lsp::documents[uri];
+                std::istringstream stream(doc.text);
+                std::string curLine;
+                int cl = 0;
+                bool first = true;
+                std::regex wordRegex(R"(\b)" + word + R"(\b)");
+                while (std::getline(stream, curLine)) {
+                    auto words_begin = std::sregex_iterator(curLine.begin(), curLine.end(), wordRegex);
+                    auto words_end = std::sregex_iterator();
+                    for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
+                        std::smatch match = *i;
+                        int col = static_cast<int>(match.position());
+                        if (!first) res << ",";
+                        first = false;
+                        res << "{\"range\":{"
+                            << "\"start\":{\"line\":" << cl << ",\"character\":" << col << "},"
+                            << "\"end\":{\"line\":" << cl << ",\"character\":" << (col + (int)word.size()) << "}"
+                            << "},\"newText\":\"" << loom::lsp::escapeJson(newName) << "\"}";
+                    }
+                    cl++;
+                }
+            }
+            res << "]}}}";
             loom::lsp::sendResponse(res.str());
         } else if (method == "shutdown") {
             std::ostringstream res;

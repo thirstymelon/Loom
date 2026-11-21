@@ -30,7 +30,11 @@ def compile_and_run(source: str, release: bool = True) -> str:
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
             raise RuntimeError(f"loomc compilation failed:\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}")
-        link_cmd = ["clang", str(obj_path), "-framework", "Accelerate", "-o", str(bin_path)]
+        rt_archive = LOOMC.parent / "libloom_rt.a"
+        if not rt_archive.exists():
+            rt_archive = LOOMC.parent.parent / ".build" / "libloom_rt.a"
+        rt_args = [str(rt_archive)] if rt_archive.exists() else [str(LOOMC.parent.parent / "src/runtime/loom_runtime.c"), "-pthread"]
+        link_cmd = ["clang", str(obj_path), *rt_args, "-framework", "Accelerate", "-o", str(bin_path)]
         link_res = subprocess.run(link_cmd, capture_output=True, text=True)
         if link_res.returncode != 0:
             raise RuntimeError(f"linking failed:\n{link_res.stderr}")

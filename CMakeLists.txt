@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Loom VERSION 1.3.0 LANGUAGES C CXX)
+project(Loom VERSION 1.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,13 +13,21 @@ message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION} from ${LLVM_DIR}")
 add_executable(loomc src/main.cpp)
 add_executable(loom src/driver.cpp)
 add_executable(loom-lsp src/lsp.cpp)
-add_library(loom_rt STATIC src/runtime/loom_runtime.c)
+add_library(loom_rt STATIC
+  src/runtime/rt_core.c
+  src/runtime/rt_smart_ptr.c
+  src/runtime/rt_collections.c
+  src/runtime/rt_threads.c
+  src/runtime/rt_net.c
+  src/runtime/rt_hash.c
+)
 target_include_directories(loom_rt PUBLIC src/runtime)
+target_compile_options(loom_rt PRIVATE -ffunction-sections -fdata-sections)
 install(TARGETS loom loomc loom-lsp RUNTIME DESTINATION bin)
 install(TARGETS loom_rt ARCHIVE DESTINATION lib)
 target_include_directories(loomc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
-llvm_map_components_to_libnames(LLVM_LIBS Core Support Target CodeGen MC native aarch64codegen aarch64asmparser aarch64desc aarch64info aarch64utils armcodegen armasmparser armdesc arminfo Passes)
+llvm_map_components_to_libnames(LLVM_LIBS Core Support Target CodeGen MC native aarch64codegen aarch64asmparser aarch64desc aarch64info aarch64utils armcodegen armasmparser armdesc arminfo x86codegen x86asmparser x86desc x86info Passes)
 target_link_libraries(loomc PRIVATE ${LLVM_LIBS})
 
 # Toolchain-specific compiler targets
@@ -28,10 +36,7 @@ target_compile_definitions(loomc-native PRIVATE LOOM_TOOLCHAIN_NATIVE_ONLY)
 target_include_directories(loomc-native SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(loomc-native PRIVATE ${LLVM_LIBS})
 
-add_executable(loomc-rp2040 src/main.cpp)
-target_compile_definitions(loomc-rp2040 PRIVATE LOOM_TOOLCHAIN_RP2040_ONLY)
-target_include_directories(loomc-rp2040 SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-target_link_libraries(loomc-rp2040 PRIVATE ${LLVM_LIBS})
+
 
 include(CTest)
 if(BUILD_TESTING)
@@ -49,10 +54,12 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/docs_tests.py $<TARGET_FILE:loomc> ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME validation_and_differential_suite
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_validation_suite.py $<TARGET_FILE:loomc>)
+  add_test(NAME runtime_regressions
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_regressions.py
+      $<TARGET_FILE:loomc> ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME modern_features_suite
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/modern_features_tests.py $<TARGET_FILE:loomc>)
-  add_test(NAME rp2040_peripherals_suite
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/rp2040_peripherals_test.py $<TARGET_FILE:loomc>)
+
   add_test(NAME aiml_benchmark_suite
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/aiml_benchmark_test.py $<TARGET_FILE:loomc>)
   find_program(LOOM_QEMU_AARCH64_EXECUTABLE qemu-system-aarch64)

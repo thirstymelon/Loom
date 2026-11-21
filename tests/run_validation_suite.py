@@ -28,6 +28,11 @@ def run():
     assert len(tests) >= 14, f"Expected at least 14 validation tests, found {len(tests)} in {val_dir}"
     print(f"  Testing {len(tests)} workloads across Debug (-O0) vs Release (-O3)")
 
+    rt_archive = build_dir / "libloom_rt.a"
+    if not rt_archive.exists():
+        rt_archive = compiler.parent / "libloom_rt.a"
+    rt_args = [str(rt_archive)] if rt_archive.exists() else [str(repo_root / "src/runtime/loom_runtime.c"), "-pthread"]
+
     passed = 0
     failed = 0
 
@@ -40,11 +45,11 @@ def run():
                 obj_dbg, bin_dbg = temp / "debug.o", temp / "debug"
                 obj_rel, bin_rel = temp / "release.o", temp / "release"
                 subprocess.run([str(compiler), "--object", str(test), str(obj_dbg), "--entry"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                subprocess.run(["clang", str(obj_dbg), "-o", str(bin_dbg)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                subprocess.run(["clang", str(obj_dbg), *rt_args, "-o", str(bin_dbg)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 out_dbg = (subprocess.run([str(bin_dbg)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
                            if expects_trap else subprocess.check_output([str(bin_dbg)]).decode().strip())
                 subprocess.run([str(compiler), "--object", str(test), str(obj_rel), "--entry", "--release"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                subprocess.run(["clang", "-O3", str(obj_rel), "-o", str(bin_rel)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                subprocess.run(["clang", "-O3", str(obj_rel), *rt_args, "-o", str(bin_rel)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 if expects_trap:
                     out_rel = subprocess.run([str(bin_rel)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
                     if out_dbg == 0 or out_rel == 0:

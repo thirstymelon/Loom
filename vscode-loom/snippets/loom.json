@@ -107,11 +107,11 @@
     "description": "Declare local variables"
   },
   "Ensure statement": {
-    "prefix": "ensure",
+    "prefix": "ensureone",
     "body": [
       "Ensure { ${1:Write(\"Clean up resources\")} }"
     ],
-    "description": "Deterministic LIFO cleanup statement executed on scope exit"
+    "description": "Single-line deterministic LIFO cleanup statement executed on scope exit"
   },
   "Pointer declaration": {
     "prefix": "pointer",
@@ -177,11 +177,11 @@
       "Match ${1:Expression}",
       "    When ${2:Pattern}:",
       "        $0",
-      "    Else:",
+      "    Default:",
       "        ",
       "End Match"
     ],
-    "description": "Pattern matching block"
+    "description": "Pattern matching block with When cases and Default fallback"
   },
   "Record literal": {
     "prefix": "reclit",
@@ -238,5 +238,148 @@
       "End ${1:Name}"
     ],
     "description": "Packed record with explicit byte alignment"
+  },
+  "Spawn task": {
+    "prefix": "spawn",
+    "body": [
+      "${1:Handle} : Task_Handle = Spawn ${2:Worker}(${3:Argument})"
+    ],
+    "description": "Spawn an asynchronous task and keep its handle"
+  },
+  "Join task": {
+    "prefix": "join",
+    "body": [
+      "${1:Result} = Join ${2:Handle}"
+    ],
+    "description": "Wait for task completion and read its result"
+  },
+  "Vector declaration": {
+    "prefix": "vector",
+    "body": [
+      "${1:Values} : ${2:Signed_32} Vector[${3:8}]"
+    ],
+    "description": "Growable typed vector"
+  },
+  "Text buffer": {
+    "prefix": "textbuf",
+    "body": [
+      "${1:Buffer} : Text[${2:128}]"
+    ],
+    "description": "Dynamic Text buffer with a starting capacity"
+  },
+  "HMap declaration": {
+    "prefix": "hmap",
+    "body": [
+      "${1:Lookup} : ${2:Signed_32} HMap[${3:String} : ${4:Signed_32}]"
+    ],
+    "description": "Hash map keyed by the first type with values of the second"
+  },
+  "Tuple result": {
+    "prefix": "tuplereturn",
+    "body": [
+      "Block ${1:Name} Takes",
+      "    ${2:Value} : ${3:Signed_32}",
+      "Produces (${3:Signed_32}, ${4:Boolean})",
+      "Implements",
+      "    Give (${2:Value}, True)",
+      "End ${1:Name}"
+    ],
+    "description": "Block that returns two values"
+  },
+  "Tuple unpack": {
+    "prefix": "unpack",
+    "body": [
+      "${1:First}, ${2:Second} = ${3:Calc}()"
+    ],
+    "description": "Unpack a multi-value result"
+  },
+  "Error union result": {
+    "prefix": "producesor",
+    "body": [
+      "Produces ${1:Signed_32} or ${2:Error}"
+    ],
+    "description": "Return a value or an error type"
+  },
+  "Constant declaration": {
+    "prefix": "constant",
+    "body": [
+      "${1:Name} : Constant ${2:Signed_32} = ${3:0}"
+    ],
+    "description": "Declare an immutable value"
+  },
+  "Sub-slice": {
+    "prefix": "subslice",
+    "body": [
+      "${1:View} : ${2:Signed_32} Slice = ${3:Items}[${4:1} .. ${5:Length}]"
+    ],
+    "description": "Non-owning view over part of a vector, array, or text"
+  },
+  "Raw pointer": {
+    "prefix": "rawptr",
+    "body": [
+      "${1:Ptr} : ${2:Signed_32} Pointer = Address(${3:Value})"
+    ],
+    "description": "Explicit raw pointer to an existing value"
+  },
+  "Heap allocation": {
+    "prefix": "allocate",
+    "body": [
+      "${1:Ptr} : ${2:Signed_32} Pointer = Allocate(${3:4})"
+    ],
+    "description": "Allocate a heap block; pair it with Release"
+  },
+  "For-in collection loop": {
+    "prefix": "forin",
+    "body": [
+      "Loop ${1:Item} in ${2:Collection}",
+      "    $0",
+      "End Loop"
+    ],
+    "description": "Iterate through items in a collection"
+  },
+  "For-in range loop": {
+    "prefix": "forrange",
+    "body": [
+      "Loop ${1:I} in ${2:1} .. ${3:10}",
+      "    $0",
+      "End Loop"
+    ],
+    "description": "Iterate through an integer range"
+  },
+  "Closure expression": {
+    "prefix": "closure",
+    "body": [
+      "(${1:X} : ${2:Signed_64}) => ${3:Expr}"
+    ],
+    "description": "Inline anonymous lambda closure"
+  },
+  "Record with Drop destructor": {
+    "prefix": "recorddrop",
+    "body": [
+      "Record ${1:Buffer}",
+      "    ${2:Ptr} : ${3:Signed_32} Pointer",
+      "Drop",
+      "    If ${2:Ptr} != Null",
+      "        Release(${2:Ptr})",
+      "    End If",
+      "End ${1:Buffer}"
+    ],
+    "description": "Record with RAII Drop cleanup block"
+  },
+  "Match case with guard": {
+    "prefix": "whenguard",
+    "body": [
+      "When ${1:Pattern} where ${2:Condition}:",
+      "    $0"
+    ],
+    "description": "Pattern match case with a condition guard"
+  },
+  "Match default case": {
+    "prefix": "default",
+    "body": [
+      "default:",
+      "    $0"
+    ],
+    "description": "Default catch-all branch for Match statement"
   }
 }

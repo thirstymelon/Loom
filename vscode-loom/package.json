@@ -1,24 +1,30 @@
 {
   "name": "loom-language-support",
   "displayName": "Loom Language Support",
-  "description": "Syntax highlighting, formatting, snippets, completion and compiler-backed diagnostics for Loom.",
-  "version": "1.3.0",
+  "description": "Loom language support for Visual Studio Code with syntax highlighting, auto-indentation, snippets, intelligent code suggestions, navigation, and compiler diagnostics.",
+  "version": "1.4.0",
   "publisher": "loom-language",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thirstymelon/Loom.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Programming Languages",
-    "Linters",
+    "Snippets",
     "Formatters"
   ],
   "keywords": [
     "loom",
     "llvm",
-    "language"
+    "language",
+    "systems"
   ],
   "main": "./extension.js",
+  "activationEvents": ["onLanguage:loom"],
   "contributes": {
     "languages": [
       {
@@ -44,6 +50,24 @@
         "path": "./syntaxes/loom.tmLanguage.json"
       }
     ],
+    "semanticTokenScopes": [
+      {
+        "language": "loom",
+        "scopes": {
+          "namespace": ["entity.name.namespace.loom"],
+          "type": ["support.type.primitive.loom"],
+          "class": ["entity.name.type.record.loom"],
+          "function": ["entity.name.function.loom"],
+          "parameter": ["variable.parameter.loom"],
+          "variable": ["variable.other.loom"],
+          "property": ["variable.other.property.loom"],
+          "keyword": ["keyword.control.loom"],
+          "number": ["constant.numeric.integer.loom"],
+          "string": ["string.quoted.double.loom"],
+          "comment": ["comment.line.number-sign.loom"]
+        }
+      }
+    ],
     "snippets": [
       {
         "language": "loom",
@@ -56,12 +80,20 @@
         "title": "Loom: Check Current File"
       },
       {
+        "command": "loom.formatDocument",
+        "title": "Loom: Format Document"
+      },
+      {
+        "command": "loom.restartLanguageServer",
+        "title": "Loom: Restart Language Server"
+      },
+      {
         "command": "loom.setCompilerPath",
         "title": "Loom: Select loomc Compiler"
       },
       {
-        "command": "loom.formatDocument",
-        "title": "Loom: Format Document"
+        "command": "loom.showOutput",
+        "title": "Loom: Show Output"
       },
       {
         "command": "loom.build",
@@ -76,18 +108,31 @@
         "title": "Loom: Build and Run Workspace"
       },
       {
-        "command": "loom.showDependencyGraph",
-        "title": "Loom: Show Semantic Dependency Graph"
-      },
-      {
         "command": "loom.test",
         "title": "Loom: Run Tests"
       },
       {
         "command": "loom.fetch",
         "title": "Loom: Fetch Dependencies"
+      },
+      {
+        "command": "loom.refreshWorkspaceIndex",
+        "title": "Loom: Refresh Workspace Index"
       }
     ],
+    "menus": {
+      "editor/title": [
+        { "command": "loom.run", "when": "editorLangId == loom", "group": "navigation@1" },
+        { "command": "loom.build", "when": "editorLangId == loom", "group": "navigation@2" },
+        { "command": "loom.checkFile", "when": "editorLangId == loom", "group": "navigation@3" }
+      ],
+      "editor/context": [
+        { "command": "loom.checkFile", "when": "editorLangId == loom", "group": "loom@1" },
+        { "command": "loom.formatDocument", "when": "editorLangId == loom", "group": "loom@2" },
+        { "command": "loom.build", "when": "editorLangId == loom", "group": "loom@3" },
+        { "command": "loom.run", "when": "editorLangId == loom", "group": "loom@4" }
+      ]
+    },
     "configuration": {
       "title": "Loom",
       "properties": {
@@ -95,11 +140,6 @@
           "type": "string",
           "default": "",
           "description": "Explicit path to loomc. If blank, detects the project toolchain and checks ~/.loom/toolchains and the standard macOS Loom installation paths before the workspace bin/ directory and PATH."
-        },
-        "loom.lspPath": {
-          "type": "string",
-          "default": "",
-          "description": "Explicit path to the native loom-lsp language server binary."
         },
         "loom.lint.run": {
           "type": "string",
@@ -122,7 +162,7 @@
           "default": 4,
           "minimum": 1,
           "maximum": 8,
-          "description": "Spaces per indentation level."
+          "description": "Spaces per indentation level used by the built-in fallback indenter when `loom fmt` is unavailable."
         },
         "loom.toolPath": {
           "type": "string",
@@ -135,13 +175,14 @@
       "[loom]": {
         "editor.tabSize": 4,
         "editor.insertSpaces": true,
-        "editor.formatOnType": false
+        "editor.formatOnType": false,
+        "editor.semanticHighlighting.enabled": true
       }
     }
   },
   "scripts": {
-    "test": "node ./test/smoke.js",
-    "package": "vsce package -o Loom-1.3.0.vsix"
+    "test": "node ./test/diagnostics.js && node ./test/language.js && node ./test/lsp.js && node ./test/client.js && node ./test/smoke.js",
+    "package": "vsce package --no-dependencies -o Loom-1.4.0.vsix"
   },
   "devDependencies": {
     "@vscode/vsce": "^2.26.1"

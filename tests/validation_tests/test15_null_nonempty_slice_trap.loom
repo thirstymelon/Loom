@@ -2,7 +2,7 @@ Module Test15NullNonemptySliceTrap
 
 Block Main
     Declares
-        Ptr : Signed_32 Pointer
+        Ptr : Signed_32 Pointer = Null
         View : Signed_32 Slice
     Implements
         View = Slice(Ptr, 1)

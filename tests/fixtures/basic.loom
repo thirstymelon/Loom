@@ -2,7 +2,7 @@
 # Loom Language Feature Tour & Canonical Reference
 # ==============================================================================
 # Demonstrates core syntax, data types, control flow structures,
-# low-level systems operators, pointers, records, and enums in Loom 1.3.0.
+# low-level systems operators, pointers, records, and enums in Loom 1.4.0.
 # ==============================================================================
 
 Module Feature_Tour

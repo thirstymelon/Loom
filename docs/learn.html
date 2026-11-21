@@ -1,0 +1,544 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Learn Loom · Complete Tutorials</title><style>
+:root{--bg:#fff;--fg:#16181d;--mut:#6a6f7a;--line:#e7e9ee;--acc:#3451d1;--code:#f5f6f8;--k:#c2255c;--t:#0b7285;--s:#2b8a3e;--n:#d9480f;--c:#868e96}
+@media(prefers-color-scheme:dark){:root{--bg:#0e0f12;--fg:#e6e8ec;--mut:#8b919c;--line:#22252b;--acc:#8fa6ff;--code:#15171b;--k:#ff8fab;--t:#66d9e8;--s:#8ce99a;--n:#ffa94d;--c:#6b7280}}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.7 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline;text-underline-offset:3px}
+.side{position:fixed;inset:0 auto 0 0;width:248px;padding:28px 22px;border-right:1px solid var(--line);overflow:auto;background:var(--bg)}
+.brand{font-weight:650;font-size:17px;letter-spacing:-.01em;color:var(--fg);display:block;margin-bottom:22px}.brand span{color:var(--mut);font-weight:400;font-size:12px;margin-left:6px}
+.side input{width:100%;font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);margin-bottom:18px}
+.side input:focus{outline:2px solid var(--acc);outline-offset:1px}
+.side h6{margin:20px 0 6px;font:600 11px/1 inherit;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.side a{display:block;padding:4px 0;font-size:14px;color:var(--mut)}.side a:hover{color:var(--fg);text-decoration:none}.side a.on{color:var(--fg);font-weight:600}.side a.sub{padding-left:12px;font-size:13px}
+main{margin-left:248px;padding:64px 32px 120px}article{max-width:720px;margin:0 auto}
+.top{display:none}
+h1{font-size:2.35rem;line-height:1.15;letter-spacing:-.03em;margin:0 0 14px;font-weight:650}
+h2{font-size:1.45rem;letter-spacing:-.02em;margin:3.2rem 0 .6rem;font-weight:650;padding-top:1.6rem;border-top:1px solid var(--line)}
+h3{font-size:1.05rem;margin:2rem 0 .3rem;font-weight:650}
+.lead{font-size:1.15rem;color:var(--mut);margin:0 0 2rem}
+p,li{color:var(--fg)}li{margin:.3rem 0}
+code{font:.86em ui-monospace,"SF Mono",Menlo,Consolas,monospace;background:var(--code);padding:.15em .4em;border-radius:5px}
+pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;margin:1.2rem 0;line-height:1.6}
+pre code{background:none;padding:0;font-size:13.5px;white-space:pre}
+.cp{position:absolute;top:8px;right:8px;font:12px inherit;color:var(--mut);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer;opacity:0;transition:.15s}pre:hover .cp,.cp:focus{opacity:1}
+.k{color:var(--k)}.t{color:var(--t)}.s{color:var(--s)}.n{color:var(--n)}.c{color:var(--c);font-style:italic}
+table{width:100%;border-collapse:collapse;margin:1.2rem 0;font-size:14.5px}th{text-align:left;font-weight:600;color:var(--mut);font-size:12px;letter-spacing:.05em;text-transform:uppercase}
+th,td{padding:9px 12px 9px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.note{border-left:2px solid var(--acc);padding:2px 0 2px 16px;margin:1.4rem 0;color:var(--mut)}.note p{color:var(--mut);margin:.4rem 0}
+.pn{display:flex;justify-content:space-between;gap:12px;margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-size:14px}.pn small{display:block;color:var(--mut)}
+@media(max-width:860px){.side{transform:translateX(-100%);transition:.2s;z-index:5;width:270px}body.o .side{transform:none;box-shadow:0 0 40px rgba(0,0,0,.25)}main{margin:0;padding:24px 20px 80px}.top{display:flex;align-items:center;justify-content:space-between;margin:-8px 0 24px;font-weight:650}.top button{font:inherit;background:none;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:4px 12px}h1{font-size:1.9rem}}
+</style></head><body><nav class="side"><a class="brand" href="index.html">Loom<span>v1.4.0</span></a><input id="q" placeholder="Filter lessons…" aria-label="Filter"><h6>Docs</h6><a href="index.html" class="">Overview</a><a href="start.html" class="">Getting started</a><a href="learn.html" class="on">Learn Loom</a><a class="sub" href="#l1">1 · Program structure</a><a class="sub" href="#l2">2 · Primitive data types</a><a class="sub" href="#l3">3 · Operators</a><a class="sub" href="#l4">4 · Conditionals & match</a><a class="sub" href="#l5">5 · Loops (all 4 forms)</a><a class="sub" href="#l6">6 · Procedures (blocks)</a><a class="sub" href="#l7">7 · Giving blocks & tuples</a><a class="sub" href="#l7-concise">7.1 · Omitting sections & concise syntax</a><a class="sub" href="#l8">8 · Records</a><a class="sub" href="#l9">9 · Records with Drop</a><a class="sub" href="#l10">10 · Collections</a><a class="sub" href="#l11">11 · Pointers</a><a class="sub" href="#l12">12 · Dynamic allocation</a><a class="sub" href="#l13">13 · Tasks & multithreading</a><a class="sub" href="#l14">14 · Async & await</a><a class="sub" href="#l15">15 · Error handling</a><a href="reference.html" class="">Language reference</a><a href="internals.html" class="">Compiler & targets</a></nav><main><div class="top"><span>Loom</span><button id="mb">Menu</button></div><article><h1>Learn Loom</h1><p class="lead">A complete, beginner-friendly tour of the Loom systems programming language. Every lesson is an executable, standalone program.</p>
+
+<h2 id="l1">1 · Program Structure & Hello, World</h2>
+<p>Every Loom source file begins with a <code>Module</code> declaration naming the module. Program execution begins at <code>Block Main</code>. Statements are written inside an <code>Implements</code> block, and every block closes with <code>End Name</code>. The <code>Print</code> built-in writes text followed by a newline to standard output. Characters following <code>#</code> are comments.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Implements
+    Print("Hello, Loom!")   # Standard output print
+End Main</code></pre>
+
+<h2 id="l2">2 · Primitive Data Types & Variables</h2>
+<p>Loom provides explicit, fixed-width numeric and scalar types. Variables are declared inside the <code>Declares</code> section of a block. Uninitialized variables are automatically zero-initialized, or you can provide an initial value. Loom disallows silent implicit conversions; converting between types is written explicitly with <code>as</code>.</p>
+<table>
+<tr><th>Type</th><th>Bit Width</th><th>Example Literals</th></tr>
+<tr><td><code>Signed_8, 16, 32, 64</code></td><td>8 to 64 bits</td><td><code>42</code>, <code>-100</code>, <code>100_000</code></td></tr>
+<tr><td><code>Unsigned_8, 16, 32, 64</code></td><td>8 to 64 bits</td><td><code>0xFF</code>, <code>0b1010</code>, <code>255</code></td></tr>
+<tr><td><code>Float_32, Float_64</code></td><td>32 or 64 bits</td><td><code>3.14159</code>, <code>-0.5</code></td></tr>
+<tr><td><code>Boolean</code></td><td>1 bit</td><td><code>True</code>, <code>False</code></td></tr>
+<tr><td><code>Character</code></td><td>32-bit Unicode</td><td><code>'A'</code>, <code>'\n'</code>, <code>'é'</code></td></tr>
+<tr><td><code>String</code></td><td>UTF-8 text</td><td><code>"Hello &lt;Name&gt;"</code></td></tr>
+</table>
+<p>Strings support inline interpolation via <code>&lt;Expr&gt;</code>, including optional formatting flags like <code>&lt;Value:.2f&gt;</code> (two decimal places) or <code>&lt;Hex:04X&gt;</code> (4-digit uppercase hexadecimal).</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Age : Signed_32 = 25
+    Count : Unsigned_64 = 1000
+    Price : Float_64 = 19.99
+    Active : Boolean = True
+    Grade : Character = 'A'
+    Name : String = "Loom"
+Implements
+    Print("&lt;Name&gt;: Age &lt;Age&gt;, Price $&lt;Price:.2f&gt;, Grade &lt;Grade&gt;, Active=&lt;Active&gt;")
+End Main</code></pre>
+
+<h2 id="l3">3 · Operators & Expressions</h2>
+<p>Loom supports a full set of arithmetic, bitwise, comparison, and logical operators. Integer arithmetic is automatically safety-checked against overflow.</p>
+<table>
+<tr><th>Category</th><th>Operators</th></tr>
+<tr><td>Arithmetic</td><td><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>Mod</code>, <code>pow</code></td></tr>
+<tr><td>Bitwise</td><td><code>&amp;</code> (AND), <code>|</code> (OR), <code>^</code> (XOR), <code>~</code> (NOT), <code>LSL</code>, <code>LSR</code></td></tr>
+<tr><td>Comparison</td><td><code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code></td></tr>
+<tr><td>Logical</td><td><code>And</code>, <code>Or</code>, <code>Not</code></td></tr>
+<tr><td>Compound</td><td><code>+=</code>, <code>-=</code>, <code>*=</code>, <code>/=</code>, <code>&amp;=</code>, <code>|=</code></td></tr>
+</table>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    A : Signed_32 = 14
+    B : Signed_32 = 4
+    BitA : Unsigned_32 = 0b0011
+    BitB : Unsigned_32 = 0b0101
+Implements
+    Print(A + B)       # 18
+    Print(A - B)       # 10
+    Print(A * B)       # 56
+    Print(A / B)       # 3
+    Print(A Mod B)     # 2
+    Print(BitA &amp; BitB)  # 1
+    Print(BitA | BitB)  # 7
+    Print(BitA ^ BitB)  # 6
+    Print(BitA LSL 2)  # 12
+End Main</code></pre>
+
+<h2 id="l4">4 · Conditionals & Pattern Matching</h2>
+<p>Branches are evaluated using <code>If</code>, <code>Else If</code>, and <code>Else</code> blocks, concluding with <code>End If</code>. For multi-way branching, Loom provides <code>Match</code>, which matches discrete values or closed ranges (<code>Low .. High</code>) with an optional <code>Default</code> fallback branch.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Score : Signed_32 = 85
+Implements
+    If Score &gt;= 90
+        Print("Grade: A")
+    Else If Score &gt;= 80
+        Print("Grade: B")
+    Else
+        Print("Grade: C")
+    End If
+
+    Match Score
+        When 90 .. 100:
+            Print("Outstanding")
+        When 80 .. 89:
+            Print("Great work")
+        Default:
+            Print("Keep going")
+    End Match
+End Main</code></pre>
+
+<h2 id="l5">5 · Loops & Iteration (All 4 Forms)</h2>
+<p>Loom provides four distinct looping mechanisms for every iteration scenario.</p>
+
+<h3>5.1 Infinite Loop with Exit and Skip</h3>
+<p>An unconditional loop that runs until <code>Exit</code> is called. <code>Skip</code> skips the rest of the current iteration and jumps to the next cycle.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    I : Signed_32 = 0
+Implements
+    Loop
+        I += 1
+        If I == 2
+            Skip       # Skips printing 2
+        End If
+        If I &gt; 4
+            Exit       # Terminates the loop
+        End If
+        Print(I)
+    End Loop
+End Main</code></pre>
+
+<h3>5.2 While Loop (Loop while)</h3>
+<p>Tests a condition at the top of the loop and executes as long as the condition evaluates to <code>True</code>.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Count : Signed_32 = 1
+Implements
+    Loop while Count &lt;= 3
+        Print(Count)
+        Count += 1
+    End Loop
+End Main</code></pre>
+
+<h3>5.3 Until Loop (Loop until)</h3>
+<p>Executes as long as the condition evaluates to <code>False</code>, terminating as soon as the condition becomes <code>True</code>.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Step : Signed_32 = 1
+Implements
+    Loop until Step &gt; 3
+        Print(Step)
+        Step += 1
+    End Loop
+End Main</code></pre>
+
+<h3>5.4 For-In Loop (Ranges & Collections)</h3>
+<p>Iterates cleanly over numeric ranges (<code>1 .. N</code>) or collection elements with value binding or index-value pair binding (<code>Loop Idx, Val in Arr</code>).</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Arr : Signed_32 Array[3] = {10, 20, 30}
+Implements
+    # Range iteration
+    Loop N in 1 .. 3
+        Print(N)
+    End Loop
+
+    # Collection element and index iteration
+    Loop Idx, Val in Arr
+        Print("Item &lt;Idx&gt;: &lt;Val&gt;")
+    End Loop
+End Main</code></pre>
+
+<h2 id="l6">6 · Procedures (Blocks)</h2>
+<p>Functions without a return value are procedural blocks. Parameters are declared following the <code>Takes</code> keyword. Parameter types are strictly enforced.</p>
+<pre><code class="l">Module Main
+
+Block Greet
+Takes
+    Name : String
+    Times : Signed_32
+Declares
+    I : Signed_32 = 0
+Implements
+    Loop while I &lt; Times
+        Print("Welcome, &lt;Name&gt;!")
+        I += 1
+    End Loop
+End Greet
+
+Block Main
+Implements
+    Greet("Loom Developer", 2)
+End Main</code></pre>
+
+<h2 id="l7">7 · Giving Blocks & Multiple Returns (Tuples)</h2>
+<p>Blocks that produce a return value declare <code>Produces &lt;Type&gt;</code> and return results via the <code>Give</code> keyword. Loom also supports lightweight tuples for multiple return values with destructuring assignment.</p>
+<pre><code class="l">Module Main
+
+Block MinMax
+Takes
+    A : Signed_32
+    B : Signed_32
+Produces (Signed_32, Signed_32)
+Implements
+    If A &lt;= B
+        Give (A, B)
+    Else
+        Give (B, A)
+    End If
+End MinMax
+
+Block Main
+Declares
+    Lo : Signed_32
+    Hi : Signed_32
+Implements
+    Lo, Hi = MinMax(42, 17)   # Tuple unpacking assignment
+    Print("Low: &lt;Lo&gt;")
+    Print("High: &lt;Hi&gt;")
+End Main</code></pre>
+
+<h3 id="l7-concise">7.1 · Omitting Empty Sections & Concise Giving Blocks</h3>
+<p>To reduce boilerplate, Loom allows you to completely omit empty sections:</p>
+<ul>
+<li><b>Omit <code>Takes</code>:</b> When a procedure or function takes no parameters.</li>
+<li><b>Omit <code>Declares</code>:</b> When a block declares no local variables.</li>
+<li><b>Omit <code>Produces</code>:</b> When a block returns no value (procedural blocks).</li>
+<li><b>Omit <code>Implements</code> and <code>Give</code>:</b> Single-expression giving blocks can write their return expression directly on the <code>Produces</code> line, completely omitting <code>Implements</code> and <code>Give</code>:</li>
+</ul>
+<pre><code class="l">Block Double
+Takes
+    Num : Signed_32
+Produces Num * 2
+End Double</code></pre>
+<p>The following example shows how omitting <code>Takes</code>, <code>Declares</code>, <code>Implements</code>, and <code>Produces</code> keeps Loom code clean and minimal:</p>
+<pre><code class="l">Module Main
+
+# 1. Omits Takes, Declares, and Produces (simple void procedure)
+Block Greet Implements
+    Print("Welcome to Loom!")
+End Greet
+
+# 2. Concise Giving Block: Omits Declares, Implements, and Give
+Block Double
+Takes
+    Num : Signed_32
+Produces Num * 2
+End Double
+
+# 3. Omits Declares: Takes arguments and gives a result directly
+Block Add
+Takes
+    A : Signed_32
+    B : Signed_32
+Produces Signed_32
+Implements
+    Give A + B
+End Add
+
+# 4. Omits Takes and Produces: Entry point with Declares and Implements
+Block Main Declares
+    Value : Signed_32 = 21
+Implements
+    Greet()
+    Print("Double: &lt;Double(Value)&gt;")
+    Print("Sum: &lt;Add(10, 32)&gt;")
+End Main</code></pre>
+
+<h2 id="l8">8 · Records & Data Structures</h2>
+<p>A <code>Record</code> defines a custom composite data type with named, typed fields. Records are value types copied on assignment. You can instantiate records field-by-field or using structured record literals <code>RecordName{ Field: Val }</code>.</p>
+<pre><code class="l">Module Main
+
+Record Point
+    X : Signed_32
+    Y : Signed_32
+End Point
+
+Block Main
+Declares
+    P : Point
+    Origin : Point
+Implements
+    P.X = 10
+    P.Y = 25
+    Origin = Point{ X: 0, Y: 0 }
+    Print("Point: (&lt;P.X&gt;, &lt;P.Y&gt;)")
+    Print("Origin: (&lt;Origin.X&gt;, &lt;Origin.Y&gt;)")
+End Main</code></pre>
+
+<h2 id="l9">9 · Records with Drop (RAII Destructors)</h2>
+<p>Loom supports deterministic resource management without a garbage collector. By defining an optional <code>Drop</code> block inside a <code>Record</code>, the compiler guarantees that the cleanup code executes automatically whenever the record variable goes out of scope &mdash; including early block exits.</p>
+<pre><code class="l">Module Main
+
+Record SafeBuffer
+    Ptr : Signed_32 Pointer
+Drop
+    If Ptr != Null
+        Release(Ptr)
+        Print("SafeBuffer released automatically")
+    End If
+End SafeBuffer
+
+Block ProcessBuffer
+Declares
+    Buf : SafeBuffer
+Implements
+    Buf.Ptr = Allocate(16)
+    Print("Processing data inside buffer")
+    # Buf is dropped and freed here automatically!
+End ProcessBuffer
+
+Block Main
+Implements
+    ProcessBuffer()
+End Main</code></pre>
+
+<h2 id="l10">10 · Collection Types</h2>
+<p>Loom provides a comprehensive suite of collection types tailored for systems development. All collections use 1-based indexing.</p>
+
+<h3>10.1 Fixed Arrays (T Array[N])</h3>
+<p>Stack-allocated fixed-size buffers with compile-time bounds and a <code>.Length</code> property.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Arr : Signed_32 Array[4] = {5, 10, 15, 20}
+Implements
+    Arr[1] = 99
+    Print(Arr[1])
+    Print(Arr.Length)
+End Main</code></pre>
+
+<h3>10.2 Slices (T Slice)</h3>
+<p>Non-owning views into continuous memory. Slices can be created from arrays or vectors using range notation <code>Arr[Start .. End]</code>.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Arr : Signed_32 Array[5] = {10, 20, 30, 40, 50}
+    Part : Signed_32 Slice
+Implements
+    Part = Arr[2 .. 4]   # Elements 2, 3, and 4
+    Print(Part[1])       # 20
+    Print(Part.Length)   # 3
+End Main</code></pre>
+
+<h3>10.3 Dynamic Vectors (T Vector)</h3>
+<p>Growable heap-allocated arrays. Append elements dynamically with <code>.Push(item)</code>.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Vec : Signed_32 Vector[0]
+Implements
+    Vec.Push(100)
+    Vec.Push(200)
+    Print(Vec[1])        # 100
+    Print(Vec.Length)    # 2
+End Main</code></pre>
+
+<h3>10.4 Dynamic Text (Text)</h3>
+<p>Mutable string buffers supporting fast dynamic concatenation via <code>+=</code>.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Txt : Text
+Implements
+    Txt += "Loom "
+    Txt += "Language"
+    Print(Txt)           # Loom Language
+    Print(Txt.Length)    # 13
+End Main</code></pre>
+
+<h3>10.5 Hash Maps (HMap[K : V])</h3>
+<p>Fast associative open-addressing hash table supporting typed keys and values.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Scores : HMap[String : Signed_32]
+Implements
+    Scores["Alice"] = 95
+    Scores["Bob"] = 88
+    Print(Scores["Alice"])
+    Print(Scores.Length)
+End Main</code></pre>
+
+<h2 id="l11">11 · Pointers & Memory Addresses</h2>
+<p>Loom provides raw pointer capabilities for systems programming. Obtain addresses using <code>Address(Variable)</code>, dereference with <code>Deref(Ptr)</code>, or index into memory with <code>Ptr[Index]</code>. Unassigned pointers are equal to <code>Null</code>.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Num : Signed_32 = 100
+    Ptr : Signed_32 Pointer
+Implements
+    Ptr = Address(Num)
+    Print(Deref(Ptr))   # Reads 100
+    Ptr[1] = 250        # Mutates Num directly
+    Print(Num)          # Prints 250
+End Main</code></pre>
+
+<h2 id="l12">12 · Dynamic Memory Allocation</h2>
+<p>Manual heap memory management is explicit through <code>Allocate(count)</code>, <code>Resize(ptr, count)</code>, and <code>Release(ptr)</code>. Pair allocations with an <code>Ensure { ... }</code> block to guarantee cleanup when the enclosing block terminates.</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Memory : Signed_32 Pointer
+Implements
+    Memory = Allocate(8)
+    Ensure {
+        Release(Memory)
+        Print("Memory cleaned up")
+    }
+    Memory[1] = 1234
+    Print(Memory[1])
+End Main</code></pre>
+
+<h2 id="l13">13 · Tasks & Multithreading</h2>
+<p>Concurrency is built directly into Loom. The <code>Spawn</code> keyword launches a function asynchronously on an OS thread pool, returning a typed <code>Task_Handle</code>. Calling <code>Join</code> halts until the task finishes and returns the produced value.</p>
+<pre><code class="l">Module Main
+
+Block ComputeWorker
+Takes
+    Base : Signed_32
+Produces Signed_32
+Implements
+    Give Base * 2
+End ComputeWorker
+
+Block Main
+Declares
+    Handle : Signed_32 Task_Handle
+    Answer : Signed_32
+Implements
+    Handle = Spawn ComputeWorker(21)
+    Answer = Join Handle
+    Print(Answer)       # 42
+End Main</code></pre>
+
+<h2 id="l14">14 · Asynchronous Programming (Async / Await)</h2>
+<p>Loom provides first-class asynchronous routines declared with <code>Async Block</code>. Calling an async block yields a <code>Future[T]</code>. Use <code>Await</code> to suspend and retrieve the completed value.</p>
+<pre><code class="l">Module Main
+
+Async Block AsyncFetch
+Takes
+    Value : Signed_32
+Produces Signed_32
+Declares
+    Result : Signed_32
+Implements
+    Result = Value * 10
+    Give Result
+End AsyncFetch
+
+Block Main
+Declares
+    Fut : Future[Signed_32]
+    Result : Signed_32
+Implements
+    Fut = AsyncFetch(5)
+    Result = Await Fut
+    Print(Result)       # 50
+End Main</code></pre>
+
+<h2 id="l15">15 · Error Handling & Modules</h2>
+<p>Functions that may fail declare error unions with <code>Produces Type or ErrorEnum</code>. Inside functions that produce errors, <code>try</code> unwraps the value or immediately returns the error. Multi-file projects organize code using <code>Module</code>, <code>Import</code>, and <code>use</code>.</p>
+<pre><code class="l">Module Main
+
+Enum MathError : Signed_32
+    DivZero = 1
+End MathError
+
+Block Divide
+Takes
+    A : Signed_32
+    B : Signed_32
+Produces Signed_32 or MathError
+Implements
+    If B == 0
+        Give MathError.DivZero
+    End If
+    Give A / B
+End Divide
+
+Block Calculate
+Produces Signed_32 or MathError
+Declares
+    Val : Signed_32
+Implements
+    Val = try Divide(100, 4)
+    Give Val + 5
+End Calculate
+
+Block Main
+Declares
+    Res : Signed_32 or MathError
+Implements
+    Res = Calculate()
+    Print("Calculation finished successfully")
+End Main</code></pre>
+
+<div class="pn"><a href="start.html"><small>Previous</small>Getting started</a><a href="reference.html" style="text-align:right"><small>Next</small>Language reference</a></div></article></main><script>
+const K=/\b(Module|Import|use|Block|Takes|Produces|Declares|Implements|End|Give|If|Else|Default|Loop|while|until|Exit|Skip|Match|When|Ensure|Record|Enum|Constant|Address|Deref|Cast|as|try|or|Print|Spawn|Join|Allocate|Resize|Release|Packed|Align|Volatile|And|Or|Not|Mod|LSL|LSR|True|False|Null|Pointer|Array|Slice|Vector|Text|HMap|Block_Pointer|Task_Handle|Move|Copy|Borrow|Async|Await|Future|Drop)\b/g;
+const T=/\b(Signed_(?:8|16|32|64)|Unsigned_(?:8|16|32|64)|Float_(?:32|64)|Boolean|Character|String|No_Type)\b/g;
+document.querySelectorAll('code.l').forEach(el=>{let s=el.textContent,o=[],re=/(#.*)|("(?:[^"\\]|\\.)*")|(\b0x[0-9A-Fa-f_]+\b|\b\d[\d_]*(?:\.\d+)?\b)|([A-Za-z_][A-Za-z_0-9]*)|([\s\S])/g,m;
+const E=x=>x.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+while(m=re.exec(s)){let x=m[0],e=E(x);
+if(m[1])o.push('<span class="c">'+e+'</span>');
+else if(m[2])o.push('<span class="s">'+e+'</span>');
+else if(m[3])o.push('<span class="n">'+e+'</span>');
+else if(m[4]){if(x.match(K))o.push('<span class="k">'+e+'</span>');
+else if(x.match(T))o.push('<span class="t">'+e+'</span>');
+else o.push(e);}else o.push(e);}
+el.innerHTML=o.join('');
+let b=document.createElement('button');b.className='cp';b.textContent='Copy';
+b.onclick=()=>{navigator.clipboard.writeText(s);b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1200)};
+el.parentNode.appendChild(b);});
+let q=document.getElementById('q');
+if(q){q.oninput=()=>{let v=q.value.toLowerCase();document.querySelectorAll('.side a.sub').forEach(a=>{a.style.display=a.textContent.toLowerCase().includes(v)?'block':'none'})};}
+let mb=document.getElementById('mb');if(mb)mb.onclick=()=>document.body.classList.toggle('o');
+</script></body></html>

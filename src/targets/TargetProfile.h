@@ -7,8 +7,6 @@ namespace loom {
 
 enum class TargetArchitecture {
     Native,
-    RP2040,
-    CortexM0Plus,
     GenericBaremetal
 };
 
@@ -51,28 +49,9 @@ public:
     uint32_t defaultStackAlignment() const override { return 16; }
 };
 
-class RP2040TargetProfile : public TargetProfile {
-public:
-    TargetArchitecture architecture() const override { return TargetArchitecture::RP2040; }
-    std::string name() const override { return "rp2040"; }
-    std::string triple() const override { return "thumbv6m-none-eabi"; }
-    std::string cpu() const override { return "cortex-m0plus"; }
-    std::string features() const override { return "+strict-align"; }
-
-    bool supportsHeap() const override { return false; }
-    bool supportsThreads() const override { return false; }
-    bool supportsFileIO() const override { return false; }
-    bool supportsVectorSIMD() const override { return false; }
-    bool supportsVolatileIO() const override { return true; }
-
-    uint32_t pointerWidth() const override { return 32; }
-    uint32_t defaultStackAlignment() const override { return 8; }
-};
-
-inline std::unique_ptr<TargetProfile> createTargetProfile(bool baremetal, const std::string& targetName = "") {
-    if (baremetal || targetName == "rp2040") {
-        return std::make_unique<RP2040TargetProfile>();
-    }
+inline std::unique_ptr<TargetProfile> createTargetProfile(bool baremetal = false, const std::string& targetName = "") {
+    (void)baremetal;
+    (void)targetName;
     return std::make_unique<NativeTargetProfile>();
 }
 

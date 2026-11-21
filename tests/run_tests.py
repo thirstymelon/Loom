@@ -15,22 +15,22 @@ positive = {
     "constant_true_give_coverage": ("Block F Produces Signed_32\nImplements\n If True\n  Give 3\n End If\nEnd F\n", ["define i32 @F", "ret i32"]),
     "constant_false_if": ("Block Main Declares\n X : Signed_32\nImplements\n If False\n  X = 1\n End If\nEnd Main\n", ["define void @Main", "ret void"]),
     "give_from_if_then": ("Block F Takes\n B : Boolean\nProduces Signed_32\nImplements\n If B\n  Give 3\n End If\n Give 4\nEnd F\n", ["if.then", "ret i32"]),
-    "multiline_takes_two_signed32": ("Block Add Takes\n A : Signed_32\n B : Signed_32\nProduces Signed_32\nImplements\n Give A + B\nEnd Add\n", ["define i32 @Add(i32 %A, i32 %B)", "add i32"]),
-    "precedence_parentheses": ("Block Calc Takes\n X : Signed_32\n Y : Signed_32\nProduces Signed_32\nImplements\n Give (X + 3) * 4 - 8 / Y\nEnd Calc\n", ["add i32", "mul i32", "sdiv i32", "sub i32"]),
-    "left_associative_subtraction": ("Block F Takes\n A : Signed_32\n B : Signed_32\n C : Signed_32\nProduces Signed_32\nImplements\n Give A - B - C\nEnd F\n", ["sub i32"]),
+    "multiline_takes_two_signed32": ("Block Add Takes\n A : Signed_32\n B : Signed_32\nProduces Signed_32\nImplements\n Give A + B\nEnd Add\n", ["define i32 @Add(i32 %A, i32 %B)", "sadd.with.overflow.i32"]),
+    "precedence_parentheses": ("Block Calc Takes\n X : Signed_32\n Y : Signed_32\nProduces Signed_32\nImplements\n Give (X + 3) * 4 - 8 / Y\nEnd Calc\n", ["sadd.with.overflow.i32", "smul.with.overflow.i32", "sdiv i32", "ssub.with.overflow.i32"]),
+    "left_associative_subtraction": ("Block F Takes\n A : Signed_32\n B : Signed_32\n C : Signed_32\nProduces Signed_32\nImplements\n Give A - B - C\nEnd F\n", ["ssub.with.overflow.i32"]),
     "boolean_and_not": ("Block Test Takes\n A : Boolean\n B : Boolean\nProduces Boolean\nImplements\n Give Not A And B Or A\nEnd Test\n", ["and.rhs", "or.rhs", "xor i1"]),
     "boolean_equal": ("Block Test Takes\n A : Boolean\nProduces Boolean\nImplements\n Give A == False\nEnd Test\n", ["icmp eq i1"]),
     "locals_if_compare": ("Block Main Declares\n X : Signed_16\nImplements\n X = 9\n If X < 10\n X = X + 1\n End If\nEnd Main\n", ["alloca i16", "icmp slt i16", "if.end"]),
     "local_expression_initializers": ("Block Main Declares\n A : Signed_32 = 4\n B : Signed_32 = 5\n Total : Signed_32 = Add(A, B)\nImplements\n Print(Total)\nEnd Main\nBlock Add Takes\n A : Signed_32\n B : Signed_32\nProduces Signed_32\nImplements\n Give A + B\nEnd Add\n", ["store i32 4", "store i32 5", "call i32 @Add", "call i32 (ptr, ...) @printf"]),
-    "loop_exit_skip": ("Block Main Declares\n B : Boolean\nImplements\n Loop\n  If B\n   Skip\n  End If\n  Exit\n End Loop\nEnd Main\n", ["loop.header", "loop.exit", "br label %loop.header"]),
+    "loop_exit_skip": ("Block Main Declares\n B : Boolean = True\nImplements\n Loop\n  If B\n   Skip\n  End If\n  Exit\n End Loop\nEnd Main\n", ["loop.header", "loop.exit", "br label %loop.header"]),
     "nested_loop_targets": ("Block Main\nImplements\n Loop\n  Loop\n   Exit\n  End Loop\n  Skip\n End Loop\nEnd Main\n", ["loop.header1", "br label %loop.exit2", "br label %loop.header"]),
-    "nested_inner_skip": ("Block Main Declares\n B : Boolean\nImplements\n Loop\n  Loop\n   If B\n    Skip\n   End If\n   Exit\n  End Loop\n  Exit\n End Loop\nEnd Main\n", ["br label %loop.header1", "br label %loop.exit2", "br label %loop.exit"]),
+    "nested_inner_skip": ("Block Main Declares\n B : Boolean = True\nImplements\n Loop\n  Loop\n   If B\n    Skip\n   End If\n   Exit\n  End Loop\n  Exit\n End Loop\nEnd Main\n", ["br label %loop.header1", "br label %loop.exit2", "br label %loop.exit"]),
     "write_string": ("Block Main\nImplements\n Print(\"Hello\")\n Print(\"\")\nEnd Main\n", ["call i32 (ptr, ...) @printf", ".loom.string.", ".loom.write.character"]),
     "function_call": ("Block Add Takes\n X : Signed_32\nProduces Signed_32\nImplements\n Give X + 1\nEnd Add\nBlock Main Declares\n Y : Signed_32\nImplements\n Y = Add(41)\nEnd Main\n", ["call i32 @Add(i32 41)"]),
     "forward_and_recursive_call": ("Block Main Declares\n Y : Signed_32\nImplements\n Y = SumTo(4)\nEnd Main\nBlock SumTo Takes\n N : Signed_32\nProduces Signed_32\nImplements\n If N <= 0\n  Give 0\n Else\n  Give N + SumTo(N - 1)\n End If\nEnd SumTo\n", ["call i32 @SumTo", "if.else"]),
     "procedure_call_statement": ("Block Log Implements\n Print(\"logged\")\nEnd Log\nBlock Main Implements\n Log()\nEnd Main\n", ["call void @Log()"]),
     "else_complete_result": ("Block Choose Takes\n B : Boolean\nProduces Signed_32\nImplements\n If B\n  Give 1\n Else\n  Give 2\n End If\nEnd Choose\n", ["if.else", "ret i32 1", "ret i32 2"]),
-    "loop_until": ("Block Main Declares\n N : Signed_32\n Ready : Boolean\nImplements\n Loop Until Ready\n  N = N + 1\n  Ready = N >= 2\n End Loop\nEnd Main\n", ["loop.header", "loop.body", "icmp sge i32"]),
+    "loop_until": ("Block Main Declares\n N : Signed_32 = 0\n Ready : Boolean = False\nImplements\n Loop Until Ready\n  N = N + 1\n  Ready = N >= 2\n End Loop\nEnd Main\n", ["loop.header", "loop.body", "icmp sge i32"]),
     "float_ops": ("Block Twice Takes\n X : Float_64\nProduces Float_64\nImplements\n Give X * 2.5 - 1.0 / 2.0\nEnd Twice\n", ["define double @Twice", "fmul double", "fsub double"]),
     "string_assignment_and_write": ("Block Main Declares\n S : String\nImplements\n S = \"UTF-8: café\\n\"\n Print(S)\nEnd Main\n", [".loom.string.", "call i32 (ptr, ...) @printf"]),
     "write_scalar_and_record_types": ("Record Pair\n Left : Signed_16\n Label : String\nEnd Pair\nEnum Mode : Unsigned_8\n Active = 2\nEnd Mode\nBlock Main Declares\n N : Signed_8 = -3\n U : Unsigned_64 = 9\n F : Float_32 = 1.5\n Ready : Boolean = True\n C : Character = 'é'\n State : Mode = Mode.Active\n P : Pair\nImplements\n P.Left = 4\n P.Label = \"x\"\n Print(N)\n Print(U)\n Print(F)\n Print(Ready)\n Print(C)\n Print(State)\n Print(P)\nEnd Main\n", ["%llu", "%g", "True", "two.byte", "Pair{", "Left: ", "Label: "]),
@@ -39,12 +39,12 @@ positive = {
     "enum_declaration_use": ("Enum Mode : Unsigned_8\n Idle = 0\n Flying = 2\nEnd Mode\nBlock Main Declares\n Current : Mode\nImplements\n Current = Mode.Flying\n If Current == Mode.Flying\n  Print(\"flying\")\n End If\nEnd Main\n", ["alloca i8", "store i8 2", "icmp eq i8"]),
     "enum_global_constant": ("Enum Mode : Unsigned_8\n Idle = 0\n Flying = 2\nEnd Mode\nBlock Global\nDeclares\n Default_Mode : Constant Mode = Mode.Idle\nEnd Global\nBlock Main Implements\nEnd Main\n", ["@Default_Mode = constant i8 0"]),
     "record_field_read_write": ("Record Sensor_Data\n Roll : Float_32\n Pitch : Signed_32\nEnd Sensor_Data\nBlock Main Declares\n Sensor : Sensor_Data\n Value : Float_32\nImplements\n Sensor.Roll = 1.5\n Sensor.Pitch = 12\n Value = Sensor.Roll\nEnd Main\n", ["%Sensor_Data = type { float, i32 }", "getelementptr inbounds nuw %Sensor_Data", "store float 1.500000e+00"]),
-    "nested_record_field_read": ("Record Point\n X : Signed_32\nEnd Point\nRecord Sensor\n Position : Point\nEnd Sensor\nBlock Main Declares\n Device : Sensor\n X : Signed_32\nImplements\n X = Device.Position.X\nEnd Main\n", ["%Point = type { i32 }", "%Sensor = type { %Point }", "getelementptr inbounds nuw %Sensor"]),
+    "nested_record_field_read": ("Record Point\n X : Signed_32\nEnd Point\nRecord Sensor\n Position : Point\nEnd Sensor\nBlock Main Declares\n P : Point\n Device : Sensor\n X : Signed_32\nImplements\n P.X = 10\n Device.Position = P\n X = Device.Position.X\nEnd Main\n", ["%Point = type { i32 }", "%Sensor = type { %Point }", "getelementptr inbounds nuw %Sensor"]),
     "global_record_zero_init": ("Record Pair\n Left : Signed_32\n Right : Signed_32\nEnd Pair\nBlock Global\nDeclares\n Shared : Pair\nEnd Global\nBlock Main Implements\n Shared.Left = 5\nEnd Main\n", ["@Shared = global %Pair zeroinitializer", "store i32 5, ptr @Shared"]),
     "constant_prefix_global_and_write_uart": ("Module UartTest\nBlock Global\nDeclares\n BAUD : Constant Signed_32 = 115200\n PIN : Constant Signed_32 = 25\n State : Signed_32 = 1\nEnd Global\nBlock Main\nDeclares\n Msg : String = \"RP2040\"\n Count : Signed_32 = 10\n Local_Const : Constant Signed_32 = 999\nImplements\n Write_UART(\"Baud: <BAUD>, Pin: <PIN>, Local: <Local_Const>\")\n Write_UART(Msg)\n Write_UART(123)\n Write_UART(\"Count: <Count>\")\nEnd Main\n", ["@BAUD = constant i32 115200", "@PIN = constant i32 25", "@State = global i32 1", "call i32 (ptr, ...) @printf"]),
     "give_inside_loop": ("Block Value Produces Signed_8\nImplements\n Loop\n  Give 7\n End Loop\nEnd Value\n", ["define i8 @Value", "ret i8"]),
     "pointer_address_and_deref": ("Block Main Declares\n X : Signed_32 = 10\n P : Pointer[Signed_32]\nImplements\n P = Address(X)\n Deref(P) = 42\n Print(X)\nEnd Main\n", ["store i32 42", "call i32 (ptr, ...) @printf"]),
-    "pointer_record_fields": ("Record Point\n X : Signed_32\n Y : Signed_32\nEnd Point\nBlock Main Declares\n Pt : Point\n Ptr : Pointer[Point]\nImplements\n Ptr = Address(Pt)\n Deref(Ptr).X = 100\n Deref(Ptr).Y = 200\n Print(Pt)\nEnd Main\n", ["getelementptr inbounds nuw %Point", "Point{"]),
+    "pointer_record_fields": ("Record Point\n X : Signed_32\n Y : Signed_32\nEnd Point\nBlock Main Declares\n Pt : Point\n Ptr : Pointer[Point]\nImplements\n Pt.X = 0\n Pt.Y = 0\n Ptr = Address(Pt)\n Deref(Ptr).X = 100\n Deref(Ptr).Y = 200\n Print(Pt)\nEnd Main\n", ["getelementptr inbounds nuw %Point", "Point{"]),
     "block_gives_record": ("Record Point\n X : Signed_32\n Y : Signed_32\nEnd Point\nBlock MakePoint Takes\n X : Signed_32\n Y : Signed_32\nProduces Point\nDeclares\n P : Point\nImplements\n P.X = X\n P.Y = Y\n Give P\nEnd MakePoint\nBlock Main Declares\n Pt : Point\nImplements\n Pt = MakePoint(1, 2)\n Print(Pt)\nEnd Main\n", ["define %Point @MakePoint", "call %Point @MakePoint", "ret %Point"]),
 }
 for bits in (8, 16, 32, 64):
@@ -63,7 +63,7 @@ positive["pointer_syntax_postfix"] = ("Block Main Declares\n X : Signed_32 = 42\
 positive["array_and_slice"] = ("Block Main Declares\n Arr : Signed_32 Array[3]\n Slc : Signed_32 Slice\nImplements\n Arr[1] = 10\n Slc = Slice(Arr)\n Print(Slc[1])\n Print(Slc.Length)\nEnd Main\n", ["alloca [3 x i32]", "alloca { ptr, i64 }", "getelementptr"])
 positive["string_indexing_returns_byte"] = ("Block Main Declares\n S : String = \"Loom\"\n First : Unsigned_8\nImplements\n First = S[1]\n Print(First)\n Print(S.Length)\nEnd Main\n", ["str.byte", "call i64 @strlen"])
 positive["character_cast_valid_scalar"] = ("Block Main Declares\n C : Character = Cast[Character](233)\n Zero : Character = Cast[Character](-0)\nImplements\n Print(C)\n Print(Zero)\nEnd Main\n", ["store i32 233", "store i32 0"])
-positive["default_uninitialized_null_pointer"] = ("Block Main Declares\n Ptr : Signed_32 Pointer\nImplements\n Print(Ptr)\nEnd Main\n", ["ptr.null", "Null"])
+positive["default_uninitialized_null_pointer"] = ("Block Main Declares\n Ptr : Signed_32 Pointer = Null\nImplements\n Print(Ptr)\nEnd Main\n", ["ptr.null", "Null"])
 positive["ensure_statement"] = ("Block Main Implements\n Ensure { Print(1) }\n Print(2)\nEnd Main\n", ["call i32 (ptr, ...) @printf"])
 positive["cast_widening"] = ("Block Main Declares\n Small : Signed_16 = 12\n Big : Signed_64\nImplements\n Big = Cast[Signed_64](Small)\n Print(Big)\nEnd Main\n", ["sext i16", "to i64"])
 positive["null_pointer_and_short_circuit"] = ("Block Main Declares\n Ptr : Signed_32 Pointer = Null\nImplements\n If Ptr != Null And Deref(Ptr) == 100\n  Print(1)\n End If\nEnd Main\n", ["icmp ne ptr", "and.rhs", "and.merge"])
@@ -162,9 +162,9 @@ with tempfile.TemporaryDirectory(prefix="loom-tests-") as td:
             if needle not in ir:
                 raise SystemExit(f"FAIL {name}: needle '{needle}' not found in emitted LLVM IR:\n{ir}")
         if name == "precedence_parentheses":
-            order = [ir.find(op) for op in ("add i32", "mul i32", "sdiv i32", "sub i32")]
+            order = [ir.find(op) for op in ("sadd.with.overflow.i32", "smul.with.overflow.i32", "sdiv i32", "ssub.with.overflow.i32")]
             if order != sorted(order): raise SystemExit(f"FAIL {name}: emitted operator order does not reflect precedence")
-        if name == "left_associative_subtraction" and ir.count("sub i32") != 2:
+        if name == "left_associative_subtraction" and ir.count("call { i32, i1 } @llvm.ssub.with.overflow.i32") != 2:
             raise SystemExit("FAIL left_associative_subtraction: expected two subtraction operations")
     for name, (source, expected) in negative.items():
         src = td / f"{name}.loom"

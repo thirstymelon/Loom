@@ -3,10 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BUILD_DIR="$REPO_ROOT/.build"
-VERSION="1.3.0"
+BUILD_DIR="$REPO_ROOT/build"
+VERSION="1.4.0"
 
-TARGET_FILTER="${1:-all}"
+TARGET_FILTER="${1:-native}"
 
 echo "=========================================================="
 echo " Loom Multi-Toolchain PKG Builder for macOS Apple Silicon "
@@ -28,8 +28,8 @@ fi
 chmod 755 "$REPO_ROOT/bin/loom" "$REPO_ROOT/bin/loomc"
 
 echo "=== Packaging VS Code extension ==="
-if [ ! -f "$REPO_ROOT/vscode-loom/Loom-1.3.0.vsix" ]; then
-    (cd "$REPO_ROOT/vscode-loom" && npx --yes @vscode/vsce package -o Loom-1.3.0.vsix --allow-missing-repository --no-git-tag-version)
+if [ ! -f "$REPO_ROOT/vscode-loom/Loom-1.4.0.vsix" ]; then
+    (cd "$REPO_ROOT/vscode-loom" && npx --yes @vscode/vsce package -o Loom-1.4.0.vsix --allow-missing-repository --no-git-tag-version)
 fi
 
 # The compilers link against Homebrew's Z3 and zstd dylibs. Bundle those
@@ -97,7 +97,7 @@ build_native_pkg() {
     rm -rf "$NATIVE_PKG_ROOT" "$NATIVE_SCRIPTS_DIR"
     mkdir -p "$NATIVE_PKG_ROOT/usr/local/bin"
     mkdir -p "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/bin"
-    mkdir -p "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/sdk/std"
+    mkdir -p "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/lib"
     mkdir -p "$NATIVE_SCRIPTS_DIR"
 
     # Universal build driver CLI & Language Server
@@ -123,13 +123,17 @@ build_native_pkg() {
     cat << 'EOF' > "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/toolchain.toml"
 name = "native"
 kind = "native"
-version = "1.3.0"
+version = "1.4.0"
 description = "Loom Native Desktop Toolchain (macOS Apple Silicon arm64)"
 target = "arm64-apple-darwin"
 EOF
 
-    # Native Standard Library
-    cp -Rf "$REPO_ROOT/sdk/std/"* "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/sdk/std/"
+    # Native Runtime static library
+    mkdir -p "$NATIVE_PKG_ROOT/usr/local/lib"
+    if [ -f "$BUILD_DIR/libloom_rt.a" ]; then
+        cp -f "$BUILD_DIR/libloom_rt.a" "$NATIVE_PKG_ROOT/usr/local/lib/libloom_rt.a"
+        cp -f "$BUILD_DIR/libloom_rt.a" "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/lib/libloom_rt.a"
+    fi
 
     # Post-install script
     cat << 'EOF' > "$NATIVE_SCRIPTS_DIR/postinstall"
@@ -213,7 +217,7 @@ build_rp2040_pkg() {
     cat << 'EOF' > "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/toolchain.toml"
 name = "rp2040"
 kind = "rp2040"
-version = "1.3.0"
+version = "1.4.0"
 description = "Loom RP2040 Embedded Bare-Metal Toolchain (ARM Cortex-M0+)"
 target = "thumbv6m-none-eabi"
 cpu = "cortex-m0plus"
@@ -252,18 +256,11 @@ EOF
 }
 
 case "$TARGET_FILTER" in
-    native)
+    native|all)
         build_native_pkg
-        ;;
-    rp2040)
-        build_rp2040_pkg
-        ;;
-    all)
-        build_native_pkg
-        build_rp2040_pkg
         ;;
     *)
-        echo "Error: Unknown target filter '$TARGET_FILTER'. Expected: native, rp2040, or all"
+        echo "Error: Unknown target filter '$TARGET_FILTER'. Expected: native"
         exit 1
         ;;
 esac
