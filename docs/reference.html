@@ -36,11 +36,11 @@ Point{ X: 10, Y: 20 }    (10, True, &quot;OK&quot;)    Null</code></pre><h2 id="
 Vol_Write_32(0x40014000, Value | 1)</code></pre>
 
 <h2 id="rp2040-bsp">RP2040 Hardware BSP Modules</h2>
-<p>In the RP2040 embedded toolchain, the standard library provides zero-overhead hardware abstractions:</p>
+<p>In the RP2040 embedded toolchain, the standard library provides zero-overhead hardware abstractions directly without requiring explicit module imports:</p>
 <table>
 <tr><th>Module</th><th>Purpose</th><th>Common Operations</th></tr>
-<tr><td><code>Gpio</code></td><td>General-purpose pin control</td><td><code>Init(pin)</code>, <code>Set_Dir(pin, dir)</code>, <code>Put(pin, val)</code>, <code>Get(pin)</code>, <code>Set_Function(pin, fn)</code></td></tr>
-<tr><td><code>Time</code></td><td>Microsecond & millisecond timers</td><td><code>Sleep_Ms(ms)</code>, <code>Sleep_Us(us)</code>, <code>Get_Time_Us()</code>, <code>Get_Time_Ms()</code></td></tr>
+<tr><td><code>Gpio</code></td><td>General-purpose pin control</td><td><code>Init_Output(pin)</code>, <code>Init_Input(pin, pull)</code>, <code>Write(pin, state)</code>, <code>High(pin)</code>, <code>Low(pin)</code>, <code>Toggle(pin)</code>, <code>Read(pin)</code></td></tr>
+<tr><td><code>Time</code></td><td>Microsecond & millisecond timers</td><td><code>Sleep_MS(ms)</code>, <code>Sleep_US(us)</code>, <code>Now_MS()</code>, <code>Now_US()</code></td></tr>
 <tr><td><code>Clocks</code></td><td>System clock frequency management</td><td><code>Init_Default()</code>, <code>Get_Sys_Hz()</code>, <code>Set_Sys_Clock_Hz(freq)</code></td></tr>
 <tr><td><code>Uart</code></td><td>Hardware serial communication</td><td><code>Init(id, baud)</code>, <code>Write_Byte(id, b)</code>, <code>Read_Byte(id)</code>, <code>Write_String(id, s)</code></td></tr>
 <tr><td><code>Spi</code></td><td>Synchronous Serial Peripheral Interface</td><td><code>Init(id, baud)</code>, <code>Transfer(id, tx, rx, len)</code>, <code>Write_Blocking(id, buf, len)</code></td></tr>
@@ -50,7 +50,7 @@ Vol_Write_32(0x40014000, Value | 1)</code></pre>
 <tr><td><code>Dma</code></td><td>Direct Memory Access channels</td><td><code>Claim_Unused_Channel()</code>, <code>Channel_Configure(ch, cfg)</code>, <code>Start(ch)</code></td></tr>
 <tr><td><code>Watchdog</code></td><td>Hardware watchdog timer</td><td><code>Enable(ms, pause_on_debug)</code>, <code>Update()</code>, <code>Caused_Reboot()</code></td></tr>
 <tr><td><code>Multicore</code></td><td>Dual-core execution</td><td><code>Launch_Core1(entry_block)</code>, <code>Fifo_Push(val)</code>, <code>Fifo_Pop()</code></td></tr>
-<tr><td><code>Usb_Cdc</code></td><td>USB Serial Console</td><td><code>Init()</code>, <code>Connected()</code>, <code>Read_Char()</code>, <code>Print(s)</code></td></tr>
+<tr><td><code>Usb_Cdc</code></td><td>USB Serial Console</td><td><code>Is_Configured()</code>, <code>Available()</code>, <code>Read_Byte()</code>, <code>Write_Str(s)</code>, <code>Set_Output_Sink(sink)</code></td></tr>
 </table>
 
 <h2 id="pio-syntax">Programmable I/O (PIO) DSL Syntax</h2>

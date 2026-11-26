@@ -55,29 +55,25 @@ End Main</code></pre>
 cd blinky
 loom build                   # compiles ARM Thumbv6-M binary & generates blinky.uf2
 loom flash --monitor         # boots into BOOTSEL, writes UF2, & connects serial monitor</code></pre>
-<p>The scaffolded <code>src/main.loom</code> uses the RP2040 BSP and hardware GPIO modules:</p>
+<p>In the RP2040 bare-metal toolchain, core hardware modules including <code>Gpio</code>, <code>Time</code>, <code>Usb_Cdc</code>, and <code>Sync</code> are part of the standard library and available with zero imports. The scaffolded <code>src/main.loom</code> demonstrates clean hardware control:</p>
 <pre><code class="l">Module Main
 
-Import Gpio
-Import Time
-Import Usb_Cdc
-
-Constant LED_PIN : Pin = 25
-
 Block Main
+Declares
+    LED_PIN : Constant Gpio.Pin = Gpio.PICO_LED_PIN
+    Tick : Unsigned_32 = 0
 Implements
-    Gpio.Init(LED_PIN)
-    Gpio.Set_Dir(LED_PIN, Gpio.DIR_OUT)
-    Usb_Cdc.Init()
+    Gpio.Init_Output(LED_PIN)
+    Time.Sleep_MS(500)
+    Print("Raspberry Pi Pico initialized!\n")
 
     Loop
-        Gpio.Put(LED_PIN, 1)
-        Print("LED On")
-        Time.Sleep_Ms(500)
-
-        Gpio.Put(LED_PIN, 0)
-        Print("LED Off")
-        Time.Sleep_Ms(500)
+        LED_PIN.Toggle
+        Tick = Tick + 1
+        If Usb_Cdc.Is_Configured()
+            Print("Blink tick=<Tick>\n")
+        End If
+        Time.Sleep_MS(500)
     End Loop
 End Main</code></pre>
 

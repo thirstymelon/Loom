@@ -523,37 +523,33 @@ Implements
 End Main</code></pre>
 
 <h2 id="l16">16 · Embedded RP2040 & Bare-Metal Hardware</h2>
-<p>Loom provides a dedicated bare-metal toolchain for microcontroller platforms such as the Raspberry Pi Pico (RP2040). There is no operating system overhead: execution starts directly from the second-stage bootloader and runs in Thumbv6-M machine code.</p>
+<p>Loom provides a dedicated bare-metal toolchain for microcontroller platforms such as the Raspberry Pi Pico (RP2040). There is no operating system overhead: execution starts directly from the second-stage bootloader and runs in Thumbv6-M machine code. Core hardware modules such as <code>Gpio</code>, <code>Time</code>, <code>Usb_Cdc</code>, and <code>Sync</code> are built directly into the standard library with zero imports required.</p>
 
 <h3>16.1 Hardware GPIO & USB-CDC Serial</h3>
-<p>Microcontroller pins are managed via the <code>Gpio</code> module. High-speed serial text transmission without external UART adapters is achieved with <code>Usb_Cdc</code>:</p>
+<p>Microcontroller pins are managed via <code>Gpio</code>. Pins can be initialized with <code>Gpio.Init_Output(Pin)</code>, driven with <code>Gpio.Write(Pin, State)</code>, <code>Gpio.High(Pin)</code>, <code>Gpio.Low(Pin)</code>, or toggled via <code>Pin.Toggle</code>. High-speed serial text transmission without external UART adapters is achieved with <code>Usb_Cdc</code> and the native <code>Print</code> built-in:</p>
 <pre><code class="l">Module Main
 
-Import Gpio
-Import Time
-Import Usb_Cdc
-
-Constant LED_PIN : Pin = 25
-
 Block Main
+Declares
+    LED_PIN : Constant Gpio.Pin = Gpio.PICO_LED_PIN
+    Tick : Unsigned_32 = 0
 Implements
-    Usb_Cdc.Init()
-    Gpio.Init(LED_PIN)
-    Gpio.Set_Dir(LED_PIN, Gpio.DIR_OUT)
+    Gpio.Init_Output(LED_PIN)
+    Time.Sleep_MS(500)
+    Print("Raspberry Pi Pico initialized!\n")
 
     Loop
-        Gpio.Put(LED_PIN, 1)
-        Print("Heartbeat: LED High")
-        Time.Sleep_Ms(500)
-
-        Gpio.Put(LED_PIN, 0)
-        Print("Heartbeat: LED Low")
-        Time.Sleep_Ms(500)
+        LED_PIN.Toggle
+        Tick = Tick + 1
+        If Usb_Cdc.Is_Configured()
+            Print("Blink tick=<Tick>\n")
+        End If
+        Time.Sleep_MS(500)
     End Loop
 End Main</code></pre>
 
 <h3>16.2 Programmable I/O (PIO) DSL</h3>
-<p>The RP2040 includes two PIO blocks with four independent state machines each. Loom includes a dedicated DSL for PIO assembly that lower directly into 16-bit state-machine instructions:</p>
+<p>The RP2040 includes two PIO blocks with four independent state machines each. Loom includes a dedicated DSL for PIO assembly that lowers directly into 16-bit state-machine instructions:</p>
 <pre><code class="l">Pio_Program SquareWave
     Wrap_Target
         Set(Pins, 1) [1]
@@ -570,14 +566,10 @@ End RunPio</code></pre>
 <p>RP2040 features two ARM Cortex-M0+ cores. Core 1 can be launched with a single block reference, exchanging data via hardware FIFOs:</p>
 <pre><code class="l">Module Main
 
-Import Multicore
-Import Gpio
-Import Time
-
 Block Core1_Worker Implements
     Loop
         Val = Multicore.Fifo_Pop()
-        Print("Core 1 received: &lt;Val&gt;")
+        Print("Core 1 received: &lt;Val&gt;\n")
     End Loop
 End Core1_Worker
 
