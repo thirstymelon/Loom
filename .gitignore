@@ -25,6 +25,7 @@ rp2040_datasheet/
 # Release installers & archives
 *.dmg
 *.pkg
+*.vsix
 *.zip
 *.tar.gz
 

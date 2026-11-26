@@ -227,7 +227,7 @@
   },
   "scripts": {
     "test": "node ./test/diagnostics.js && node ./test/language.js && node ./test/lsp.js && node ./test/client.js && node ./test/smoke.js",
-    "package": "vsce package --no-dependencies -o Loom-1.4.0.vsix"
+    "package": "vsce package --no-dependencies -o Loom-1.5.0.vsix"
   },
   "devDependencies": {
     "@vscode/vsce": "^2.26.1"

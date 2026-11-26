@@ -28,9 +28,7 @@ fi
 chmod 755 "$REPO_ROOT/bin/loom" "$REPO_ROOT/bin/loomc"
 
 echo "=== Packaging VS Code extension ==="
-if [ ! -f "$REPO_ROOT/vscode-loom/Loom-1.5.0.vsix" ]; then
-    (cd "$REPO_ROOT/vscode-loom" && npx --yes @vscode/vsce package -o Loom-1.5.0.vsix --allow-missing-repository --no-git-tag-version)
-fi
+(cd "$REPO_ROOT/vscode-loom" && npx --yes @vscode/vsce package -o Loom-1.5.0.vsix --allow-missing-repository --no-git-tag-version)
 
 # The compilers link against Homebrew's Z3 and zstd dylibs. Bundle those
 # runtime dependencies beside each compiler so installed packages do not

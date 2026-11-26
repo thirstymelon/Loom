@@ -165,6 +165,8 @@ End Main
         self.assertIn("PASS_H3_FRAME", out)
 
     def test_http_server_library(self):
+        if not HTTP_SERVER_SRC.exists():
+            self.skipTest("HttpServer library not found")
         code = r"""Module TestServerLib
 Import HttpServer
 use HttpServer
