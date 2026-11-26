@@ -381,5 +381,53 @@
       "    $0"
     ],
     "description": "Default catch-all branch for Match statement"
+  },
+  "RP2040 Main Starter": {
+    "prefix": "rp2040_main",
+    "body": [
+      "Module Main",
+      "",
+      "Block Main",
+      "Declares",
+      "    LED_PIN : Constant Gpio.Pin = Gpio.PICO_LED_PIN",
+      "    Tick : Unsigned_32 = 0",
+      "Implements",
+      "    LED_PIN.Init_Output()",
+      "    Time.Sleep_MS(500)",
+      "    Print(\"Raspberry Pi Pico initialized!\\n\")",
+      "",
+      "    Loop",
+      "        LED_PIN.Toggle()",
+      "        Tick = Tick + 1",
+      "        If Usb_Cdc.Is_Configured()",
+      "            Print(\"Blink tick=<Tick>\\n\")",
+      "        End If",
+      "        Time.Sleep_MS(500)",
+      "    End Loop",
+      "End Main"
+    ],
+    "description": "RP2040 bare-metal main loop with LED toggle and USB-CDC print"
+  },
+  "RP2040 GPIO Pin": {
+    "prefix": "rp2040_gpio",
+    "body": [
+      "${1:Pin} : Constant Gpio.Pin = Gpio.Pin_${2:16}",
+      "${1:Pin}.Init_Output()",
+      "${1:Pin}.High()",
+      "Time.Sleep_MS(250)",
+      "${1:Pin}.Low()"
+    ],
+    "description": "RP2040 GPIO pin control using dot notation"
+  },
+  "RP2040 Mutex Lock": {
+    "prefix": "rp2040_mutex",
+    "body": [
+      "Lock : Sync.Mutex",
+      "Lock.Init()",
+      "Lock.Acquire()",
+      "# $0 critical section",
+      "Lock.Unlock()"
+    ],
+    "description": "RP2040 hardware mutex lock and unlock"
   }
 }

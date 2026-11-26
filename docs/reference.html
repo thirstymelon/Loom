@@ -6,19 +6,21 @@ Vol_Write_32(0x40014000, Value | 1)</code></pre>
 <h2 id="rp2040-bsp">RP2040 Hardware BSP Modules</h2>
 <p>In the RP2040 embedded toolchain, the standard library provides zero-overhead hardware abstractions directly without requiring explicit module imports:</p>
 <table>
-<tr><th>Module</th><th>Purpose</th><th>Common Operations</th></tr>
-<tr><td><code>Gpio</code></td><td>General-purpose pin control</td><td><code>Init_Output(pin)</code>, <code>Init_Input(pin, pull)</code>, <code>Write(pin, state)</code>, <code>High(pin)</code>, <code>Low(pin)</code>, <code>Toggle(pin)</code>, <code>Read(pin)</code></td></tr>
-<tr><td><code>Time</code></td><td>Microsecond & millisecond timers</td><td><code>Sleep_MS(ms)</code>, <code>Sleep_US(us)</code>, <code>Now_MS()</code>, <code>Now_US()</code></td></tr>
+<tr><th>Module</th><th>Purpose</th><th>Common Operations (Dot Notation Supported)</th></tr>
+<tr><td><code>Gpio</code></td><td>General-purpose pin control</td><td><code>pin.Init_Output()</code>, <code>pin.Init_Input(pull)</code>, <code>pin.Write(state)</code>, <code>pin.High()</code>, <code>pin.Low()</code>, <code>pin.Toggle()</code>, <code>pin.Read()</code>, <code>pin.Deinit()</code></td></tr>
+<tr><td><code>Time</code></td><td>Microsecond & millisecond timers</td><td><code>Sleep_MS(ms)</code>, <code>Sleep_US(us)</code>, <code>Now_MS()</code>, <code>Now_US()</code>, <code>Alarm_Set(idx, us)</code></td></tr>
 <tr><td><code>Clocks</code></td><td>System clock frequency management</td><td><code>Init_Default()</code>, <code>Get_Sys_Hz()</code>, <code>Set_Sys_Clock_Hz(freq)</code></td></tr>
-<tr><td><code>Uart</code></td><td>Hardware serial communication</td><td><code>Init(id, baud)</code>, <code>Write_Byte(id, b)</code>, <code>Read_Byte(id)</code>, <code>Write_String(id, s)</code></td></tr>
-<tr><td><code>Spi</code></td><td>Synchronous Serial Peripheral Interface</td><td><code>Init(id, baud)</code>, <code>Transfer(id, tx, rx, len)</code>, <code>Write_Blocking(id, buf, len)</code></td></tr>
-<tr><td><code>I2c</code></td><td>Two-wire interface</td><td><code>Init(id, baud)</code>, <code>Write_Blocking(id, addr, buf, len)</code>, <code>Read_Blocking(id, addr, buf, len)</code></td></tr>
-<tr><td><code>Pwm</code></td><td>Pulse width modulation</td><td><code>Set_Wrap(slice, wrap)</code>, <code>Set_Chan_Level(slice, chan, lvl)</code>, <code>Set_Enabled(slice, bool)</code></td></tr>
-<tr><td><code>Adc</code></td><td>12-bit Analog-to-Digital Converter</td><td><code>Init()</code>, <code>Select_Input(channel)</code>, <code>Read()</code>, <code>Read_Voltage()</code></td></tr>
-<tr><td><code>Dma</code></td><td>Direct Memory Access channels</td><td><code>Claim_Unused_Channel()</code>, <code>Channel_Configure(ch, cfg)</code>, <code>Start(ch)</code></td></tr>
-<tr><td><code>Watchdog</code></td><td>Hardware watchdog timer</td><td><code>Enable(ms, pause_on_debug)</code>, <code>Update()</code>, <code>Caused_Reboot()</code></td></tr>
+<tr><td><code>Uart</code></td><td>Hardware serial communication</td><td><code>dev.Write_Str(s)</code>, <code>dev.Write_Byte(b)</code>, <code>dev.Read_Byte()</code>, <code>dev.Is_Readable()</code>, <code>dev.Is_Writable()</code>, <code>dev.Deinit()</code></td></tr>
+<tr><td><code>Spi</code></td><td>Synchronous Serial Peripheral Interface</td><td><code>dev.Transfer_Byte(b)</code>, <code>dev.Write_Byte(b)</code>, <code>dev.Read_Byte()</code>, <code>dev.Deinit()</code></td></tr>
+<tr><td><code>I2c</code></td><td>Two-wire interface</td><td><code>dev.Write_Reg(addr, reg, val)</code>, <code>dev.Read_Reg(addr, reg)</code>, <code>dev.Write_Byte(addr, data)</code>, <code>dev.Read_Byte(addr)</code>, <code>dev.Deinit()</code></td></tr>
+<tr><td><code>Pwm</code></td><td>Pulse width modulation</td><td><code>slice.Set_Wrap(wrap)</code>, <code>slice.Set_Clkdiv(int, frac)</code>, <code>slice.Set_Level(chan, lvl)</code>, <code>slice.Set_Enabled(bool)</code></td></tr>
+<tr><td><code>Adc</code></td><td>12-bit Analog-to-Digital Converter</td><td><code>Adc.Init()</code>, <code>pin.Init_Adc()</code>, <code>ch.Read_Raw()</code>, <code>ch.Read_MV()</code>, <code>Adc.Read_Temp_C()</code></td></tr>
+<tr><td><code>Dma</code></td><td>Direct Memory Access channels</td><td><code>ch.Start(src, dst, count)</code>, <code>ch.Wait()</code>, <code>ch.Is_Busy()</code>, <code>ch.Abort()</code></td></tr>
+<tr><td><code>Watchdog</code></td><td>Hardware watchdog timer</td><td><code>Enable(ms, pause_on_debug)</code>, <code>Feed()</code>, <code>Caused_Reboot()</code></td></tr>
+<tr><td><code>Sync</code></td><td>Hardware synchronization & queues</td><td><code>lock.Init()</code>, <code>lock.Acquire()</code>, <code>lock.Unlock()</code>, <code>chan.Init(cap)</code>, <code>chan.Send(v)</code>, <code>chan.Receive()</code></td></tr>
+<tr><td><code>Pio</code></td><td>Programmable I/O state machines</td><td><code>sm.Set_Enabled(b)</code>, <code>sm.Set_Clkdiv(int, frac)</code>, <code>sm.Put(val)</code>, <code>sm.Get()</code>, <code>sm.Restart()</code></td></tr>
 <tr><td><code>Multicore</code></td><td>Dual-core execution</td><td><code>Launch_Core1(entry_block)</code>, <code>Fifo_Push(val)</code>, <code>Fifo_Pop()</code></td></tr>
-<tr><td><code>Usb_Cdc</code></td><td>USB Serial Console</td><td><code>Is_Configured()</code>, <code>Available()</code>, <code>Read_Byte()</code>, <code>Write_Str(s)</code>, <code>Set_Output_Sink(sink)</code></td></tr>
+<tr><td><code>Usb_Cdc</code></td><td>USB Serial Console</td><td><code>Is_Configured()</code>, <code>Available()</code>, <code>Read_Byte()</code>, <code>Write_Byte(b)</code>, <code>Set_Output_Sink(sink)</code></td></tr>
 </table>
 
 <h2 id="pio-syntax">Programmable I/O (PIO) DSL Syntax</h2>

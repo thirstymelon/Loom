@@ -3379,7 +3379,7 @@ private:
                 const Type& p0 = f.params[0].type;
                 std::string candR = (p0.kind == TypeKind::Record) ? p0.name :
                     (((p0.kind == TypeKind::Pointer || p0.kind == TypeKind::SmartPointer) && p0.pointeeType && p0.pointeeType->kind == TypeKind::Record) ? p0.pointeeType->name : "");
-                if (!candR.empty() && recordIsTagged[candR]) taggedRec = candR;
+                if (!candR.empty() && (recordIsTagged[candR] || recordFieldTypes.count(candR))) taggedRec = candR;
             }
             if (!taggedRec.empty()) {
                 std::string mLlvm = functionLLVMName(f);

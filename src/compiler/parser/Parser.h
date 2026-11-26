@@ -774,7 +774,7 @@ class Parser {
                     expect(K::RParen, "expected ')' after function arguments");
                     base = std::move(call);
                 } else if (eat(K::Dot)) {
-                    Token field = expect(K::Id, "expected field, enum variant, or function after '.'");
+                    Token field = expectIdentOrWrite("expected field, enum variant, or function after '.'");
                     if (eat(K::LParen)) {
                         auto call = make(Expr::Kind::Call, field);
                         call->qualifier = x.text;
@@ -1286,7 +1286,7 @@ class Parser {
             target->left = std::move(ptr);
             while (at(K::Dot) || at(K::LBracket)) {
                 if (eat(K::Dot)) {
-                    Token field = expect(K::Id, "expected field name after '.'");
+                    Token field = expectIdentOrWrite("expected field name after '.'");
                     target = make(Expr::Kind::Member, field, std::move(target));
                 } else if (eat(K::LBracket)) {
                     auto idx = expression();
@@ -1481,7 +1481,7 @@ class Parser {
                 target->right = std::move(idx);
                 while (at(K::Dot) || at(K::LBracket)) {
                     if (eat(K::Dot)) {
-                        Token field = expect(K::Id, "expected field name after '.'");
+                        Token field = expectIdentOrWrite("expected field name after '.'");
                         target = make(Expr::Kind::Member, field, std::move(target));
                     } else if (eat(K::LBracket)) {
                         auto nextIdx = expression();

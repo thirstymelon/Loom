@@ -497,7 +497,7 @@ End Main</code></pre>
 <p>Loom provides a dedicated bare-metal toolchain for microcontroller platforms such as the Raspberry Pi Pico (RP2040). There is no operating system overhead: execution starts directly from the second-stage bootloader and runs in Thumbv6-M machine code. Core hardware modules such as <code>Gpio</code>, <code>Time</code>, <code>Usb_Cdc</code>, and <code>Sync</code> are built directly into the standard library with zero imports required.</p>
 
 <h3>16.1 Hardware GPIO & USB-CDC Serial</h3>
-<p>Microcontroller pins are managed via <code>Gpio</code>. Pins can be initialized with <code>Gpio.Init_Output(Pin)</code>, driven with <code>Gpio.Write(Pin, State)</code>, <code>Gpio.High(Pin)</code>, <code>Gpio.Low(Pin)</code>, or toggled via <code>Pin.Toggle</code>. High-speed serial text transmission without external UART adapters is achieved with <code>Usb_Cdc</code> and the native <code>Print</code> built-in:</p>
+<p>Microcontroller pins are managed via <code>Gpio</code> with clean dot notation. Pins are initialized with <code>Pin.Init_Output()</code>, driven with <code>Pin.Write(State)</code>, <code>Pin.High()</code>, <code>Pin.Low()</code>, or toggled via <code>Pin.Toggle()</code>. High-speed serial text transmission without external UART adapters is achieved with <code>Usb_Cdc</code> and the native <code>Print</code> built-in:</p>
 <pre><code class="l">Module Main
 
 Block Main
@@ -505,12 +505,12 @@ Declares
     LED_PIN : Constant Gpio.Pin = Gpio.PICO_LED_PIN
     Tick : Unsigned_32 = 0
 Implements
-    Gpio.Init_Output(LED_PIN)
+    LED_PIN.Init_Output()
     Time.Sleep_MS(500)
     Print("Raspberry Pi Pico initialized!\n")
 
     Loop
-        LED_PIN.Toggle
+        LED_PIN.Toggle()
         Tick = Tick + 1
         If Usb_Cdc.Is_Configured()
             Print("Blink tick=<Tick>\n")
