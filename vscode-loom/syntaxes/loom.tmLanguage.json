@@ -163,6 +163,17 @@
           }
         },
         {
+          "match": "\\b(Pio_Program)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.pio.loom"
+            },
+            "2": {
+              "name": "entity.name.function.pio.loom"
+            }
+          }
+        },
+        {
           "match": "\\b(Block)\\s+(Global)\\b",
           "captures": {
             "1": {
@@ -207,6 +218,17 @@
             },
             "2": {
               "name": "keyword.control.loom"
+            }
+          }
+        },
+        {
+          "match": "\\b(End)\\s+(Pio_Program)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.loom"
+            },
+            "2": {
+              "name": "storage.type.function.pio.loom"
             }
           }
         },
@@ -258,6 +280,10 @@
     },
     "controlKeywords": {
       "patterns": [
+        {
+          "name": "keyword.control.pio.loom",
+          "match": "\\b(Set|Wrap_Target|Wrap|Pull|Push|Out|In|Mov|Jmp|Wait|Irq|Side)\\b"
+        },
         {
           "name": "keyword.control.loom",
           "match": "\\b(If|Else\\s+If|Else|Until|until|While|while|Loop|Exit|Skip|Give|Ensure|Match|match|When|when|where|Where|default|Default|in|In|Use|use|try|Try|as|Cancel|Within|To_String|Move|move|Copy|copy|Borrow|borrow)\\b"
@@ -359,6 +385,10 @@
           }
         },
         {
+          "name": "support.class.hardware.rp2040.loom",
+          "match": "\\b(Gpio|Pio|Uart|Spi|I2c|Pwm|Adc|Dma|Clocks|Clock|System|Time|Watchdog|Rtc|Sio|Multicore|Usb_Cdc|Crash|Interp|Sync)\\b"
+        },
+        {
           "name": "support.function.builtin.loom",
           "match": "\\b(Write|Print|Write_UART|Address|Deref|Cast|Slice|Allocate|Resize|Release|Spawn|Join|Pow|Vol_Read_(8|16|32|64)|Vol_Write_(8|16|32|64)|Nop|WaitForInterrupt|MemoryBarrier)\\b"
         }
@@ -380,7 +410,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.loom",
-          "match": "\\b(Volatile|Boolean|Signed_(8|16|32|64)|Unsigned_(8|16|32|64)|Float_(32|64)|String|String_Builder|Text|Character|Integer|Int|File|File_Handle|Task_Handle|No_Type)\\b"
+          "match": "\\b(Volatile|Volatile_32|Register_32|Boolean|Signed_(8|16|32|64)|Unsigned_(8|16|32|64)|Float_(32|64)|String|String_Builder|Text|Character|Integer|Int|File|File_Handle|Task_Handle|Pin|Slice|Pio_State_Machine|No_Type)\\b"
         },
         {
           "name": "support.type.constructor.loom",

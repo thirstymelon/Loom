@@ -2,7 +2,7 @@
   "name": "loom-language-support",
   "displayName": "Loom Language Support",
   "description": "Loom language support for Visual Studio Code with syntax highlighting, auto-indentation, snippets, intelligent code suggestions, navigation, and compiler diagnostics.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "publisher": "loom-language",
   "license": "MIT",
   "repository": {
@@ -21,7 +21,11 @@
     "loom",
     "llvm",
     "language",
-    "systems"
+    "systems",
+    "rp2040",
+    "embedded",
+    "baremetal",
+    "pio"
   ],
   "main": "./extension.js",
   "activationEvents": [
@@ -36,6 +40,9 @@
     "onCommand:loom.run",
     "onCommand:loom.test",
     "onCommand:loom.fetch",
+    "onCommand:loom.flash",
+    "onCommand:loom.monitor",
+    "onCommand:loom.switchToolchain",
     "onCommand:loom.refreshWorkspaceIndex",
     "workspaceContains:config.toml",
     "workspaceContains:**/*.loom"
@@ -131,6 +138,18 @@
         "title": "Loom: Fetch Dependencies"
       },
       {
+        "command": "loom.flash",
+        "title": "Loom: Flash Firmware (RP2040)"
+      },
+      {
+        "command": "loom.monitor",
+        "title": "Loom: Open Serial Monitor"
+      },
+      {
+        "command": "loom.switchToolchain",
+        "title": "Loom: Switch Active Toolchain"
+      },
+      {
         "command": "loom.refreshWorkspaceIndex",
         "title": "Loom: Refresh Workspace Index"
       }
@@ -138,14 +157,17 @@
     "menus": {
       "editor/title": [
         { "command": "loom.run", "when": "editorLangId == loom", "group": "navigation@1" },
-        { "command": "loom.build", "when": "editorLangId == loom", "group": "navigation@2" },
-        { "command": "loom.checkFile", "when": "editorLangId == loom", "group": "navigation@3" }
+        { "command": "loom.flash", "when": "editorLangId == loom", "group": "navigation@2" },
+        { "command": "loom.build", "when": "editorLangId == loom", "group": "navigation@3" },
+        { "command": "loom.checkFile", "when": "editorLangId == loom", "group": "navigation@4" }
       ],
       "editor/context": [
         { "command": "loom.checkFile", "when": "editorLangId == loom", "group": "loom@1" },
         { "command": "loom.formatDocument", "when": "editorLangId == loom", "group": "loom@2" },
         { "command": "loom.build", "when": "editorLangId == loom", "group": "loom@3" },
-        { "command": "loom.run", "when": "editorLangId == loom", "group": "loom@4" }
+        { "command": "loom.run", "when": "editorLangId == loom", "group": "loom@4" },
+        { "command": "loom.flash", "when": "editorLangId == loom", "group": "loom@5" },
+        { "command": "loom.monitor", "when": "editorLangId == loom", "group": "loom@6" }
       ]
     },
     "configuration": {

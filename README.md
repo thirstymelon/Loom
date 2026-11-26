@@ -75,17 +75,36 @@ loom monitor
 
 ---
 
+## Installation & macOS Packages (v1.5.0)
+
+Pre-built macOS Apple Silicon (`arm64`) installer packages are available:
+- **Native Desktop Toolchain**: [`Loom-1.5.0-macos-arm64-native.pkg`](Loom-1.5.0-macos-arm64-native.pkg) — Universal `loom` CLI, native compiler (`loomc`), language server (`loom-lsp`), and hosted standard library.
+- **RP2040 Embedded Bare-Metal Toolchain**: [`Loom-1.5.0-macos-arm64-rp2040.pkg`](Loom-1.5.0-macos-arm64-rp2040.pkg) — Dedicated ARM Cortex-M0+ bare-metal compiler (`loomc-rp2040`), RP2040 hardware SDK, PIO assembler DSL, and UF2 packager.
+
+You can also install and manage toolchains dynamically using the CLI:
+```bash
+loom get toolchain rp2040    # Download and register RP2040 toolchain
+loom set toolchain rp2040    # Switch active toolchain
+loom toolchains              # List installed toolchains
+```
+
+---
+
 ## Editor & Language Server Support
 
-The official Loom extension for Visual Studio Code is located in [vscode-loom/](vscode-loom/) and provides:
+The official Loom extension for Visual Studio Code is located in [vscode-loom/](vscode-loom/) and packaged as **`Loom-1.5.0.vsix`**. It provides:
 
-- **Syntax Highlighting**: Full TextMate grammar and semantic token highlighting.
-- **Intelligent Autocompletion**: Context-aware completions for blocks, types, records, and keywords.
-- **Navigation**: Go-to-definition, find all references, and workspace symbol search.
-- **Refactoring & Diagnostics**: Real-time compiler diagnostics and workspace-wide symbol renaming.
+- **Dual-Toolchain Support**: Native desktop and RP2040 bare-metal embedded workflows.
+- **RP2040 & PIO Highlighting**: Syntax support for PIO assembly (`Pio_Program`, `Set`, `Wrap`, `Pull`, `Push`, etc.) and hardware BSP modules (`Gpio`, `Pio`, `Uart`, `Spi`, `I2c`, `Pwm`, `Adc`, `Dma`, `Multicore`, `Usb_Cdc`).
+- **Commands**:
+  - `Loom: Flash Firmware (RP2040)` — Builds and flashes UF2 firmware to connected Raspberry Pi Pico and connects monitor.
+  - `Loom: Open Serial Monitor` — Connects to USB-CDC raw serial terminal (115200 baud).
+  - `Loom: Switch Active Toolchain` — Quick-pick switch between `native` and `rp2040`.
+- **Intelligent Autocompletion**: Context-aware completions for blocks, types, records, and hardware symbols.
+- **Navigation & Diagnostics**: Go-to-definition, find all references, and real-time diagnostics.
 - **Formatting**: Integrated auto-formatting via `loom fmt`.
 
-Install the extension directly via `vscode-loom/Loom-1.5.0.vsix` or from within VS Code.
+Install the extension directly via `code --install-extension vscode-loom/Loom-1.5.0.vsix`.
 
 ---
 

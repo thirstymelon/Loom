@@ -136,7 +136,7 @@ for (const command of ['loom.checkFile', 'loom.build', 'loom.clean', 'loom.run',
 for (const provider of ['completion','documentSymbols','hover','definition','references','rename','workspaceSymbols','signature','codeActions','semanticTokens','highlights']) assert.ok(providers.has(provider), `missing provider: ${provider}`);
 
 const packageJson = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8'));
-assert.equal(packageJson.version, '1.4.0');
+assert.equal(packageJson.version, '1.5.0');
 assert.equal(packageJson.contributes.configurationDefaults['[loom]']['editor.semanticHighlighting.enabled'], true);
 assert.ok(packageJson.contributes.semanticTokenScopes.some(entry => entry.language === 'loom' && entry.scopes.keyword[0] === 'keyword.control.loom'));
 assert.ok(packageJson.contributes.languages[0].extensions.includes('.loom'));

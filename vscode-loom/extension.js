@@ -530,6 +530,32 @@ function activate(context) {
     vscode.commands.registerCommand('loom.run', () => runWorkspaceCommand('run')),
     vscode.commands.registerCommand('loom.test', () => runWorkspaceCommand('test')),
     vscode.commands.registerCommand('loom.fetch', () => runWorkspaceCommand('fetch')),
+    vscode.commands.registerCommand('loom.flash', () => {
+      const root = findWorkspaceRoot(vscode.window.activeTextEditor?.document);
+      const executable = root ? loomToolPath(root) : 'loom';
+      const term = vscode.window.createTerminal({ name: 'Loom Flash', cwd: root });
+      term.show();
+      term.sendText(`${executable} flash --monitor`);
+    }),
+    vscode.commands.registerCommand('loom.monitor', () => {
+      const root = findWorkspaceRoot(vscode.window.activeTextEditor?.document);
+      const executable = root ? loomToolPath(root) : 'loom';
+      const term = vscode.window.createTerminal({ name: 'Loom Monitor', cwd: root });
+      term.show();
+      term.sendText(`${executable} monitor`);
+    }),
+    vscode.commands.registerCommand('loom.switchToolchain', async () => {
+      const root = findWorkspaceRoot(vscode.window.activeTextEditor?.document);
+      const executable = root ? loomToolPath(root) : 'loom';
+      const pick = await vscode.window.showQuickPick(['rp2040', 'native'], {
+        placeHolder: 'Select toolchain to activate with loom use'
+      });
+      if (pick) {
+        const term = vscode.window.createTerminal({ name: 'Loom Toolchain', cwd: root });
+        term.show();
+        term.sendText(`${executable} use ${pick}`);
+      }
+    }),
     vscode.commands.registerCommand('loom.restartLanguageServer', async () => { await startLanguageServer(); }),
     vscode.commands.registerCommand('loom.refreshWorkspaceIndex', () => { languageClient.notify('loom/refreshIndex', {}); }),
     vscode.languages.registerDocumentFormattingEditProvider('loom', {

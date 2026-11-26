@@ -116,8 +116,8 @@ with tempfile.TemporaryDirectory(prefix="loom-doc-examples-") as temp:
         src.write_text(code, encoding="utf-8")
         output = tmppath / f"example_{idx}.ll"
         cmd = [str(compiler), str(src), str(output)]
-        if any(f"Import {module}" in code for module in ("GPIO", "System", "RP2040", "I2C", "SPI", "SSD1306", "MPU6050", "Math")) or fname in ("rp2040-reference.html", "embedded-rp2040.html"):
-            # Embedded RP2040 was sunset in Loom v1.4.0 (native desktop only)
+        if any(f"Import {module}" in code for module in ("Gpio", "GPIO", "System", "RP2040", "I2c", "I2C", "Spi", "SPI", "SSD1306", "MPU6050", "Math", "Time", "Usb_Cdc", "Multicore")) or "Pio_Program" in code or fname in ("rp2040-reference.html", "embedded-rp2040.html"):
+            # Embedded RP2040 compiles under loomc-rp2040 / RP2040 toolchain
             continue
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:

@@ -27,7 +27,7 @@ th,td{padding:9px 12px 9px 0;border-bottom:1px solid var(--line);vertical-align:
 .note{border-left:2px solid var(--acc);padding:2px 0 2px 16px;margin:1.4rem 0;color:var(--mut)}.note p{color:var(--mut);margin:.4rem 0}
 .pn{display:flex;justify-content:space-between;gap:12px;margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-size:14px}.pn small{display:block;color:var(--mut)}
 @media(max-width:860px){.side{transform:translateX(-100%);transition:.2s;z-index:5;width:270px}body.o .side{transform:none;box-shadow:0 0 40px rgba(0,0,0,.25)}main{margin:0;padding:24px 20px 80px}.top{display:flex;align-items:center;justify-content:space-between;margin:-8px 0 24px;font-weight:650}.top button{font:inherit;background:none;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:4px 12px}h1{font-size:1.9rem}}
-</style></head><body><nav class="side"><a class="brand" href="index.html">Loom<span>v1.4.0</span></a><input id="q" placeholder="Filter lessons…" aria-label="Filter"><h6>Docs</h6><a href="index.html" class="">Overview</a><a href="start.html" class="">Getting started</a><a href="learn.html" class="on">Learn Loom</a><a class="sub" href="#l1">1 · Program structure</a><a class="sub" href="#l2">2 · Primitive data types</a><a class="sub" href="#l3">3 · Operators</a><a class="sub" href="#l4">4 · Conditionals & match</a><a class="sub" href="#l5">5 · Loops (all 4 forms)</a><a class="sub" href="#l6">6 · Procedures (blocks)</a><a class="sub" href="#l7">7 · Giving blocks & tuples</a><a class="sub" href="#l7-concise">7.1 · Omitting sections & concise syntax</a><a class="sub" href="#l8">8 · Records</a><a class="sub" href="#l9">9 · Records with Drop</a><a class="sub" href="#l10">10 · Collections</a><a class="sub" href="#l11">11 · Pointers</a><a class="sub" href="#l12">12 · Dynamic allocation</a><a class="sub" href="#l13">13 · Tasks & multithreading</a><a class="sub" href="#l14">14 · Async & await</a><a class="sub" href="#l15">15 · Error handling</a><a href="reference.html" class="">Language reference</a><a href="internals.html" class="">Compiler & targets</a></nav><main><div class="top"><span>Loom</span><button id="mb">Menu</button></div><article><h1>Learn Loom</h1><p class="lead">A complete, beginner-friendly tour of the Loom systems programming language. Every lesson is an executable, standalone program.</p>
+</style></head><body><nav class="side"><a class="brand" href="index.html">Loom<span>v1.5.0</span></a><input id="q" placeholder="Filter lessons…" aria-label="Filter"><h6>Docs</h6><a href="index.html" class="">Overview</a><a href="start.html" class="">Getting started</a><a href="learn.html" class="on">Learn Loom</a><a class="sub" href="#l1">1 · Program structure</a><a class="sub" href="#l2">2 · Primitive data types</a><a class="sub" href="#l3">3 · Operators</a><a class="sub" href="#l4">4 · Conditionals & match</a><a class="sub" href="#l5">5 · Loops (all 4 forms)</a><a class="sub" href="#l6">6 · Procedures (blocks)</a><a class="sub" href="#l7">7 · Giving blocks & tuples</a><a class="sub" href="#l7-concise">7.1 · Omitting sections & concise syntax</a><a class="sub" href="#l8">8 · Records</a><a class="sub" href="#l9">9 · Records with Drop</a><a class="sub" href="#l10">10 · Collections</a><a class="sub" href="#l11">11 · Pointers</a><a class="sub" href="#l12">12 · Dynamic allocation</a><a class="sub" href="#l13">13 · Tasks & multithreading</a><a class="sub" href="#l14">14 · Async & await</a><a class="sub" href="#l15">15 · Error handling</a><a class="sub" href="#l16">16 · Embedded RP2040 & Bare-Metal</a><a href="reference.html" class="">Language reference</a><a href="internals.html" class="">Compiler & targets</a></nav><main><div class="top"><span>Loom</span><button id="mb">Menu</button></div><article><h1>Learn Loom</h1><p class="lead">A complete, beginner-friendly tour of the Loom systems programming language. Every lesson is an executable, standalone program.</p>
 
 <h2 id="l1">1 · Program Structure & Hello, World</h2>
 <p>Every Loom source file begins with a <code>Module</code> declaration naming the module. Program execution begins at <code>Block Main</code>. Statements are written inside an <code>Implements</code> block, and every block closes with <code>End Name</code>. The <code>Print</code> built-in writes text followed by a newline to standard output. Characters following <code>#</code> are comments.</p>
@@ -520,6 +520,71 @@ Declares
 Implements
     Res = Calculate()
     Print("Calculation finished successfully")
+End Main</code></pre>
+
+<h2 id="l16">16 · Embedded RP2040 & Bare-Metal Hardware</h2>
+<p>Loom provides a dedicated bare-metal toolchain for microcontroller platforms such as the Raspberry Pi Pico (RP2040). There is no operating system overhead: execution starts directly from the second-stage bootloader and runs in Thumbv6-M machine code.</p>
+
+<h3>16.1 Hardware GPIO & USB-CDC Serial</h3>
+<p>Microcontroller pins are managed via the <code>Gpio</code> module. High-speed serial text transmission without external UART adapters is achieved with <code>Usb_Cdc</code>:</p>
+<pre><code class="l">Module Main
+
+Import Gpio
+Import Time
+Import Usb_Cdc
+
+Constant LED_PIN : Pin = 25
+
+Block Main
+Implements
+    Usb_Cdc.Init()
+    Gpio.Init(LED_PIN)
+    Gpio.Set_Dir(LED_PIN, Gpio.DIR_OUT)
+
+    Loop
+        Gpio.Put(LED_PIN, 1)
+        Print("Heartbeat: LED High")
+        Time.Sleep_Ms(500)
+
+        Gpio.Put(LED_PIN, 0)
+        Print("Heartbeat: LED Low")
+        Time.Sleep_Ms(500)
+    End Loop
+End Main</code></pre>
+
+<h3>16.2 Programmable I/O (PIO) DSL</h3>
+<p>The RP2040 includes two PIO blocks with four independent state machines each. Loom includes a dedicated DSL for PIO assembly that lower directly into 16-bit state-machine instructions:</p>
+<pre><code class="l">Pio_Program SquareWave
+    Wrap_Target
+        Set(Pins, 1) [1]
+        Set(Pins, 0) [1]
+    Wrap
+End Pio_Program
+
+Block RunPio Takes Sm : Pio_State_Machine Implements
+    Pio.Sm_Init(Sm, SquareWave)
+    Pio.Sm_Set_Enabled(Sm, True)
+End RunPio</code></pre>
+
+<h3>16.3 Dual-Core Multicore Execution</h3>
+<p>RP2040 features two ARM Cortex-M0+ cores. Core 1 can be launched with a single block reference, exchanging data via hardware FIFOs:</p>
+<pre><code class="l">Module Main
+
+Import Multicore
+Import Gpio
+Import Time
+
+Block Core1_Worker Implements
+    Loop
+        Val = Multicore.Fifo_Pop()
+        Print("Core 1 received: &lt;Val&gt;")
+    End Loop
+End Core1_Worker
+
+Block Main Implements
+    Multicore.Launch_Core1(Core1_Worker)
+    Multicore.Fifo_Push(42)
+    Multicore.Fifo_Push(100)
 End Main</code></pre>
 
 <div class="pn"><a href="start.html"><small>Previous</small>Getting started</a><a href="reference.html" style="text-align:right"><small>Next</small>Language reference</a></div></article></main><script>

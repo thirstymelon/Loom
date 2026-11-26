@@ -4,9 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$REPO_ROOT/build"
-VERSION="1.4.0"
+VERSION="1.5.0"
 
-TARGET_FILTER="${1:-native}"
+TARGET_FILTER="${1:-all}"
 
 echo "=========================================================="
 echo " Loom Multi-Toolchain PKG Builder for macOS Apple Silicon "
@@ -28,8 +28,8 @@ fi
 chmod 755 "$REPO_ROOT/bin/loom" "$REPO_ROOT/bin/loomc"
 
 echo "=== Packaging VS Code extension ==="
-if [ ! -f "$REPO_ROOT/vscode-loom/Loom-1.4.0.vsix" ]; then
-    (cd "$REPO_ROOT/vscode-loom" && npx --yes @vscode/vsce package -o Loom-1.4.0.vsix --allow-missing-repository --no-git-tag-version)
+if [ ! -f "$REPO_ROOT/vscode-loom/Loom-1.5.0.vsix" ]; then
+    (cd "$REPO_ROOT/vscode-loom" && npx --yes @vscode/vsce package -o Loom-1.5.0.vsix --allow-missing-repository --no-git-tag-version)
 fi
 
 # The compilers link against Homebrew's Z3 and zstd dylibs. Bundle those
@@ -123,7 +123,7 @@ build_native_pkg() {
     cat << 'EOF' > "$NATIVE_PKG_ROOT/usr/local/share/loom/toolchains/native/toolchain.toml"
 name = "native"
 kind = "native"
-version = "1.4.0"
+version = "1.5.0"
 description = "Loom Native Desktop Toolchain (macOS Apple Silicon arm64)"
 target = "arm64-apple-darwin"
 EOF
@@ -192,7 +192,12 @@ build_rp2040_pkg() {
     fi
 
     # RP2040 Toolchain compiler (compiled with RP2040-only enforcement)
-    if [ -f "$BUILD_DIR/loomc-rp2040" ]; then
+    local RP2040_SRC_ROOT="/Users/lokesh/Desktop/Loom-Pico"
+    if [ -f "$RP2040_SRC_ROOT/toolchain/bin/loomc-rp2040" ]; then
+        cp -f "$RP2040_SRC_ROOT/toolchain/bin/loomc-rp2040" "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/bin/loomc"
+    elif [ -f "$RP2040_SRC_ROOT/build/loomc-rp2040" ]; then
+        cp -f "$RP2040_SRC_ROOT/build/loomc-rp2040" "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/bin/loomc"
+    elif [ -f "$BUILD_DIR/loomc-rp2040" ]; then
         cp -f "$BUILD_DIR/loomc-rp2040" "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/bin/loomc"
     else
         cp -f "$REPO_ROOT/bin/loomc" "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/bin/loomc"
@@ -217,15 +222,28 @@ build_rp2040_pkg() {
     cat << 'EOF' > "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/toolchain.toml"
 name = "rp2040"
 kind = "rp2040"
-version = "1.4.0"
+version = "1.5.0"
 description = "Loom RP2040 Embedded Bare-Metal Toolchain (ARM Cortex-M0+)"
 target = "thumbv6m-none-eabi"
 cpu = "cortex-m0plus"
 EOF
 
-    # Embedded Standard Library & RP2040 Hardware SDK / BSP
-    cp -Rf "$REPO_ROOT/sdk/std/"* "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/sdk/std/"
-    cp -Rf "$REPO_ROOT/sdk/targets/rp2040/"* "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/sdk/targets/rp2040/"
+    # Embedded Standard Library & RP2040 Hardware SDK / BSP & Runtime libraries
+    if [ -d "$RP2040_SRC_ROOT/sdk/std" ]; then
+        cp -Rf "$RP2040_SRC_ROOT/sdk/std/"* "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/sdk/std/"
+    elif [ -d "$REPO_ROOT/sdk/std" ]; then
+        cp -Rf "$REPO_ROOT/sdk/std/"* "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/sdk/std/"
+    fi
+
+    if [ -d "$RP2040_SRC_ROOT/sdk/targets/rp2040" ]; then
+        cp -Rf "$RP2040_SRC_ROOT/sdk/targets/rp2040/"* "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/sdk/targets/rp2040/"
+    elif [ -d "$REPO_ROOT/sdk/targets/rp2040" ]; then
+        cp -Rf "$REPO_ROOT/sdk/targets/rp2040/"* "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/sdk/targets/rp2040/"
+    fi
+
+    if [ -d "$RP2040_SRC_ROOT/toolchain/lib" ]; then
+        cp -f "$RP2040_SRC_ROOT/toolchain/lib/"*.a "$RP_PKG_ROOT/usr/local/share/loom/toolchains/rp2040/lib/" 2>/dev/null || true
+    fi
 
     # Post-install script
     cat << 'EOF' > "$RP_SCRIPTS_DIR/postinstall"
@@ -256,11 +274,18 @@ EOF
 }
 
 case "$TARGET_FILTER" in
-    native|all)
+    native)
         build_native_pkg
         ;;
+    rp2040)
+        build_rp2040_pkg
+        ;;
+    all)
+        build_native_pkg
+        build_rp2040_pkg
+        ;;
     *)
-        echo "Error: Unknown target filter '$TARGET_FILTER'. Expected: native"
+        echo "Error: Unknown target filter '$TARGET_FILTER'. Expected: native, rp2040, or all"
         exit 1
         ;;
 esac
