@@ -46,7 +46,7 @@ loom init
 loom init --rp2040
 
 # Add dependencies with SemVer constraint solving
-loom add MathLib                     # Resolves latest compatible version (^1.4.0)
+loom add hash                        # Resolves latest compatible version (^1.0.0)
 loom add SensorLib --path ../SensorLib  # Local filesystem path dependency
 loom add NetLib --git https://github.com/org/NetLib.git --branch main  # Git repository dependency
 ```

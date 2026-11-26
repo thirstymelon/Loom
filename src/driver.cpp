@@ -1085,7 +1085,7 @@ fs::path loomHome() {
     throw Error("cannot find your home directory; set HOME and try again");
 }
 
-std::string registryUrl() {
+[[maybe_unused]] inline std::string registryUrl() {
     if (const char* custom = std::getenv("LOOM_REGISTRY_URL")) if (*custom) return custom;
     return "https://raw.githubusercontent.com/thirstymelon/loom-libraries/main/registry/loom-catalog.tsv";
 }
@@ -1165,7 +1165,7 @@ std::vector<RegistryPackage> readRegistry() {
         if (fs::is_regular_file(lp, ec) && fs::file_size(lp, ec) > 0) {
             auto pkgs = parseCatalogText(readTextFile(lp));
             for (auto& p : pkgs) {
-                if (seen.insert({p.kind, p.name}).second) {
+                if (seen.insert({toLower(p.kind), toLower(p.name)}).second) {
                     merged.push_back(std::move(p));
                 }
             }
@@ -1193,7 +1193,7 @@ std::vector<RegistryPackage> readRegistry() {
                 fs::remove(temp, ec);
                 auto pkgs = parseCatalogText(content);
                 for (auto& p : pkgs) {
-                    if (seen.insert({p.kind, p.name}).second) {
+                    if (seen.insert({toLower(p.kind), toLower(p.name)}).second) {
                         merged.push_back(std::move(p));
                     }
                 }
@@ -1211,7 +1211,7 @@ std::vector<RegistryPackage> readRegistry() {
         if (fs::is_regular_file(cachePath, ec)) {
             auto pkgs = parseCatalogText(readTextFile(cachePath));
             for (auto& p : pkgs) {
-                if (seen.insert({p.kind, p.name}).second) {
+                if (seen.insert({toLower(p.kind), toLower(p.name)}).second) {
                     merged.push_back(std::move(p));
                 }
             }
