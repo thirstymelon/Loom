@@ -1,0 +1,535 @@
+Module Hpack
+
+Record Header_Field
+    Name : Text
+    Value : Text
+End Header_Field
+
+Record Context
+    Capacity : Unsigned_64
+    Size : Unsigned_64
+End Context
+
+Block Context_New Takes
+    Capacity : Unsigned_64
+Produces Context
+Declares
+    Ctx : Context
+Implements
+    Ctx.Capacity = Capacity
+    Ctx.Size = 0
+    Give Ctx
+End Context_New
+
+Block Static_Name Takes
+    Idx : Signed_32
+Produces Text
+Declares
+    Res : Text
+Implements
+    If Idx == 1
+        Res += ":authority"
+    Else If Idx == 2 Or Idx == 3
+        Res += ":method"
+    Else If Idx == 4 Or Idx == 5
+        Res += ":path"
+    Else If Idx == 6 Or Idx == 7
+        Res += ":scheme"
+    Else If Idx >= 8 And Idx <= 14
+        Res += ":status"
+    Else If Idx == 15
+        Res += "accept-charset"
+    Else If Idx == 16
+        Res += "accept-encoding"
+    Else If Idx == 17
+        Res += "accept-language"
+    Else If Idx == 18
+        Res += "accept-ranges"
+    Else If Idx == 19
+        Res += "accept"
+    Else If Idx == 20
+        Res += "access-control-allow-origin"
+    Else If Idx == 21
+        Res += "age"
+    Else If Idx == 22
+        Res += "allow"
+    Else If Idx == 23
+        Res += "authorization"
+    Else If Idx == 24
+        Res += "cache-control"
+    Else If Idx == 25
+        Res += "content-disposition"
+    Else If Idx == 26
+        Res += "content-encoding"
+    Else If Idx == 27
+        Res += "content-language"
+    Else If Idx == 28
+        Res += "content-length"
+    Else If Idx == 29
+        Res += "content-location"
+    Else If Idx == 30
+        Res += "content-range"
+    Else If Idx == 31
+        Res += "content-type"
+    Else If Idx == 32
+        Res += "cookie"
+    Else If Idx == 33
+        Res += "date"
+    Else If Idx == 34
+        Res += "etag"
+    Else If Idx == 35
+        Res += "expect"
+    Else If Idx == 36
+        Res += "expires"
+    Else If Idx == 37
+        Res += "from"
+    Else If Idx == 38
+        Res += "host"
+    Else If Idx == 39
+        Res += "if-match"
+    Else If Idx == 40
+        Res += "if-modified-since"
+    Else If Idx == 41
+        Res += "if-none-match"
+    Else If Idx == 42
+        Res += "if-range"
+    Else If Idx == 43
+        Res += "if-unmodified-since"
+    Else If Idx == 44
+        Res += "last-modified"
+    Else If Idx == 45
+        Res += "link"
+    Else If Idx == 46
+        Res += "location"
+    Else If Idx == 47
+        Res += "max-forwards"
+    Else If Idx == 48
+        Res += "proxy-authenticate"
+    Else If Idx == 49
+        Res += "proxy-authorization"
+    Else If Idx == 50
+        Res += "range"
+    Else If Idx == 51
+        Res += "referer"
+    Else If Idx == 52
+        Res += "refresh"
+    Else If Idx == 53
+        Res += "retry-after"
+    Else If Idx == 54
+        Res += "server"
+    Else If Idx == 55
+        Res += "set-cookie"
+    Else If Idx == 56
+        Res += "strict-transport-security"
+    Else If Idx == 57
+        Res += "transfer-encoding"
+    Else If Idx == 58
+        Res += "user-agent"
+    Else If Idx == 59
+        Res += "vary"
+    Else If Idx == 60
+        Res += "via"
+    Else If Idx == 61
+        Res += "www-authenticate"
+    End If
+    Give Res
+End Static_Name
+
+Block Static_Value Takes
+    Idx : Signed_32
+Produces Text
+Declares
+    Res : Text
+Implements
+    If Idx == 2
+        Res += "GET"
+    Else If Idx == 3
+        Res += "POST"
+    Else If Idx == 4
+        Res += "/"
+    Else If Idx == 5
+        Res += "/index.html"
+    Else If Idx == 6
+        Res += "http"
+    Else If Idx == 7
+        Res += "https"
+    Else If Idx == 8
+        Res += "200"
+    Else If Idx == 9
+        Res += "204"
+    Else If Idx == 10
+        Res += "206"
+    Else If Idx == 11
+        Res += "304"
+    Else If Idx == 12
+        Res += "400"
+    Else If Idx == 13
+        Res += "404"
+    Else If Idx == 14
+        Res += "500"
+    Else If Idx == 16
+        Res += "gzip, deflate"
+    End If
+    Give Res
+End Static_Value
+
+Block Match_Static_Header Takes
+    Name : Text
+    Value : Text
+Produces Signed_32
+Declares
+    I : Signed_32 = 1
+    N : Text
+    V : Text
+    Partial_Match : Signed_32 = 0
+Implements
+    Loop while (I <= 61)
+        N = Static_Name(I)
+        If N == Name
+            V = Static_Value(I)
+            If V.Length > 0 And V == Value
+                # Full match (name and value)
+                Give I
+            End If
+            If Partial_Match == 0
+                Partial_Match = I
+            End If
+        End If
+        I = I + 1
+    End Loop
+    If Partial_Match > 0
+        Give 0 - Partial_Match
+    End If
+    Give 0
+End Match_Static_Header
+
+Block Empty_Text Produces Text
+Declares
+    T : Text
+Implements
+    Give T
+End Empty_Text
+
+Block Encode_Int Takes
+    Value : Unsigned_64
+    Prefix_Bits : Signed_32
+    Prefix_Byte : Signed_32
+Produces Text
+Declares
+    Out : Text
+    Max_Prefix : Unsigned_64 = 0
+    I : Signed_32 = 0
+    Val : Unsigned_64 = Value
+    First_Byte : Signed_32
+    Rem : Signed_32
+    C : Character
+Implements
+    # Calculate (1 << Prefix_Bits) - 1
+    I = 0
+    Loop while (I < Prefix_Bits)
+        Max_Prefix = Max_Prefix * 2 + 1
+        I = I + 1
+    End Loop
+
+    If Val < Max_Prefix
+        First_Byte = Prefix_Byte + ((Val as Unsigned_32) as Signed_32)
+        C = First_Byte as Character
+        Out += C
+        Give Out
+    End If
+
+    First_Byte = Prefix_Byte + ((Max_Prefix as Unsigned_32) as Signed_32)
+    C = First_Byte as Character
+    Out += C
+    Val = Val - Max_Prefix
+
+    Loop while (Val >= 128)
+        Rem = ((Val % 128) as Signed_32) + 128
+        C = Rem as Character
+        Out += C
+        Val = Val / 128
+    End Loop
+
+    Rem = (Val as Signed_32)
+    C = Rem as Character
+    Out += C
+    Give Out
+End Encode_Int
+
+Block Encode_String Takes
+    S : Text
+Produces Text
+Declares
+    Out : Text
+    Len : Unsigned_64
+Implements
+    Len = S.Length
+    # 7-bit prefix integer for string length (H=0 bit)
+    Out += Encode_Int(Len, 7, 0)
+    Out += S
+    Give Out
+End Encode_String
+
+Block Encode_Header_Field Takes
+    Name : Text
+    Value : Text
+Produces Text
+Declares
+    Out : Text
+    Match_Idx : Signed_32
+    Name_Idx : Signed_32
+    C : Character
+Implements
+    Match_Idx = Match_Static_Header(Name, Value)
+    If Match_Idx > 0
+        # Complete indexed representation: 1xxxxxxx (7-bit prefix)
+        Out += Encode_Int(Match_Idx as Unsigned_64, 7, 128)
+        Give Out
+    End If
+
+    If Match_Idx < 0
+        # Name is indexed, value is literal with incremental indexing: 01xxxxxx (6-bit prefix)
+        Name_Idx = 0 - Match_Idx
+        Out += Encode_Int(Name_Idx as Unsigned_64, 6, 64)
+        Out += Encode_String(Value)
+        Give Out
+    End If
+
+    # Both name and value are literal: 01000000 (64) followed by name string and value string
+    Out += Encode_Int(0, 6, 64)
+    Out += Encode_String(Name)
+    Out += Encode_String(Value)
+    Give Out
+End Encode_Header_Field
+
+Block Encode_Headers Takes
+    Ctx : Context
+    Headers_Raw : Text
+Produces Text
+Declares
+    Out : Text
+    Len : Unsigned_64
+    I : Unsigned_64 = 1
+    Line_Start : Unsigned_64 = 1
+    Colon_Pos : Unsigned_64 = 0
+    Line_End : Unsigned_64 = 0
+    H_Name : Text
+    H_Val : Text
+    J : Unsigned_64
+    C : Unsigned_32
+Implements
+    Len = Headers_Raw.Length
+    Loop while (I <= Len)
+        C = Headers_Raw[I] as Unsigned_32
+        If C == 58 And I > Line_Start And Colon_Pos == 0 # ':'
+            Colon_Pos = I
+        End If
+        If C == 10 # '\n'
+            Line_End = I - 1
+            If Line_End >= Line_Start And (Headers_Raw[Line_End] as Unsigned_32) == 13 # '\r'
+                Line_End = Line_End - 1
+            End If
+            If Colon_Pos > Line_Start And Colon_Pos <= Line_End
+                H_Name = Empty_Text()
+                J = Line_Start
+                Loop while (J < Colon_Pos)
+                    H_Name += Headers_Raw[J .. J]
+                    J = J + 1
+                End Loop
+
+                H_Val = Empty_Text()
+                J = Colon_Pos + 1
+                # Trim leading spaces
+                Loop while (J <= Line_End And (Headers_Raw[J] as Unsigned_32) == 32)
+                    J = J + 1
+                End Loop
+                Loop while (J <= Line_End)
+                    H_Val += Headers_Raw[J .. J]
+                    J = J + 1
+                End Loop
+
+                Out += Encode_Header_Field(H_Name, H_Val)
+            End If
+            Line_Start = I + 1
+            Colon_Pos = 0
+        End If
+        I = I + 1
+    End Loop
+
+    # Handle trailing line if present without newline
+    If Line_Start <= Len And Colon_Pos > Line_Start
+        Line_End = Len
+        H_Name = Empty_Text()
+        J = Line_Start
+        Loop while (J < Colon_Pos)
+            H_Name += Headers_Raw[J .. J]
+            J = J + 1
+        End Loop
+        H_Val = Empty_Text()
+        J = Colon_Pos + 1
+        Loop while (J <= Line_End And (Headers_Raw[J] as Unsigned_32) == 32)
+            J = J + 1
+        End Loop
+        Loop while (J <= Line_End)
+            H_Val += Headers_Raw[J .. J]
+            J = J + 1
+        End Loop
+        Out += Encode_Header_Field(H_Name, H_Val)
+    End If
+
+    Give Out
+End Encode_Headers
+
+Record Decoded_Int
+    Value : Unsigned_64
+    Next_Pos : Unsigned_64
+End Decoded_Int
+
+Block Decode_Int Takes
+    Data : Text
+    Pos : Unsigned_64
+    Prefix_Bits : Signed_32
+Produces Decoded_Int
+Declares
+    Res : Decoded_Int
+    Max_Prefix : Unsigned_64 = 0
+    I : Signed_32 = 0
+    First : Unsigned_32
+    B : Unsigned_32
+    Cur_Pos : Unsigned_64 = Pos
+    Val : Unsigned_64
+    Shift : Unsigned_64 = 1
+    Mult : Unsigned_64 = 1
+Implements
+    I = 0
+    Loop while (I < Prefix_Bits)
+        Max_Prefix = Max_Prefix * 2 + 1
+        I = I + 1
+    End Loop
+
+    First = (Data[Cur_Pos] as Unsigned_32)
+    Val = (First as Unsigned_64) % (Max_Prefix + 1)
+    Cur_Pos = Cur_Pos + 1
+
+    If Val < Max_Prefix
+        Res.Value = Val
+        Res.Next_Pos = Cur_Pos
+        Give Res
+    End If
+
+    Loop while (Cur_Pos <= Data.Length)
+        B = Data[Cur_Pos] as Unsigned_32
+        Cur_Pos = Cur_Pos + 1
+        Val = Val + ((B % 128) as Unsigned_64) * Mult
+        Mult = Mult * 128
+        If B < 128
+            Exit
+        End If
+    End Loop
+
+    Res.Value = Val
+    Res.Next_Pos = Cur_Pos
+    Give Res
+End Decode_Int
+
+Record Decoded_String
+    Str : Text
+    Next_Pos : Unsigned_64
+End Decoded_String
+
+Block Decode_String Takes
+    Data : Text
+    Pos : Unsigned_64
+Produces Decoded_String
+Declares
+    Res : Decoded_String
+    Di : Decoded_Int
+    Str_Len : Unsigned_64
+    Cur_Pos : Unsigned_64
+    End_Pos : Unsigned_64
+Implements
+    Res.Str = Empty_Text()
+    Res.Next_Pos = Pos
+    Di = Decode_Int(Data, Pos, 7)
+    Str_Len = Di.Value
+    Cur_Pos = Di.Next_Pos
+    End_Pos = Cur_Pos + Str_Len - 1
+    If End_Pos <= Data.Length And Str_Len > 0
+        Res.Str += Data[Cur_Pos .. End_Pos]
+    End If
+    Res.Next_Pos = Cur_Pos + Str_Len
+    Give Res
+End Decode_String
+
+Block Decode_Headers Takes
+    Ctx : Context
+    Data : Text
+Produces Text
+Declares
+    Out : Text
+    Pos : Unsigned_64 = 1
+    Len : Unsigned_64
+    B : Unsigned_32
+    Di : Decoded_Int
+    Ds : Decoded_String
+    Idx : Signed_32
+    H_Name : Text
+    H_Val : Text
+Implements
+    Len = Data.Length
+    Loop while (Pos <= Len)
+        B = Data[Pos] as Unsigned_32
+        If (B / 128) == 1
+            # 1xxxxxxx: Indexed Header Field
+            Di = Decode_Int(Data, Pos, 7)
+            Pos = Di.Next_Pos
+            Idx = Di.Value as Signed_32
+            H_Name = Static_Name(Idx)
+            H_Val = Static_Value(Idx)
+            Out += H_Name
+            Out += ": "
+            Out += H_Val
+            Out += "\r\n"
+        Else If (B / 64) == 1
+            # 01xxxxxx: Literal with Incremental Indexing
+            Di = Decode_Int(Data, Pos, 6)
+            Pos = Di.Next_Pos
+            Idx = Di.Value as Signed_32
+            If Idx > 0
+                H_Name = Static_Name(Idx)
+            Else
+                Ds = Decode_String(Data, Pos)
+                H_Name = Ds.Str
+                Pos = Ds.Next_Pos
+            End If
+            Ds = Decode_String(Data, Pos)
+            H_Val = Ds.Str
+            Pos = Ds.Next_Pos
+            Out += H_Name
+            Out += ": "
+            Out += H_Val
+            Out += "\r\n"
+        Else
+            # Literal without indexing (0000xxxx or 0001xxxx)
+            Di = Decode_Int(Data, Pos, 4)
+            Pos = Di.Next_Pos
+            Idx = Di.Value as Signed_32
+            If Idx > 0
+                H_Name = Static_Name(Idx)
+            Else
+                Ds = Decode_String(Data, Pos)
+                H_Name = Ds.Str
+                Pos = Ds.Next_Pos
+            End If
+            Ds = Decode_String(Data, Pos)
+            H_Val = Ds.Str
+            Pos = Ds.Next_Pos
+            Out += H_Name
+            Out += ": "
+            Out += H_Val
+            Out += "\r\n"
+        End If
+    End Loop
+
+    Give Out
+End Decode_Headers

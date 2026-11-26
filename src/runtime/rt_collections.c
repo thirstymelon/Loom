@@ -62,6 +62,22 @@ void loom_text_append_str(LoomText* t, const char* str) {
     t->data[t->length] = '\0';
 }
 
+void loom_text_append_buf(LoomText* t, const char* data, uint64_t len) {
+    if (!t || !data || len == 0) return;
+    if (t->length > UINT64_MAX - len - 1) {
+        loom_runtime_abort("Text length overflow");
+    }
+    uintptr_t data_addr = (uintptr_t)t->data;
+    uintptr_t src_addr = (uintptr_t)data;
+    bool aliases = t->data && src_addr >= data_addr && src_addr - data_addr < t->capacity;
+    uint64_t source_offset = aliases ? (uint64_t)(src_addr - data_addr) : 0;
+    loom_text_ensure_cap(t, t->length + len + 1);
+    if (aliases) data = t->data + source_offset;
+    memmove(t->data + t->length, data, (size_t)len);
+    t->length += len;
+    t->data[t->length] = '\0';
+}
+
 void loom_text_append_char(LoomText* t, char c) {
     if (!t) return;
     if (t->length > UINT64_MAX - 2) loom_runtime_abort("Text length overflow");
@@ -138,10 +154,31 @@ void loom_text_clear(LoomText* t) {
 
 void loom_text_clone(LoomText* dest, const LoomText* src) {
     if (!dest || !src) return;
-    loom_text_init(dest, src->capacity > 0 ? src->capacity : 64);
+    if (src->length == UINT64_MAX) loom_runtime_abort("Text clone length overflow");
+    uint64_t capacity = src->length + 1;
+    if (capacity < 64) capacity = 64;
+    loom_text_init(dest, capacity);
     if (src->data && src->length > 0) {
-        loom_text_append_str(dest, src->data);
+        loom_text_ensure_cap(dest, src->length + 1);
+        memcpy(dest->data, src->data, (size_t)src->length);
+        dest->length = src->length;
+        dest->data[dest->length] = '\0';
     }
+}
+
+int loom_text_equals(const LoomText* a, const LoomText* b) {
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+    if (a->length != b->length) return 0;
+    if (a->length == 0) return 1;
+    if (!a->data || !b->data) return 0;
+    return memcmp(a->data, b->data, (size_t)a->length) == 0 ? 1 : 0;
+}
+
+int loom_string_equals(const char* a, const char* b) {
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+    return strcmp(a, b) == 0 ? 1 : 0;
 }
 
 void loom_text_free(LoomText* t) {
@@ -150,6 +187,34 @@ void loom_text_free(LoomText* t) {
     t->data = NULL;
     t->length = 0;
     t->capacity = 0;
+}
+
+/* Decode one UTF-8 scalar at a byte offset. Invalid sequences produce U+FFFD
+ * and advance by one byte, so malformed input cannot stall iteration. */
+uint32_t loom_utf8_width_at(const char* s, uint64_t length, uint64_t i) {
+    if (!s || i >= length) return 1;
+    const unsigned char c = (unsigned char)s[i];
+    if (c < 0x80) return 1;
+    uint32_t width = (c >= 0xC2 && c <= 0xDF) ? 2 :
+                     (c >= 0xE0 && c <= 0xEF) ? 3 :
+                     (c >= 0xF0 && c <= 0xF4) ? 4 : 1;
+    if (width == 1 || i + width > length) return 1;
+    for (uint32_t n = 1; n < width; ++n)
+        if (((unsigned char)s[i + n] & 0xC0) != 0x80) return 1;
+    const unsigned char b1 = (unsigned char)s[i + 1];
+    if ((c == 0xE0 && b1 < 0xA0) || (c == 0xED && b1 >= 0xA0) ||
+        (c == 0xF0 && b1 < 0x90) || (c == 0xF4 && b1 >= 0x90)) return 1;
+    return width;
+}
+
+uint32_t loom_utf8_decode_at(const char* s, uint64_t length, uint64_t i) {
+    if (!s || i >= length) return 0xFFFD;
+    uint32_t width = loom_utf8_width_at(s, length, i);
+    const unsigned char c = (unsigned char)s[i];
+    if (width == 1) return c < 0x80 ? c : 0xFFFD;
+    uint32_t value = c & (width == 2 ? 0x1F : width == 3 ? 0x0F : 0x07);
+    for (uint32_t n = 1; n < width; ++n) value = (value << 6) | ((unsigned char)s[i + n] & 0x3F);
+    return value;
 }
 
 /* ---------------------------------------------------------------------------

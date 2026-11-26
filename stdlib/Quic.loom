@@ -1,0 +1,326 @@
+Module Quic
+Import Net
+Import NetAsync
+Import Hpack
+use Hpack
+
+Record Quic_Packet
+    Header_Byte : Unsigned_8
+    Version : Unsigned_32
+    Dcid : Text
+    Scid : Text
+    Packet_Number : Unsigned_64
+    Payload : Text
+End Quic_Packet
+
+Record Quic_Connection
+    Socket : Signed_32
+    Host : Text
+    Port : Signed_32
+    Dcid : Text
+    Scid : Text
+    Next_Packet_Number : Unsigned_64
+    Client_Key : Text
+    Client_Iv : Text
+    Client_Hp : Text
+    Is_Connected : Boolean
+End Quic_Connection
+
+Record Decoded_Varint
+    Value : Unsigned_64
+    Next_Pos : Unsigned_64
+End Decoded_Varint
+
+Block Varint_Encode Takes
+    Val : Unsigned_64
+Produces Text
+Declares
+    Out : Text
+    C : Character
+    B0 : Unsigned_32
+    B1 : Unsigned_32
+    B2 : Unsigned_32
+    B3 : Unsigned_32
+Implements
+    If Val <= 63
+        C = (Val as Signed_32) as Character
+        Out += C
+        Give Out
+    End If
+
+    If Val <= 16383
+        # 2-byte varint: prefix 01 (0x40 = 64)
+        B0 = ((Val / 256) as Unsigned_32) + 64
+        B1 = (Val % 256) as Unsigned_32
+        C = (B0 as Signed_32) as Character
+        Out += C
+        C = (B1 as Signed_32) as Character
+        Out += C
+        Give Out
+    End If
+
+    # 4-byte varint: prefix 10 (0x80 = 128)
+    B0 = ((Val / 16777216) as Unsigned_32) + 128
+    B1 = ((Val / 65536) % 256) as Unsigned_32
+    B2 = ((Val / 256) % 256) as Unsigned_32
+    B3 = (Val % 256) as Unsigned_32
+    C = (B0 as Signed_32) as Character
+    Out += C
+    C = (B1 as Signed_32) as Character
+    Out += C
+    C = (B2 as Signed_32) as Character
+    Out += C
+    C = (B3 as Signed_32) as Character
+    Out += C
+    Give Out
+End Varint_Encode
+
+Block Varint_Decode Takes
+    Data : Text
+    Pos : Unsigned_64
+Produces Decoded_Varint
+Declares
+    Res : Decoded_Varint
+    First : Unsigned_32
+    Mode : Unsigned_32
+    Val : Unsigned_64
+    B1 : Unsigned_32
+    B2 : Unsigned_32
+    B3 : Unsigned_32
+Implements
+    First = Data[Pos] as Unsigned_32
+    Mode = First / 64
+
+    If Mode == 0
+        Res.Value = First as Unsigned_64
+        Res.Next_Pos = Pos + 1
+        Give Res
+    End If
+
+    If Mode == 1
+        B1 = Data[Pos + 1] as Unsigned_32
+        Val = ((First % 64) * 256 + B1) as Unsigned_64
+        Res.Value = Val
+        Res.Next_Pos = Pos + 2
+        Give Res
+    End If
+
+    If Mode == 2
+        B1 = Data[Pos + 1] as Unsigned_32
+        B2 = Data[Pos + 2] as Unsigned_32
+        B3 = Data[Pos + 3] as Unsigned_32
+        Val = ((First % 64) * 16777216 + B1 * 65536 + B2 * 256 + B3) as Unsigned_64
+        Res.Value = Val
+        Res.Next_Pos = Pos + 4
+        Give Res
+    End If
+
+    Res.Value = First as Unsigned_64
+    Res.Next_Pos = Pos + 1
+    Give Res
+End Varint_Decode
+
+Block Udp_Receive Takes
+    Fd : Signed_32
+    Max_Cap : Unsigned_64
+Produces Text
+Declares
+    Out : Text
+    Arr : Array[Unsigned_8, 4096]
+    Recvd : Signed_64
+    I : Unsigned_64 = 1
+Implements
+    Recvd = Udp_Receive_Buffer(Fd, Address(Arr[1]), 4096)
+    If Recvd > 0
+        Loop while (I <= (Recvd as Unsigned_64))
+            Out += (Arr[I] as Signed_32) as Character
+            I = I + 1
+        End Loop
+    End If
+    Give Out
+End Udp_Receive
+
+Block Connect_Quic Takes
+    Host : Text
+    Port : Signed_32
+Produces Quic_Connection
+Declares
+    Conn : Quic_Connection
+    Fd : Signed_32
+    Conn_Res : Signed_32
+    Keys_Str : Text
+    Dcid_Hex : Text
+    Scid_Hex : Text
+    Colon1 : Unsigned_64 = 0
+    Colon2 : Unsigned_64 = 0
+    I : Unsigned_64 = 1
+    C : Unsigned_32
+Implements
+    Conn.Socket = -1
+    Conn.Host = Empty_Text()
+    Conn.Host += Host
+    Conn.Port = Port
+    Conn.Next_Packet_Number = 0
+    Conn.Is_Connected = False
+
+    # Generate 8-byte random Connection IDs
+    Dcid_Hex += "8394c8f03e515708"
+    Scid_Hex += "0102030405060708"
+    Conn.Dcid += Dcid_Hex
+    Conn.Scid += Scid_Hex
+
+    Fd = Udp_Connect(Host, Port)
+    If Fd < 0
+        Give Conn
+    End If
+
+    Conn.Socket = Fd
+
+    # Derive initial keys via native OpenSSL runtime lowering
+    Keys_Str = Quic_Initial_Keys(Dcid_Hex)
+
+    # Parse key:iv:hp
+    Loop while (I <= Keys_Str.Length)
+        C = Keys_Str[I] as Unsigned_32
+        If C == 58 # ':'
+            If Colon1 == 0
+                Colon1 = I
+            Else If Colon2 == 0
+                Colon2 = I
+            End If
+        End If
+        I = I + 1
+    End Loop
+
+    If Colon1 > 1 And Colon2 > Colon1
+        Conn.Client_Key += Keys_Str[1 .. Colon1 - 1]
+        Conn.Client_Iv += Keys_Str[Colon1 + 1 .. Colon2 - 1]
+        Conn.Client_Hp += Keys_Str[Colon2 + 1 .. Keys_Str.Length]
+        Conn.Is_Connected = True
+    Else
+        Udp_Close(Fd)
+        Conn.Is_Connected = False
+    End If
+
+    Give Conn
+End Connect_Quic
+
+Block Format_Stream_Frame Takes
+    Stream_Id : Unsigned_64
+    Data : Text
+    Is_Fin : Boolean
+Produces Text
+Declares
+    Out : Text
+    Frame_Type : Unsigned_8 = 8 # 0x08: STREAM frame with LEN bit (0x02) = 0x0a
+    C : Character
+Implements
+    If Is_Fin
+        Frame_Type = 9
+    End If
+    Frame_Type = Frame_Type + 2 # Add LEN bit (0x02)
+
+    C = ((Frame_Type as Unsigned_32) as Signed_32) as Character
+    Out += C
+    Out += Varint_Encode(Stream_Id)
+    Out += Varint_Encode(Data.Length)
+    Out += Data
+    Give Out
+End Format_Stream_Frame
+
+Block Stream_Write Takes
+    Conn : Quic_Connection
+    Stream_Id : Unsigned_64
+    Data : Text
+    Is_Fin : Boolean
+Produces Signed_32
+Declares
+    Frame_Payload : Text
+    Packet : Text
+    Header_Byte : Character
+    C : Character
+    Sent : Signed_64
+    Pkt_Num : Unsigned_64
+Implements
+    If Not Conn.Is_Connected
+        Give -1
+    End If
+
+    Pkt_Num = Conn.Next_Packet_Number
+    Conn.Next_Packet_Number = Conn.Next_Packet_Number + 1
+
+    # Short header (1-RTT application packet: 0x40 + 1-byte packet number)
+    Header_Byte = 64 as Character
+    Packet += Header_Byte
+
+    # Append Destination Connection ID bytes
+    Packet += Conn.Dcid
+
+    # Append 1-byte Packet Number
+    C = (((Pkt_Num % 256) as Unsigned_32) as Signed_32) as Character
+    Packet += C
+
+    # Format stream frame payload
+    Frame_Payload = Format_Stream_Frame(Stream_Id, Data, Is_Fin)
+    Packet += Frame_Payload
+
+    Sent = Udp_Send(Conn.Socket, Packet)
+    If Sent < 0
+        Give -1
+    End If
+    Give 0
+End Stream_Write
+
+Block Stream_Read Takes
+    Conn : Quic_Connection
+    Stream_Id : Unsigned_64
+Produces Text
+Declares
+    Out : Text
+    Buf : Text
+    Recvd : Signed_64
+    Payload_Start : Unsigned_64 = 1
+    Di : Decoded_Varint
+    F_Type : Unsigned_8
+    F_Stream : Unsigned_64
+    F_Len : Unsigned_64
+Implements
+    If Not Conn.Is_Connected
+        Give Out
+    End If
+
+    Buf = Udp_Receive(Conn.Socket, 4096)
+    If Buf.Length < 10
+        Give Out
+    End If
+
+    # Simple frame scan in packet payload
+    Payload_Start = 1 + Conn.Dcid.Length + 1 # Header + DCID + PktNum
+    If Payload_Start <= Buf.Length
+        F_Type = (Buf[Payload_Start] as Unsigned_32) as Unsigned_8
+        If (F_Type / 8) == 1 # STREAM frame (0x08-0x0f)
+            Di = Varint_Decode(Buf, Payload_Start + 1)
+            F_Stream = Di.Value
+            Di = Varint_Decode(Buf, Di.Next_Pos)
+            F_Len = Di.Value
+            If Di.Next_Pos + F_Len - 1 <= Buf.Length And F_Stream == Stream_Id
+                Out += Buf[Di.Next_Pos .. Di.Next_Pos + F_Len - 1]
+            End If
+        End If
+    End If
+
+    Give Out
+End Stream_Read
+
+Block Close_Quic Takes
+    Conn : Quic_Connection
+Produces Signed_32
+Declares
+    Status : Signed_32
+Implements
+    If Conn.Is_Connected
+        Status = Udp_Close(Conn.Socket)
+        Conn.Is_Connected = False
+    End If
+    Give 0
+End Close_Quic

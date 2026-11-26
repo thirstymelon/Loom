@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Loom VERSION 1.4.0 LANGUAGES C CXX)
+project(Loom VERSION 1.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,16 +15,18 @@ add_executable(loom src/driver.cpp)
 add_executable(loom-lsp src/lsp.cpp)
 add_library(loom_rt STATIC
   src/runtime/rt_core.c
+  src/runtime/rt_arena.c
   src/runtime/rt_smart_ptr.c
   src/runtime/rt_collections.c
   src/runtime/rt_threads.c
-  src/runtime/rt_net.c
   src/runtime/rt_hash.c
+  src/runtime/rt_tls.c
 )
 target_include_directories(loom_rt PUBLIC src/runtime)
 target_compile_options(loom_rt PRIVATE -ffunction-sections -fdata-sections)
 install(TARGETS loom loomc loom-lsp RUNTIME DESTINATION bin)
 install(TARGETS loom_rt ARCHIVE DESTINATION lib)
+install(DIRECTORY stdlib/ DESTINATION share/loom/stdlib FILES_MATCHING PATTERN "*.loom")
 target_include_directories(loomc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(LLVM_LIBS Core Support Target CodeGen MC native aarch64codegen aarch64asmparser aarch64desc aarch64info aarch64utils armcodegen armasmparser armdesc arminfo x86codegen x86asmparser x86desc x86info Passes)
@@ -57,6 +59,17 @@ if(BUILD_TESTING)
   add_test(NAME runtime_regressions
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_regressions.py
       $<TARGET_FILE:loomc> ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME networking_library
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/networking_library_tests.py
+      $<TARGET_FILE:loomc> ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME networking_integration
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/networking_integration_tests.py
+      $<TARGET_FILE:loomc> $<TARGET_FILE:loom_rt> ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME dns_library
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/dns_library_tests.py
+      $<TARGET_FILE:loomc> $<TARGET_FILE:loom_rt> ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME http2_http3_server_integration
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/http2_http3_server_integration_tests.py)
   add_test(NAME modern_features_suite
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/modern_features_tests.py $<TARGET_FILE:loomc>)
 

@@ -1,0 +1,135 @@
+# Loom's hosted networking convenience library.
+# The implementation is Loom source; the compiler lowers the primitive socket
+# operations to the host socket ABI.
+Module Net
+
+Block Tcp_Send_All Takes
+    Connection : Signed_32
+    Data : Text
+Produces Signed_64
+Declares
+    Offset : Unsigned_64 = 1
+    Sent : Signed_64
+    Length : Unsigned_64
+Implements
+    Length = Data.Length
+    Loop while (Offset <= Length)
+        Sent = Tcp_Send_At(Connection, Data, Offset)
+        If Sent <= 0
+            Give -1
+        End If
+        Offset = Offset + (Sent as Unsigned_64)
+    End Loop
+    Give (Offset - 1) as Signed_64
+End Tcp_Send_All
+
+Block Tcp_Receive_Exactly Takes
+    Connection : Signed_32
+    Byte_Count : Unsigned_64
+Produces Text
+Declares
+    Result : Text
+    Chunk : Text
+    Remaining : Unsigned_64
+Implements
+    Remaining = Byte_Count
+    Loop while (Remaining > 0)
+        Chunk = Tcp_Receive(Connection, Remaining)
+        If Chunk.Length == 0
+            Give Result
+        End If
+        Result += Chunk
+        Remaining = Remaining - Chunk.Length
+    End Loop
+    Give Result
+End Tcp_Receive_Exactly
+
+Block Tcp_Receive_Until_Close Takes
+    Connection : Signed_32
+    Chunk_Size : Unsigned_64
+Produces Text
+Declares
+    Result : Text
+    Chunk : Text
+Implements
+    Loop
+        Chunk = Tcp_Receive(Connection, Chunk_Size)
+        If Chunk.Length == 0
+            Exit
+        End If
+        Result += Chunk
+    End Loop
+    Give Result
+End Tcp_Receive_Until_Close
+
+Block Tcp_Wait Takes
+    Connection : Signed_32
+    Events : Unsigned_32
+    Timeout_Milliseconds : Signed_32
+Produces Signed_32
+Implements
+    Give Socket_Wait(Connection, Events, Timeout_Milliseconds)
+End Tcp_Wait
+
+Block Tcp_Set_Timeout Takes
+    Connection : Signed_32
+    Timeout_Milliseconds : Signed_32
+Produces Signed_32
+Implements
+    Give Socket_Set_Timeout(Connection, Timeout_Milliseconds)
+End Tcp_Set_Timeout
+
+Block Udp_Wait Takes
+    Connection : Signed_32
+    Events : Unsigned_32
+    Timeout_Milliseconds : Signed_32
+Produces Signed_32
+Implements
+    Give Socket_Wait(Connection, Events, Timeout_Milliseconds)
+End Udp_Wait
+
+Block Udp_Set_Timeout Takes
+    Connection : Signed_32
+    Timeout_Milliseconds : Signed_32
+Produces Signed_32
+Implements
+    Give Socket_Set_Timeout(Connection, Timeout_Milliseconds)
+End Udp_Set_Timeout
+
+Block Socket_Make_Nonblocking Takes
+    Connection : Signed_32
+    Nonblocking : Boolean
+Produces Signed_32
+Implements
+    Give Socket_Set_Nonblocking(Connection, Nonblocking)
+End Socket_Make_Nonblocking
+
+Block Socket_Error Takes
+    Connection : Signed_32
+Produces Signed_32
+Implements
+    Give Socket_Get_Error(Connection)
+End Socket_Error
+
+Block Tcp_Wait_Readable Takes
+    Connection : Signed_32
+    Timeout_Milliseconds : Signed_32
+Produces Boolean
+Declares
+    Events : Signed_32
+Implements
+    Events = Socket_Wait(Connection, 1, Timeout_Milliseconds)
+    Give (Events & 1) != 0
+End Tcp_Wait_Readable
+
+Block Tcp_Wait_Writable Takes
+    Connection : Signed_32
+    Timeout_Milliseconds : Signed_32
+Produces Boolean
+Declares
+    Events : Signed_32
+Implements
+    Events = Socket_Wait(Connection, 2, Timeout_Milliseconds)
+    Give (Events & 2) != 0
+End Tcp_Wait_Writable
+

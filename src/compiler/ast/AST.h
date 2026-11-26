@@ -37,7 +37,7 @@
 
 namespace loom {
 struct Expr {
-    enum class Kind { Integer, Floating, Boolean, String, Character, EnumVariant, Member, Variable, Call, Unary, Binary, Address, Deref, NullLiteral, Cast, Index, SliceConstructor, ArrayLiteral, RecordLiteral, SubSlice, Try, Allocate, Resize, Release, Spawn, Join, TupleLiteral, HMapLiteral, Closure, Await, Move, Copy, Borrow } kind;
+    enum class Kind { Integer, Floating, Boolean, String, Character, EnumVariant, Member, Variable, Call, Unary, Binary, Address, Deref, NullLiteral, Cast, Index, SliceConstructor, ArrayLiteral, RecordLiteral, SubSlice, Try, Allocate, Resize, Release, Spawn, Join, TupleLiteral, HMapLiteral, Closure, Await, Move, Copy, Borrow, OnError } kind;
     std::string text;
     std::string qualifier;
     std::string formatSpec;
@@ -45,7 +45,10 @@ struct Expr {
     std::uint64_t magnitude = 0;
     double floating = 0.0;
     bool boolean = false;
+    bool isPrivileged = false;
     int line = 1;
+    int column = 1;
+    int length = 1;
     Type targetType;
     std::unique_ptr<Expr> left, right;
     std::vector<std::unique_ptr<Expr>> arguments;
@@ -65,6 +68,8 @@ struct MatchCase {
     std::unique_ptr<Expr> guard;
     std::vector<Stmt> body;
     int line = 1;
+    int column = 1;
+    int length = 1;
 
     MatchCase() = default;
     MatchCase(const MatchCase&) = delete;
@@ -74,10 +79,13 @@ struct MatchCase {
 };
 
 struct Stmt {
-    enum class Kind { Assign, Call, Give, Write, Exit, Skip, If, Loop, DerefAssign, Ensure, TargetAssign, Match, Use, MultiAssign, ForIn, Lock } kind;
+    enum class Kind { Assign, Call, Give, Write, Exit, Skip, If, Loop, DerefAssign, Ensure, TargetAssign, Match, Use, MultiAssign, ForIn, Lock, UnsafeBlock, AsmBlock } kind;
+    std::string asmTemplate;
     std::string name;
     std::string member;
     int line = 1;
+    int column = 1;
+    int length = 1;
     std::unique_ptr<Expr> expr;
     std::unique_ptr<Expr> target;
     std::shared_ptr<Stmt> ensuredStmt;
@@ -110,7 +118,10 @@ inline std::unique_ptr<Expr> cloneExpr(const Expr& e) {
     c->magnitude = e.magnitude;
     c->floating = e.floating;
     c->boolean = e.boolean;
+    c->isPrivileged = e.isPrivileged;
     c->line = e.line;
+    c->column = e.column;
+    c->length = e.length;
     c->targetType = e.targetType;
     if (e.left) c->left = cloneExpr(*e.left);
     if (e.right) c->right = cloneExpr(*e.right);
@@ -135,6 +146,8 @@ inline MatchCase cloneMatchCase(const MatchCase& mc) {
     if (mc.guard) res.guard = cloneExpr(*mc.guard);
     for (const auto& b : mc.body) res.body.push_back(cloneStmt(b));
     res.line = mc.line;
+    res.column = mc.column;
+    res.length = mc.length;
     return res;
 }
 
@@ -144,6 +157,8 @@ inline Stmt cloneStmt(const Stmt& s) {
     res.name = s.name;
     res.member = s.member;
     res.line = s.line;
+    res.column = s.column;
+    res.length = s.length;
     if (s.expr) res.expr = cloneExpr(*s.expr);
     if (s.target) res.target = cloneExpr(*s.target);
     if (s.ensuredStmt) res.ensuredStmt = std::make_shared<Stmt>(cloneStmt(*s.ensuredStmt));
@@ -175,14 +190,16 @@ struct RecordDecl {
     std::vector<std::string> typeParams;
     std::vector<Stmt> dropBody;
     bool hasDrop = false;
+    bool isTagged = false;
+    std::string parentName;
 
     RecordDecl() = default;
     RecordDecl(std::string n, std::vector<RecordField> f = {}, int l = 1, std::size_t src = 0,
                bool packed = false, unsigned align = 0, std::vector<std::string> tp = {},
-               std::vector<Stmt> drop = {}, bool hasD = false)
+               std::vector<Stmt> drop = {}, bool hasD = false, bool tagged = false, std::string parent = "")
         : name(std::move(n)), fields(std::move(f)), line(l), sourceIndex(src),
           isPacked(packed), alignment(align), typeParams(std::move(tp)),
-          dropBody(std::move(drop)), hasDrop(hasD) {}
+          dropBody(std::move(drop)), hasDrop(hasD), isTagged(tagged), parentName(std::move(parent)) {}
     RecordDecl(const RecordDecl& o) {
         name = o.name;
         fields = o.fields;
@@ -192,6 +209,8 @@ struct RecordDecl {
         alignment = o.alignment;
         typeParams = o.typeParams;
         hasDrop = o.hasDrop;
+        isTagged = o.isTagged;
+        parentName = o.parentName;
         for (const auto& s : o.dropBody) dropBody.push_back(cloneStmt(s));
     }
     RecordDecl& operator=(const RecordDecl& o) {
@@ -204,6 +223,8 @@ struct RecordDecl {
             alignment = o.alignment;
             typeParams = o.typeParams;
             hasDrop = o.hasDrop;
+            isTagged = o.isTagged;
+            parentName = o.parentName;
             dropBody.clear();
             for (const auto& s : o.dropBody) dropBody.push_back(cloneStmt(s));
         }
@@ -261,6 +282,10 @@ struct Function {
     bool isOperator = false;
     std::string operatorSymbol;
     bool isAsync = false;
+    bool isInterrupt = false;
+    bool isPeriodic = false;
+    std::unique_ptr<Expr> periodicIntervalExpr;
+    std::unique_ptr<Expr> periodicJitterExpr;
 
     Function() = default;
     Function(const Function&) = delete;
@@ -288,6 +313,10 @@ inline Function cloneFunction(const Function& fn) {
     res.isOperator = fn.isOperator;
     res.operatorSymbol = fn.operatorSymbol;
     res.isAsync = fn.isAsync;
+    res.isInterrupt = fn.isInterrupt;
+    res.isPeriodic = fn.isPeriodic;
+    if (fn.periodicIntervalExpr) res.periodicIntervalExpr = cloneExpr(*fn.periodicIntervalExpr);
+    if (fn.periodicJitterExpr) res.periodicJitterExpr = cloneExpr(*fn.periodicJitterExpr);
     return res;
 }
 struct Signature {
@@ -296,6 +325,7 @@ struct Signature {
     std::optional<Type> errorResult;
     std::vector<std::string> typeParams;
     bool isAsync = false;
+    bool isExtern = false;
 };
 std::optional<bool> constantBoolean(const Expr& e) {
     if (e.kind == Expr::Kind::Boolean)
@@ -344,8 +374,34 @@ inline Token compoundToBinaryToken(const Token& op) {
     }
     Token res{bk, text, op.line, 0, currentSourceIndex};
     res.column = op.column;
+    res.length = op.length;
     return res;
 }
 
+struct GenericModuleDecl {
+    std::string name;
+    int line = 1;
+    std::size_t sourceIndex = 0;
+    std::vector<std::string> typeParams;
+    std::vector<VarDecl> valueParams;
+    std::vector<EnumDecl> enums;
+    std::vector<RecordDecl> records;
+    std::vector<VarDecl> globals;
+    std::vector<Function> functions;
+    std::unordered_set<std::string> imports;
+    std::unordered_set<std::string> uses;
+    std::unordered_map<std::string, std::string> importAliases;
+};
+
+struct ModuleInstantiation {
+    std::string instanceName;
+    std::string templateName;
+    std::vector<Type> typeArgs;
+    std::vector<std::unique_ptr<Expr>> valueArgs;
+    int line = 1;
+    std::size_t sourceIndex = 0;
+    bool isImport = false;
+    std::string alias;
+};
 
 } // namespace loom

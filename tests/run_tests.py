@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import pathlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -193,6 +194,15 @@ with tempfile.TemporaryDirectory(prefix="loom-tests-") as td:
         raise SystemExit(f"FAIL source_diagnostic_location: expected an error with path, line 4, column 4, and caret; got:\n{diagnostic.stderr}")
     if diagnostic.stderr.count("error[") != 1 or "loomc:" in diagnostic.stderr:
         raise SystemExit(f"FAIL diagnostic_format: unexpected duplicate/generic compiler error:\n{diagnostic.stderr}")
+    json_diagnostic = subprocess.run([str(compiler), "--diagnostic-format=json", str(bad_character)], text=True, capture_output=True)
+    try:
+        diagnostic_record = json.loads(json_diagnostic.stderr)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"FAIL json_diagnostic: expected one JSON diagnostic object, got:\n{json_diagnostic.stderr}\n{error}")
+    if (json_diagnostic.returncode == 0 or diagnostic_record.get("code") != "E0001" or
+            diagnostic_record.get("file") != str(bad_character) or
+            diagnostic_record.get("range", {}).get("start") != {"line": 3, "character": 3}):
+        raise SystemExit(f"FAIL json_diagnostic: incorrect structured source diagnostic: {diagnostic_record}")
     unicode_file = td / "unicode-column.loom"
     unicode_file.write_text('Module UnicodeCol\nBlock Main\nImplements\n    Print("🚀") @\nEnd Main\n')
     unicode_diagnostic = subprocess.run([str(compiler), str(unicode_file)], text=True, capture_output=True)

@@ -55,7 +55,9 @@ class Lexer {
                 ++line;
                 column = 1;
             } else if (c == '\t') {
-                column += 4 - ((column - 1) % 4);
+                // LSP character offsets count a tab as one source character.
+                // Keep source columns independent of the editor's tab width.
+                ++column;
             } else if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) {
                 const auto byte = static_cast<unsigned char>(c);
                 column += (byte & 0xF8) == 0xF0 ? 2 : 1;
@@ -149,6 +151,10 @@ class Lexer {
                                                                  {"await", K::Await},
                                                                  {"Lock", K::Lock},
                                                                  {"lock", K::Lock},
+                                                                 {"Interrupt", K::Interrupt},
+                                                                 {"interrupt", K::Interrupt},
+                                                                 {"Unsafe", K::Unsafe},
+                                                                 {"unsafe", K::Unsafe},
                                                                  {"Move", K::Move},
                                                                  {"move", K::Move},
                                                                  {"Copy", K::Copy},
@@ -158,7 +164,13 @@ class Lexer {
                                                                  {"Ref", K::Ref},
                                                                  {"ref", K::Ref},
                                                                  {"Mut", K::Mut},
-                                                                 {"mut", K::Mut}};
+                                                                 {"mut", K::Mut},
+                                                                 {"Generic", K::Generic},
+                                                                 {"generic", K::Generic},
+                                                                 {"Tagged", K::Tagged},
+                                                                 {"tagged", K::Tagged},
+                                                                 {"Inherits", K::Inherits},
+                                                                 {"inherits", K::Inherits}};
         auto i = words.find(s);
         return i == words.end() ? K::Id : i->second;
     }
@@ -172,6 +184,7 @@ class Lexer {
             tokenColumn = column;
             tokenOffset = pos;
             currentSourceIndex = sourceIndex;
+            currentDiagnosticSpan = SourceSpan{sourceIndex, atLine, tokenColumn, 1};
             if (c == ' ' || c == '\t' || c == '\r') {
                 take();
                 continue;
@@ -196,12 +209,16 @@ class Lexer {
                 continue;
             }
             if (c == '"') {
+                const int strStartCol = tokenColumn;
+                const std::size_t strStartPos = tokenOffset;
                 take();
                 std::string value;
                 while (peek() && peek() != '"') {
                     char ch = take();
-                    if (ch == '\n')
-                        throw Error("line " + std::to_string(atLine) + ": newline in string literal");
+                    if (ch == '\n') {
+                        currentDiagnosticSpan = SourceSpan{sourceIndex, atLine, strStartCol, static_cast<int>(pos - strStartPos - 1)};
+                        throw Error("line " + std::to_string(atLine) + ": unterminated string literal (missing closing '\"')");
+                    }
                     if (ch == '\\') {
                         char escaped = take();
                         switch (escaped) {
@@ -212,21 +229,32 @@ class Lexer {
                             case '0': value += '\0'; break;
                             case '\\': value += '\\'; break;
                             case '"': value += '"'; break;
-                            default: throw Error("line " + std::to_string(atLine) + ": unsupported string escape");
+                            default: {
+                                currentDiagnosticSpan = SourceSpan{sourceIndex, atLine, column - 2, 2};
+                                throw Error("line " + std::to_string(atLine) + ": unsupported string escape '\\" + std::string(1, escaped) + "'");
+                            }
                         }
                     } else value += ch;
                 }
-                if (!peek()) throw Error("line " + std::to_string(atLine) + ": unterminated string literal");
+                if (!peek()) {
+                    currentDiagnosticSpan = SourceSpan{sourceIndex, atLine, strStartCol, static_cast<int>(pos - strStartPos)};
+                    throw Error("line " + std::to_string(atLine) + ": unterminated string literal (missing closing '\"')");
+                }
                 take();
                 emit(K::String, std::move(value), atLine);
                 continue;
             }
             if (c == '\'') {
+                const int charStartCol = tokenColumn;
+                const std::size_t charStartPos = tokenOffset;
                 take();
                 std::string value;
                 while (peek() && peek() != '\'') {
                     char ch = take();
-                    if (ch == '\n') throw Error("line " + std::to_string(atLine) + ": newline in character literal");
+                    if (ch == '\n') {
+                        currentDiagnosticSpan = SourceSpan{sourceIndex, atLine, charStartCol, static_cast<int>(pos - charStartPos - 1)};
+                        throw Error("line " + std::to_string(atLine) + ": unterminated character literal (missing closing '\'')");
+                    }
                     if (ch == '\\') {
                         char escaped = take();
                         switch (escaped) {
@@ -238,11 +266,17 @@ class Lexer {
                             case '\\': value += '\\'; break;
                             case '\'': value += '\''; break;
                             case '"': value += '"'; break;
-                            default: throw Error("line " + std::to_string(atLine) + ": unsupported character escape");
+                            default: {
+                                currentDiagnosticSpan = SourceSpan{sourceIndex, atLine, column - 2, 2};
+                                throw Error("line " + std::to_string(atLine) + ": unsupported character escape '\\" + std::string(1, escaped) + "'");
+                            }
                         }
                     } else value += ch;
                 }
-                if (!peek()) throw Error("line " + std::to_string(atLine) + ": unterminated character literal");
+                if (!peek()) {
+                    currentDiagnosticSpan = SourceSpan{sourceIndex, atLine, charStartCol, static_cast<int>(pos - charStartPos)};
+                    throw Error("line " + std::to_string(atLine) + ": unterminated character literal (missing closing '\'')");
+                }
                 take();
                 (void)decodeUtf8Scalar(value, atLine);
                 emit(K::Character, std::move(value), atLine);

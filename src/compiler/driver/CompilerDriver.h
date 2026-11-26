@@ -145,12 +145,13 @@ void generateCHeader(const std::string& path, const std::vector<Function>& fs,
 
 inline int compilerMain(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--version") {
-        std::cout << "loomc 1.4.0 (LLVM " << LLVM_VERSION_STRING << ")\n";
+        std::cout << "loomc 1.5.0 (LLVM " << LLVM_VERSION_STRING << ")\n";
         return 0;
     }
     bool nativeEntry = false, objectOutput = false, release = false, graphData = false;
     bool sizeOpt = false;
     bool optReport = false;
+    bool jsonDiagnostics = false;
     bool namedOutput = false;
     bool checkOnly = false;
     bool baremetal = false;
@@ -166,11 +167,13 @@ inline int compilerMain(int argc, char** argv) {
     std::vector<std::string> includeDirs;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
+        if (arg.empty()) continue;
         if (arg == "--entry") nativeEntry = true;
         else if (arg == "--object") objectOutput = true;
         else if (arg == "--release") release = true;
         else if (arg == "--size" || arg == "-Oz") { sizeOpt = true; release = true; }
         else if (arg == "--opt-report") optReport = true;
+        else if (arg == "--diagnostic-format=json") jsonDiagnostics = true;
         else if (arg == "--graph-data") graphData = true;
         else if (arg == "--check") checkOnly = true;
         else if (arg == "--baremetal") baremetal = true;
@@ -202,10 +205,10 @@ inline int compilerMain(int argc, char** argv) {
     }
     if (inputs.empty() || (!checkOnly && !namedOutput && (inputs.size() > 2 || (objectOutput && inputs.size() != 2))) ||
         (namedOutput && !(objectOutput || graphData)) || (graphData && !namedOutput)) {
-        std::cerr << "usage: loomc <input.loom> [output.ll] [--entry] [--release] [--size] [--opt-report] [-I <dir>] [--sdk <dir>]\n"
+        std::cerr << "usage: loomc <input.loom> [output.ll] [--entry] [--release] [--size] [--opt-report] [--diagnostic-format=json] [-I <dir>] [--sdk <dir>]\n"
                      "       loomc --check <input.loom> [-I <dir>] [--sdk <dir>]\n"
-                     "       loomc --object <input.loom> <output.o> [--entry] [--release] [--size] [--opt-report] [-I <dir>] [--sdk <dir>]\n"
-                     "       loomc --object --output <output.o> [--entry] [--release] [--size] [--opt-report] [-I <dir>] [--sdk <dir>] <source.loom>...\n"
+                     "       loomc --object <input.loom> <output.o> [--entry] [--release] [--size] [--opt-report] [--diagnostic-format=json] [-I <dir>] [--sdk <dir>]\n"
+                     "       loomc --object --output <output.o> [--entry] [--release] [--size] [--opt-report] [--diagnostic-format=json] [-I <dir>] [--sdk <dir>] <source.loom>...\n"
                      "       loomc --graph-data --output <data.tsv> <source.loom>...\n";
         return 2;
     }
@@ -221,12 +224,52 @@ inline int compilerMain(int argc, char** argv) {
             std::filesystem::path canonical = std::filesystem::canonical(inPath, ec);
             std::string key = ec ? inPath : canonical.string();
             loadedFiles.insert(key);
+        }
+        if (baremetal) {
+            auto autoLoadDir = [&](const std::filesystem::path& dirPath) {
+                std::string dirStr = dirPath.string();
+                if (dirStr.find("bsp") == std::string::npos && dirStr.find("rp2040") == std::string::npos) return;
+                std::error_code ec;
+                if (std::filesystem::is_directory(dirPath, ec)) {
+                    for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
+                        if (entry.is_regular_file(ec) && entry.path().extension() == ".loom") {
+                            std::string pStr = entry.path().string();
+                            std::filesystem::path canonical = std::filesystem::canonical(pStr, ec);
+                            std::string key = ec ? pStr : canonical.string();
+                            if (!loadedFiles.count(key)) {
+                                loadedFiles.insert(key);
+                                inputs.push_back(pStr);
+                            }
+                        }
+                    }
+                }
+            };
+            for (const auto& sDir : sdkIncludeDirs) autoLoadDir(sDir);
+            for (const auto& inDir : includeDirs) autoLoadDir(inDir);
+        }
+        for (const auto& inPath : inputs) {
+            std::error_code ec;
+            std::filesystem::path canonical = std::filesystem::canonical(inPath, ec);
+            std::string key = ec ? inPath : canonical.string();
+            loadedFiles.insert(key);
             std::string content = loom::readFile(inPath);
             std::istringstream stream(content);
             std::string line;
             while (std::getline(stream, line)) {
                 std::size_t start = line.find_first_not_of(" \t\r\n");
                 if (start == std::string::npos) continue;
+                if (line.substr(start, 14) == "Generic Module" && (start + 14 == line.size() || isspace(static_cast<unsigned char>(line[start + 14])))) {
+                    std::string rest = line.substr(start + 14);
+                    std::size_t modStart = rest.find_first_not_of(" \t\r\n");
+                    if (modStart != std::string::npos) {
+                        std::size_t modEnd = rest.find_first_of(" \t\r\n;[", modStart);
+                        std::string modName = rest.substr(modStart, modEnd == std::string::npos ? std::string::npos : modEnd - modStart);
+                        if (!modName.empty()) {
+                            knownModuleFiles[loom::lower(modName)] = key;
+                        }
+                    }
+                    break;
+                }
                 if (line.substr(start, 6) == "Module" && (start + 6 == line.size() || isspace(static_cast<unsigned char>(line[start + 6])))) {
                     std::string rest = line.substr(start + 6);
                     std::size_t modStart = rest.find_first_not_of(" \t\r\n");
@@ -238,6 +281,35 @@ inline int compilerMain(int argc, char** argv) {
                         }
                     }
                     break;
+                }
+            }
+        }
+        for (const auto& incDir : includeDirs) {
+            std::error_code ec;
+            if (std::filesystem::is_directory(incDir, ec)) {
+                for (const auto& entry : std::filesystem::directory_iterator(incDir, ec)) {
+                    if (entry.is_regular_file(ec) && entry.path().extension() == ".loom") {
+                        std::string pStr = entry.path().string();
+                        // Record module name from file
+                        std::ifstream stream(pStr);
+                        std::string line;
+                        while (std::getline(stream, line)) {
+                            std::size_t start = line.find_first_not_of(" \t\r\n");
+                            if (start == std::string::npos) continue;
+                            if (line.substr(start, 6) == "Module" && (start + 6 == line.size() || isspace(static_cast<unsigned char>(line[start + 6])))) {
+                                std::string rest = line.substr(start + 6);
+                                std::size_t modStart = rest.find_first_not_of(" \t\r\n");
+                                if (modStart != std::string::npos) {
+                                    std::size_t modEnd = rest.find_first_of(" \t\r\n;", modStart);
+                                    std::string modName = rest.substr(modStart, modEnd == std::string::npos ? std::string::npos : modEnd - modStart);
+                                    if (!modName.empty()) {
+                                        knownModuleFiles[loom::lower(modName)] = pStr;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -258,13 +330,25 @@ inline int compilerMain(int argc, char** argv) {
                 if (isImport || isUse) {
                     std::size_t kwLen = isImport ? 6 : 3;
                     std::string rest = line.substr(start + kwLen);
+                    auto eqPos = rest.find('=');
+                    if (eqPos != std::string::npos) {
+                        rest = rest.substr(eqPos + 1);
+                    }
                     std::size_t modStart = rest.find_first_not_of(" \t\r\n");
                     if (modStart == std::string::npos) continue;
-                    std::size_t modEnd = rest.find_first_of(" \t\r\n;", modStart);
+                    std::size_t modEnd = rest.find_first_of(" \t\r\n;[(\"", modStart);
                     std::string modName = rest.substr(modStart, modEnd == std::string::npos ? std::string::npos : modEnd - modStart);
                     if (modName.empty()) continue;
 
                     if (knownModuleFiles.count(loom::lower(modName))) {
+                        std::string kFile = knownModuleFiles.at(loom::lower(modName));
+                        std::error_code ec;
+                        std::filesystem::path canonical = std::filesystem::canonical(kFile, ec);
+                        std::string key = ec ? kFile : canonical.string();
+                        if (!loadedFiles.count(key)) {
+                            loadedFiles.insert(key);
+                            inputs.push_back(kFile);
+                        }
                         continue;
                     }
 
@@ -364,8 +448,9 @@ inline int compilerMain(int argc, char** argv) {
             while (firstIdx < sourceTokens.size() && sourceTokens[firstIdx].kind == loom::K::Newline) {
                 ++firstIdx;
             }
-            if (firstIdx >= sourceTokens.size() || sourceTokens[firstIdx].kind != loom::K::Module ||
-                firstIdx + 1 >= sourceTokens.size() || sourceTokens[firstIdx + 1].kind != loom::K::Id) {
+            bool startsModule = (firstIdx + 1 < sourceTokens.size() && sourceTokens[firstIdx].kind == loom::K::Module && sourceTokens[firstIdx + 1].kind == loom::K::Id);
+            bool startsGenericModule = (firstIdx + 2 < sourceTokens.size() && sourceTokens[firstIdx].kind == loom::K::Generic && sourceTokens[firstIdx + 1].kind == loom::K::Module && sourceTokens[firstIdx + 2].kind == loom::K::Id);
+            if (firstIdx >= sourceTokens.size() || (!startsModule && !startsGenericModule)) {
                 int errLine = (firstIdx < sourceTokens.size()) ? sourceTokens[firstIdx].line : 1;
                 loom::Error err("line " + std::to_string(errLine) + ": Every Loom file must begin with 'Module <module_name>' at the top of the file");
                 err.span.source = i;
@@ -382,9 +467,130 @@ inline int compilerMain(int argc, char** argv) {
         tokens.push_back({loom::K::Eof, "<eof>", finalLine, 0, inputs.size() - 1});
         loom::Parser parser(std::move(tokens));
         auto functions = parser.run();
-        const auto& globals = parser.globals();
-        const auto& enums = parser.enums();
-        const auto& records = parser.records();
+        std::vector<loom::VarDecl> globals;
+        for (const auto& g : parser.globals()) globals.push_back(loom::cloneVarDecl(g));
+        auto enums = parser.enums();
+        auto records = parser.records();
+        auto modules = parser.modules();
+        auto imports = parser.imports();
+        auto uses = parser.uses();
+        auto importAliases = parser.importAliases();
+        const auto& genModules = parser.genericModuleDecls();
+        const auto& modInsts = parser.instantiations();
+        if (!modInsts.empty()) {
+            std::size_t nextInstSrc = 100000;
+            for (const auto& inst : modInsts) {
+                const loom::GenericModuleDecl* gmPtr = nullptr;
+                for (const auto& gm : genModules) {
+                    if (loom::lower(gm.name) == loom::lower(inst.templateName)) {
+                        gmPtr = &gm;
+                        break;
+                    }
+                }
+                if (!gmPtr) {
+                    throw loom::Error("line " + std::to_string(inst.line) + ": unknown generic module '" + inst.templateName + "'");
+                }
+                if (inst.typeArgs.size() != gmPtr->typeParams.size()) {
+                    throw loom::Error("line " + std::to_string(inst.line) + ": generic module '" + gmPtr->name + "' expects " +
+                                      std::to_string(gmPtr->typeParams.size()) + " type arguments, got " + std::to_string(inst.typeArgs.size()));
+                }
+                if (inst.valueArgs.size() != gmPtr->valueParams.size()) {
+                    throw loom::Error("line " + std::to_string(inst.line) + ": generic module '" + gmPtr->name + "' expects " +
+                                      std::to_string(gmPtr->valueParams.size()) + " value arguments, got " + std::to_string(inst.valueArgs.size()));
+                }
+                std::unordered_map<std::string, loom::Type> typeSubst;
+                for (std::size_t i = 0; i < gmPtr->typeParams.size(); ++i) {
+                    typeSubst[gmPtr->typeParams[i]] = inst.typeArgs[i];
+                }
+                std::function<void(loom::Type&)> substType = [&](loom::Type& t) {
+                    if (t.kind == loom::TypeKind::Record && typeSubst.count(t.name)) {
+                        bool isVol = t.isVolatile;
+                        auto err = t.errorType;
+                        t = typeSubst.at(t.name);
+                        t.isVolatile = isVol;
+                        t.errorType = err;
+                    }
+                    if (t.pointeeType) substType(*t.pointeeType);
+                    if (t.keyType) substType(*t.keyType);
+                    if (t.valueType) substType(*t.valueType);
+                    if (t.errorType) substType(*t.errorType);
+                    for (auto& pt : t.paramTypes) substType(pt);
+                    for (auto& tt : t.tupleTypes) substType(tt);
+                };
+                std::function<void(loom::Expr&)> substExpr = [&](loom::Expr& ex) {
+                    if (ex.kind == loom::Expr::Kind::Cast) substType(ex.targetType);
+                    if (ex.left) substExpr(*ex.left);
+                    if (ex.right) substExpr(*ex.right);
+                    for (auto& a : ex.arguments) if (a) substExpr(*a);
+                };
+                std::function<void(std::vector<loom::Stmt>&)> substStmts = [&](std::vector<loom::Stmt>& stmts) {
+                    for (auto& st : stmts) {
+                        if (st.expr) substExpr(*st.expr);
+                        if (st.target) substExpr(*st.target);
+                        if (st.ensuredStmt) {
+                            std::vector<loom::Stmt> tmp;
+                            tmp.push_back(loom::cloneStmt(*st.ensuredStmt));
+                            substStmts(tmp);
+                            st.ensuredStmt = std::make_shared<loom::Stmt>(std::move(tmp[0]));
+                        }
+                        substStmts(st.body);
+                        substStmts(st.elseBody);
+                        for (auto& mc : st.matchCases) {
+                            if (mc.pattern) substExpr(*mc.pattern);
+                            if (mc.rangeEnd) substExpr(*mc.rangeEnd);
+                            if (mc.guard) substExpr(*mc.guard);
+                            substStmts(mc.body);
+                        }
+                    }
+                };
+                std::size_t instSrc = nextInstSrc++;
+                modules[instSrc] = inst.instanceName;
+                imports[instSrc] = gmPtr->imports;
+                uses[instSrc] = gmPtr->uses;
+                importAliases[instSrc] = gmPtr->importAliases;
+                for (std::size_t i = 0; i < gmPtr->valueParams.size(); ++i) {
+                    loom::VarDecl vp = loom::cloneVarDecl(gmPtr->valueParams[i]);
+                    substType(vp.type);
+                    vp.constant = true;
+                    vp.sourceIndex = instSrc;
+                    if (inst.valueArgs[i]) vp.initializer = loom::cloneExpr(*inst.valueArgs[i]);
+                    globals.push_back(std::move(vp));
+                }
+                for (auto e : gmPtr->enums) {
+                    e.sourceIndex = instSrc;
+                    enums.push_back(std::move(e));
+                }
+                for (auto r : gmPtr->records) {
+                    r.sourceIndex = instSrc;
+                    for (auto& fld : r.fields) substType(fld.type);
+                    substStmts(r.dropBody);
+                    records.push_back(std::move(r));
+                }
+                for (const auto& g : gmPtr->globals) {
+                    loom::VarDecl gc = loom::cloneVarDecl(g);
+                    gc.sourceIndex = instSrc;
+                    substType(gc.type);
+                    if (gc.initializer) substExpr(*gc.initializer);
+                    globals.push_back(std::move(gc));
+                }
+                for (const auto& f : gmPtr->functions) {
+                    loom::Function fc = loom::cloneFunction(f);
+                    fc.sourceIndex = instSrc;
+                    for (auto& p : fc.params) {
+                        substType(p.type);
+                        if (p.initializer) substExpr(*p.initializer);
+                    }
+                    for (auto& l : fc.locals) {
+                        substType(l.type);
+                        if (l.initializer) substExpr(*l.initializer);
+                    }
+                    if (fc.result) substType(*fc.result);
+                    if (fc.errorResult) substType(*fc.errorResult);
+                    substStmts(fc.body);
+                    functions.push_back(std::move(fc));
+                }
+            }
+        }
         if (functions.empty()) throw loom::Error("source contains no Block declarations");
         if (emitTestRunner) {
             loom::Function testRunner;
@@ -415,7 +621,7 @@ inline int compilerMain(int argc, char** argv) {
             nativeEntry = true;
         }
         loom::Analyzer analyzer(baremetal);
-        analyzer.run(functions, globals, enums, records, parser.modules(), parser.imports(), parser.uses());
+        analyzer.run(functions, globals, enums, records, modules, imports, uses, importAliases);
         if (!emitCHeaderPath.empty()) {
             loom::generateCHeader(emitCHeaderPath, functions, records, enums);
             if (outputPath.empty() && !objectOutput && !nativeEntry && !emitTestRunner) return 0;
@@ -438,7 +644,8 @@ inline int compilerMain(int argc, char** argv) {
         }
         return 0;
     } catch (const loom::Error& e) {
-        loom::printDiagnostic(e, inputs, sourceTexts);
+        if (jsonDiagnostics) loom::printDiagnosticJson(e, inputs);
+        else loom::printDiagnostic(e, inputs, sourceTexts);
         return 1;
     } catch (const std::exception& e) {
         bool useColor = false;

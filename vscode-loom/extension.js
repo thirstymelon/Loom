@@ -7,6 +7,7 @@ const { promisify } = require('util');
 const execFile = promisify(cp.execFile);
 const { LoomLanguageClient } = require('./lsp-client');
 const { parseCompilerDiagnostics } = require('./diagnostics');
+const loom = require('./language');
 let activeCleanup = () => {};
 
 function registerLspProviders(context, client, vscode, semanticLegend) {
@@ -18,12 +19,73 @@ function registerLspProviders(context, client, vscode, semanticLegend) {
   const request = (method, params, token) => client.request(method, params, token);
   context.subscriptions.push(
     vscode.languages.registerCompletionItemProvider('loom', {
-      provideCompletionItems(document, pos, token) { return request('textDocument/completion', { textDocument: td(document), position: position(pos) }, token).then(result => (result?.items || []).map(item => {
-        if (item.documentation && typeof item.documentation === 'object' && item.documentation.value) item.documentation = item.documentation.kind === 'markdown' ? new vscode.MarkdownString(item.documentation.value) : item.documentation.value;
-        if (item.textEdit?.range) item.textEdit.range = lspRange(item.textEdit.range);
-        return item;
-      })); }
-    }, '.', '[', ':'),
+      async provideCompletionItems(document, pos, token) {
+        const text = document.getText();
+        const items = [];
+        const seen = new Set();
+
+        const addItem = (label, kind, detail, docText, sortPriority = 2) => {
+          if (!label || seen.has(label)) return;
+          seen.add(label);
+          const item = new vscode.CompletionItem(label, kind);
+          if (detail) item.detail = detail;
+          if (docText) item.documentation = typeof vscode.MarkdownString === 'function' ? new vscode.MarkdownString(docText) : docText;
+          item.sortText = `${sortPriority}_${label}`;
+          items.push(item);
+        };
+
+        // 1. LSP items have first priority
+        try {
+          const result = await request('textDocument/completion', { textDocument: td(document), position: position(pos) }, token);
+          if (result && Array.isArray(result.items)) {
+            for (const item of result.items) {
+              if (item.documentation && typeof item.documentation === 'object' && item.documentation.value) {
+                item.documentation = typeof vscode.MarkdownString === 'function' ? new vscode.MarkdownString(item.documentation.value) : item.documentation.value;
+              }
+              if (item.textEdit?.range) item.textEdit.range = lspRange(item.textEdit.range);
+              addItem(item.label, item.kind || vscode.CompletionItemKind.Variable, item.detail, typeof item.documentation === 'string' ? item.documentation : undefined, 0);
+            }
+          }
+        } catch (_) {}
+
+        // 2. Instant local file analysis
+        let localAnalysis = null;
+        let activeBlock = '';
+        try {
+          localAnalysis = loom.analyze(text, document.uri.toString());
+          const offset = document.offsetAt(pos);
+          activeBlock = loom.currentBlock(localAnalysis, offset);
+        } catch (_) {}
+
+        if (localAnalysis) {
+          for (const s of localAnalysis.symbols) {
+            const isLocal = s.scope === activeBlock;
+            const priority = isLocal ? 0 : 1;
+            const kind = s.kind === 'function' ? vscode.CompletionItemKind.Function :
+                         s.kind === 'record' ? vscode.CompletionItemKind.Struct :
+                         s.kind === 'enum' ? vscode.CompletionItemKind.Enum :
+                         s.kind === 'field' ? vscode.CompletionItemKind.Field :
+                         s.kind === 'parameter' ? vscode.CompletionItemKind.Variable :
+                         vscode.CompletionItemKind.Variable;
+            const detail = s.type ? `${s.name} : ${s.type}` : `${s.name} (${s.kind})`;
+            const doc = `**${s.name}**\n\n\`${s.type || s.kind}\` in ${s.scope}`;
+            addItem(s.name, kind, detail, doc, priority);
+          }
+        }
+
+        // 3. Built-in types
+        for (const t of loom.BUILTIN_TYPES) {
+          addItem(t, vscode.CompletionItemKind.Class, `Built-in type ${t}`, `Standard Loom primitive or collection type \`${t}\``, 3);
+        }
+
+        // 4. Keywords
+        for (const k of loom.KEYWORDS) {
+          addItem(k, vscode.CompletionItemKind.Keyword, `Keyword ${k}`, `Loom language keyword \`${k}\``, 4);
+        }
+
+        return items;
+      }
+    }),
     vscode.languages.registerDocumentSymbolProvider('loom', {
       async provideDocumentSymbols(document, token) {
         const symbols = await request('textDocument/documentSymbol', { textDocument: td(document) }, token);
@@ -277,6 +339,22 @@ function activate(context) {
     if (context.extensionPath) {
       candidates.push(path.resolve(context.extensionPath, '..', 'sdk'));
     }
+    if (process.env.HOME) {
+      const libDir = path.join(process.env.HOME, '.loom', 'libraries');
+      try {
+        if (fs.existsSync(libDir)) {
+          for (const pkg of fs.readdirSync(libDir)) {
+            const pkgPath = path.join(libDir, pkg);
+            try {
+              if (fs.statSync(pkgPath).isDirectory()) {
+                candidates.push(pkgPath);
+                candidates.push(path.join(pkgPath, 'src'));
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    }
     const resolved = [];
     const seen = new Set();
     for (const c of candidates) {
@@ -360,7 +438,9 @@ function activate(context) {
       await execFile(executable, ['fmt', target], { cwd: root, windowsHide: true });
       const text = await fs.promises.readFile(target, 'utf8');
       if (text === document.getText()) return [];
-      return [vscode.TextEdit.replace(new vscode.Range(0, 0, document.lineCount, 0), text)];
+      const lastLine = document.lineCount > 0 ? document.lineAt(document.lineCount - 1) : null;
+      const fullRange = lastLine ? new vscode.Range(0, 0, document.lineCount - 1, lastLine.text.length) : new vscode.Range(0, 0, 0, 0);
+      return [vscode.TextEdit.replace(fullRange, text)];
     } catch (error) {
       output.appendLine(`loom fmt unavailable (${error.message}); using built-in indentation.`);
       return undefined;

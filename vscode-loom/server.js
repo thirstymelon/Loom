@@ -125,6 +125,9 @@ function findCompiler(root) {
   } catch (_) {}
   for (const kind of ['native', 'rp2040']) if (!kinds.includes(kind)) kinds.push(kind);
   const candidates = [];
+  if (process.env.HOME) {
+    candidates.push(path.join(process.env.HOME, '.local', 'bin', 'loomc'));
+  }
   if (root) candidates.push(path.join(root, 'bin', 'loomc'), path.join(root, 'loomc'), path.join(root, '.build', 'loomc'));
   if (process.env.HOME) for (const kind of kinds) candidates.push(path.join(process.env.HOME, '.loom', 'toolchains', kind, 'bin', 'loomc'));
   for (const prefix of ['/usr/local/share/loom/toolchains', '/usr/share/loom/toolchains', '/opt/loom/toolchains']) {
@@ -163,7 +166,9 @@ function allWorkspaceFiles() {
 }
 
 async function createCompilerInputs(root, files, overlayDirty) {
-  const temp = await fsp.mkdtemp(path.join(os.tmpdir(), 'loom-lsp-'));
+  const rawTemp = await fsp.mkdtemp(path.join(os.tmpdir(), 'loom-lsp-'));
+  let temp = rawTemp;
+  try { temp = fs.realpathSync(rawTemp); } catch (_) {}
   const inputs = [];
   const sourceOverrides = new Map();
   for (const file of files) {
@@ -179,15 +184,39 @@ async function createCompilerInputs(root, files, overlayDirty) {
       await fsp.mkdir(path.dirname(target), { recursive: true });
       await fsp.writeFile(target, opened.text, 'utf8');
       inputs.push(target);
-      sourceOverrides.set(path.resolve(target), file);
+      const resolvedTarget = path.resolve(target);
+      sourceOverrides.set(resolvedTarget, file);
+      try { sourceOverrides.set(fs.realpathSync(target), file); } catch (_) {}
     } else inputs.push(file);
   }
-  return { temp, inputs, sourceOverrides };
+  return { temp: rawTemp, inputs, sourceOverrides };
 }
 
 function compilerArgs(mode, outputPath, inputs, extraDirectories = []) {
   const args = [mode, '--output', outputPath, ...inputs];
-  const directories = new Set([...includePaths, ...workspaces.flatMap(root => [root, path.join(root, 'src')]), ...(semantic.sources || []).map(source => path.dirname(source.path)), ...extraDirectories]);
+  const directories = new Set([
+    ...includePaths,
+    ...workspaces.flatMap(root => [root, path.join(root, 'src')]),
+    ...(semantic.sources || []).map(source => path.dirname(source.path)),
+    ...extraDirectories
+  ]);
+  if (process.env.HOME) {
+    const libDir = path.join(process.env.HOME, '.loom', 'libraries');
+    try {
+      if (fs.existsSync(libDir)) {
+        for (const pkg of fs.readdirSync(libDir)) {
+          const pkgPath = path.join(libDir, pkg);
+          try {
+            if (fs.statSync(pkgPath).isDirectory()) {
+              directories.add(pkgPath);
+              const pkgSrc = path.join(pkgPath, 'src');
+              if (fs.existsSync(pkgSrc)) directories.add(pkgSrc);
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
   for (const include of directories) args.push('-I', include);
   return args;
 }
@@ -339,7 +368,14 @@ function setCompilerDiagnostics(ownerUri, items, workspace) {
     let targetUri = ownerUri;
     if (item.file) {
       const outputPath = path.resolve(item.file);
-      const sourcePath = workspace.sourceOverrides.get(outputPath) || outputPath;
+      let sourcePath = workspace.sourceOverrides.get(outputPath);
+      if (!sourcePath) {
+        try { sourcePath = workspace.sourceOverrides.get(fs.realpathSync(outputPath)); } catch (_) {}
+      }
+      if (!sourcePath && workspace.sourceOverrides.size === 1) {
+        sourcePath = workspace.sourceOverrides.values().next().value;
+      }
+      if (!sourcePath) sourcePath = outputPath;
       targetUri = uriForPath(sourcePath);
     }
     if (!grouped.has(targetUri)) grouped.set(targetUri, []);
@@ -369,7 +405,7 @@ function removeCompilerDiagnostics(ownerUri) {
 const checkGenerations = new Map();
 async function checkDocument(uri, requestId) {
   const doc = documents.get(uri), file = pathForUri(uri);
-  if (!doc || !file || !workspaces.length) return;
+  if (!doc || !file) return;
   const generation = (checkGenerations.get(uri) || 0) + 1;
   checkGenerations.set(uri, generation);
   const root = workspaces.find(folder => file === folder || file.startsWith(folder + path.sep)) || path.dirname(file);
@@ -377,7 +413,38 @@ async function checkDocument(uri, requestId) {
   try { workspace = await createCompilerInputs(root, [file], true); }
   catch (_) { return; }
   try {
-    const result = await run(findCompiler(root), ['--check', workspace.inputs[0], ...compilerArgs('', '', [], [path.dirname(workspace.inputs[0])]).slice(2)], { cwd: root }, requestId, `check:${uri}`);
+    const includeFlags = [];
+    const dirs = new Set([
+      ...includePaths,
+      path.dirname(file),
+      root,
+      path.join(root, 'src'),
+      ...(semantic.sources || []).map(source => path.dirname(source.path)),
+      path.dirname(workspace.inputs[0])
+    ]);
+    if (process.env.HOME) {
+      const libDir = path.join(process.env.HOME, '.loom', 'libraries');
+      try {
+        if (fs.existsSync(libDir)) {
+          for (const pkg of fs.readdirSync(libDir)) {
+            const pkgPath = path.join(libDir, pkg);
+            try {
+              if (fs.statSync(pkgPath).isDirectory()) {
+                dirs.add(pkgPath);
+                const pkgSrc = path.join(pkgPath, 'src');
+                if (fs.existsSync(pkgSrc)) dirs.add(pkgSrc);
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    }
+    for (const dir of dirs) {
+      if (dir && typeof dir === 'string' && dir.trim().length > 0) {
+        includeFlags.push('-I', dir);
+      }
+    }
+    const result = await run(findCompiler(root), ['--check', workspace.inputs[0], ...includeFlags], { cwd: root }, requestId, `check:${uri}`);
     if (checkGenerations.get(uri) !== generation) return;
     if (result.code === null) return;
     if (!documents.has(uri) || documents.get(uri).version !== doc.version) return;
@@ -465,13 +532,46 @@ function currentBlockName(uri, position) {
 function completion(uri, position) {
   const doc = documents.get(uri); if (!doc) return [];
   const words = new Set([...loom.KEYWORDS, ...loom.BUILTIN_TYPES]);
-  const block = currentBlockName(uri, position);
+  const offset = offsetAt(doc.text, position);
+  let localAnalysis = null;
+  let block = '';
+  try {
+    localAnalysis = loom.analyze(doc.text, uri);
+    block = loom.currentBlock(localAnalysis, offset);
+  } catch (_) {}
+
+  const localSymMap = new Map();
+  if (localAnalysis) {
+    for (const s of localAnalysis.symbols) {
+      words.add(s.name);
+      localSymMap.set(s.name, s);
+    }
+  }
+
   const currentFileIndex = semantic.sources?.find(source => path.resolve(source.path) === pathForUri(uri))?.index;
-  for (const symbol of allSymbols()) if ((symbol.sourceIndex === currentFileIndex && (symbol.scope === block || symbol.scope === 'module')) || symbol.kind === 'function' || symbol.kind === 'record' || symbol.kind === 'enum') words.add(symbol.name);
+  for (const symbol of allSymbols()) {
+    if ((symbol.sourceIndex === currentFileIndex && (symbol.scope === block || symbol.scope === 'module')) ||
+        symbol.kind === 'function' || symbol.kind === 'record' || symbol.kind === 'enum') {
+      words.add(symbol.name);
+    }
+  }
+
   return [...words].map(label => {
+    const localSym = localSymMap.get(label);
     const symbol = allSymbols().find(item => item.name === label);
-    const keyword = loom.KEYWORDS.has(label), type = loom.BUILTIN_TYPES.has(label) || symbol?.kind === 'record' || symbol?.kind === 'enum';
-    return { label, kind: keyword ? 14 : type ? 7 : symbol?.kind === 'function' ? 3 : 6, detail: symbol?.type?.name || (keyword ? 'Loom keyword' : type ? 'Loom type' : 'Loom symbol'), documentation: symbol ? `${symbol.name} : ${symbol.type?.name || symbol.kind}` : undefined };
+    const keyword = loom.KEYWORDS.has(label);
+    const type = loom.BUILTIN_TYPES.has(label) || localSym?.kind === 'record' || localSym?.kind === 'enum' || symbol?.kind === 'record' || symbol?.kind === 'enum';
+    const kind = keyword ? 14 : type ? 7 : (localSym?.kind === 'function' || symbol?.kind === 'function') ? 3 : (localSym?.kind === 'variable' ? 6 : (localSym?.kind === 'parameter' ? 6 : (localSym?.kind === 'field' || symbol?.kind === 'field' ? 5 : 6)));
+    const detail = localSym?.type ? `${localSym.name} : ${localSym.type}` : symbol?.type?.name || (keyword ? 'Loom keyword' : type ? 'Loom type' : 'Loom symbol');
+    const docText = localSym ? `${localSym.name} : ${localSym.type || localSym.kind}` : (symbol ? `${symbol.name} : ${symbol.type?.name || symbol.kind}` : undefined);
+    const isLocal = localSym && (localSym.scope === block || localSym.scope === 'module');
+    return {
+      label,
+      kind,
+      detail,
+      documentation: docText,
+      sortText: isLocal ? `0_${label}` : keyword ? `4_${label}` : type ? `3_${label}` : `1_${label}`
+    };
   });
 }
 
@@ -650,7 +750,7 @@ async function handleRequest(method, params, requestId) {
     if (!workspaces.length && params.rootUri) { const root = pathForUri(params.rootUri); if (root) workspaces = [root]; }
     return { serverInfo: { name: 'Loom Language Server', version: '1.5.5' }, capabilities: {
       textDocumentSync: 1,
-      hoverProvider: true, completionProvider: { triggerCharacters: ['.','[',':'] }, signatureHelpProvider: { triggerCharacters: ['(',','] },
+      hoverProvider: true, completionProvider: { resolveProvider: false, triggerCharacters: ['.',':','[','(',' ','"'] }, signatureHelpProvider: { triggerCharacters: ['(',','] },
       definitionProvider: true, referencesProvider: true, renameProvider: { prepareProvider: true }, documentSymbolProvider: true,
       workspaceSymbolProvider: true, semanticTokensProvider: { legend: { tokenTypes: TOKEN_TYPES, tokenModifiers: ['declaration'] }, full: true },
       codeActionProvider: { codeActionKinds: ['quickfix'] }, documentHighlightProvider: true,

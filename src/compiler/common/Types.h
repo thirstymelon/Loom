@@ -40,6 +40,7 @@ struct SourceSpan {
     int length = 1;
 };
 thread_local std::size_t currentSourceIndex = 0;
+thread_local SourceSpan currentDiagnosticSpan{};
 struct Error : std::runtime_error {
     SourceSpan span;
     explicit Error(const std::string& message, SourceSpan location = {}) : std::runtime_error(message), span(location) {
@@ -48,6 +49,15 @@ struct Error : std::runtime_error {
             std::smatch match;
             const std::string text = message;
             if (std::regex_search(text, match, std::regex(R"((?:^|\b)line ([0-9]+):)"))) span.line = std::stoi(match[1]);
+        }
+        if (span.column == 0 && currentDiagnosticSpan.column > 0 &&
+            (span.line == 0 || span.line == currentDiagnosticSpan.line)) {
+            if (span.line == 0) span.line = currentDiagnosticSpan.line;
+            span.column = currentDiagnosticSpan.column;
+            span.length = currentDiagnosticSpan.length;
+            if (currentDiagnosticSpan.source != std::numeric_limits<std::size_t>::max()) {
+                span.source = currentDiagnosticSpan.source;
+            }
         }
     }
 };

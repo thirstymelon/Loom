@@ -123,6 +123,42 @@ End Main
     assert "cannot mutate read-only borrow 'view'" in res.stderr.lower(), res.stderr
     print("[PASS] Mutating read-only Borrow rejected at compile time")
 
+def test_release_flow_across_alternative_branches():
+    both_paths = """Module Main
+
+Block Main Declares
+    Buf : Signed_32 Pointer
+    Choose : Boolean = True
+Implements
+    Buf = Allocate(1)
+    If Choose
+        Release(Buf)
+    Else
+        Release(Buf)
+    End If
+End Main
+"""
+    res = compile_source(both_paths)
+    assert res.returncode == 0, f"Alternative releases should be checked per path, got: {res.stderr}"
+
+    possible_release = """Module Main
+
+Block Main Declares
+    Buf : Signed_32 Pointer
+    Choose : Boolean = True
+Implements
+    Buf = Allocate(1)
+    If Choose
+        Release(Buf)
+    End If
+    Release(Buf)
+End Main
+"""
+    res = compile_source(possible_release)
+    assert res.returncode != 0, "A release after a branch-conditional release must be rejected"
+    assert "double free" in res.stderr.lower(), res.stderr
+    print("[PASS] Ownership flow distinguishes alternative paths and possible double release")
+
 def test_parameter_mode_ref_read_only():
     source = """Module Main
 
@@ -173,6 +209,7 @@ if __name__ == "__main__":
     test_copy_semantics_independent_duplicate()
     test_borrow_read_only_view()
     test_borrow_mutation_rejected()
+    test_release_flow_across_alternative_branches()
     test_parameter_mode_ref_read_only()
     test_parameter_mode_mut_exclusive()
     print("\n============================================================")

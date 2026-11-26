@@ -14,10 +14,10 @@ clang = os.environ.get("CC", "clang")
 
 runtime_sources = [
     repo / "src/runtime/rt_core.c",
+    repo / "src/runtime/rt_arena.c",
     repo / "src/runtime/rt_smart_ptr.c",
     repo / "src/runtime/rt_collections.c",
     repo / "src/runtime/rt_threads.c",
-    repo / "src/runtime/rt_net.c",
     repo / "src/runtime/rt_hash.c",
 ]
 monolith_source = "\n".join(p.read_text() for p in runtime_sources)
@@ -324,4 +324,57 @@ int main(void) {
          task_harness, runtime, "-pthread", "-o", task_bin])
     run([task_bin], env=asan_env)
 
-print("passed IEEE float, integer division, Text/Vector/HMap allocation, and task cancellation regressions")
+    # Arena allocation validates alignment/capacity and supports whole-arena reset.
+    arena_harness = td / "arena.c"
+    arena_harness.write_text("""#include \"loom_runtime.h\"
+#include <assert.h>
+#include <stdint.h>
+int main(void) {
+    LoomArena* arena = loom_arena_create(128);
+    assert(arena);
+    unsigned char* a = (unsigned char*)loom_arena_alloc(arena, 3, 1);
+    unsigned char* b = (unsigned char*)loom_arena_alloc(arena, 16, 16);
+    assert(a && b && ((uintptr_t)b & 15u) == 0);
+    a[0] = 42;
+    assert(loom_arena_alloc(arena, 1024, 8) == NULL);
+    assert(loom_arena_alloc(arena, 1, 3) == NULL);
+    loom_arena_reset(arena);
+    assert(loom_arena_alloc(arena, 3, 1) == a);
+    loom_arena_destroy(arena);
+    loom_arena_destroy(NULL);
+    return 0;
+}
+""")
+    arena_bin = td / "arena"
+    run([clang, "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-I", repo / "src/runtime",
+         arena_harness, runtime, "-pthread", "-o", arena_bin])
+    run([arena_bin], env=asan_env)
+
+    # The public C ABI is usable from Loom without a compiler-specific builtin.
+    arena_loom = td / "arena.loom"
+    arena_loom.write_text("""Module ArenaAPIRegression
+Extern Block loom_arena_create Takes Capacity : Unsigned_64 Produces No_Type Pointer End loom_arena_create
+Extern Block loom_arena_alloc Takes Arena : No_Type Pointer, Size : Unsigned_64, Alignment : Unsigned_64 Produces No_Type Pointer End loom_arena_alloc
+Extern Block loom_arena_reset Takes Arena : No_Type Pointer End loom_arena_reset
+Extern Block loom_arena_destroy Takes Arena : No_Type Pointer End loom_arena_destroy
+Block Main Declares
+    Arena : No_Type Pointer
+    Data : Signed_32 Pointer
+Implements
+    Arena = loom_arena_create(128)
+    Data = loom_arena_alloc(Arena, 16, 4) as Signed_32 Pointer
+    Data[1] = 123
+    Print(Data[1])
+    loom_arena_reset(Arena)
+    Data = loom_arena_alloc(Arena, 16, 4) as Signed_32 Pointer
+    Data[1] = 456
+    Print(Data[1])
+    loom_arena_destroy(Arena)
+End Main
+""")
+    arena_loom_obj, arena_loom_bin = td / "arena-loom.o", td / "arena-loom"
+    run([compiler, "--object", "--entry", arena_loom, arena_loom_obj])
+    run([clang, arena_loom_obj, runtime, "-pthread", "-o", arena_loom_bin])
+    assert run([arena_loom_bin]).stdout == "123\n456\n"
+
+print("passed IEEE float, integer division, Text/Vector/HMap/Arena allocation, and task cancellation regressions")

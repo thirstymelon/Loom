@@ -27,6 +27,13 @@ void* loom_realloc(void* ptr, uint64_t new_count, uint32_t elem_size, uint32_t a
 void* loom_ptr_clone(const void* ptr);
 void  loom_free(void* ptr);
 
+/* Bump arena: single-threaded; reset invalidates every pointer it returned. */
+typedef struct LoomArena LoomArena;
+LoomArena* loom_arena_create(uint64_t capacity);
+void*      loom_arena_alloc(LoomArena* arena, uint64_t size, uint64_t alignment);
+void       loom_arena_reset(LoomArena* arena);
+void       loom_arena_destroy(LoomArena* arena);
+
 /* ---------------------------------------------------------------------------
    Task Concurrency API (Loom Native)
    --------------------------------------------------------------------------- */
@@ -47,6 +54,12 @@ LoomTask* loom_task_spawn(LoomTaskFn entry, void* args, size_t args_size, size_t
 void      loom_task_join(LoomTask* task, void* result_out);
 void      loom_task_cancel(LoomTask* task);
 int       loom_task_join_timeout(LoomTask* task, void* result_out, uint64_t timeout_ms);
+typedef void (*LoomParallelFn)(void* context, uint64_t index);
+typedef void (*LoomParallelChunkFn)(void* context, uint64_t begin, uint64_t end);
+void      loom_parallel_for(uint64_t count, uint64_t minimum_grain, LoomParallelFn fn, void* context);
+void      loom_parallel_for_chunks(uint64_t count, uint64_t minimum_grain, LoomParallelChunkFn fn, void* context);
+void      loom_vec_f32_apply(uint32_t operation, const float* left, const float* right,
+                             float* output, float factor, uint64_t count);
 
 /* ---------------------------------------------------------------------------
    Dynamic Strings / Text API (Loom Native)
@@ -59,6 +72,7 @@ typedef struct {
 
 void        loom_text_init(LoomText* t, uint64_t init_cap);
 void        loom_text_append_str(LoomText* t, const char* str);
+void        loom_text_append_buf(LoomText* t, const char* data, uint64_t len);
 void        loom_text_append_char(LoomText* t, char c);
 void        loom_text_append_i64(LoomText* t, int64_t val);
 void        loom_text_append_u64(LoomText* t, uint64_t val);
@@ -70,7 +84,11 @@ int         loom_text_contains(LoomText* t, const char* sub);
 uint64_t    loom_text_index(LoomText* t, const char* sub);
 void        loom_text_clear(LoomText* t);
 void        loom_text_clone(LoomText* dest, const LoomText* src);
+int         loom_text_equals(const LoomText* a, const LoomText* b);
+int         loom_string_equals(const char* a, const char* b);
 void        loom_text_free(LoomText* t);
+uint32_t    loom_utf8_decode_at(const char* data, uint64_t length, uint64_t offset);
+uint32_t    loom_utf8_width_at(const char* data, uint64_t length, uint64_t offset);
 
 /* ---------------------------------------------------------------------------
    Cryptographic & Non-Cryptographic Hashing API (Loom Native)
@@ -215,21 +233,6 @@ void         loom_channel_close(LoomChannel* ch);
 void         loom_channel_free(LoomChannel* ch);
 
 /* ---------------------------------------------------------------------------
-   Native Sockets / Networking API (Loom Native)
-   --------------------------------------------------------------------------- */
-int32_t  loom_net_tcp_listen(const char* host, uint16_t port);
-int32_t  loom_net_tcp_accept(int32_t listener_fd);
-int32_t  loom_net_tcp_connect(const char* host, uint16_t port);
-int64_t  loom_net_tcp_send(int32_t fd, const void* buf, uint64_t len);
-int64_t  loom_net_tcp_receive(int32_t fd, void* buf, uint64_t max_len);
-int32_t  loom_net_tcp_close(int32_t fd);
-
-int32_t  loom_net_udp_bind(const char* host, uint16_t port);
-int64_t  loom_net_udp_send_to(int32_t fd, const char* host, uint16_t port, const void* buf, uint64_t len);
-int64_t  loom_net_udp_receive_from(int32_t fd, void* buf, uint64_t max_len);
-int32_t  loom_net_udp_close(int32_t fd);
-
-/* ---------------------------------------------------------------------------
    Math Helpers
    --------------------------------------------------------------------------- */
 int64_t  loom_ipow_i64(int64_t base, int64_t exp);
@@ -243,6 +246,15 @@ void loom_panic(const char* file, int line, const char* reason);
 void loom_panic_overflow(const char* file, int line, const char* op, const char* type_name);
 void loom_panic_bounds(const char* file, int line, int64_t index, int64_t length);
 void loom_panic_divzero(const char* file, int line);
+
+/* ---------------------------------------------------------------------------
+   TLS / Secure Transport API (Loom Native)
+   --------------------------------------------------------------------------- */
+int64_t loom_tls_client_new(const char* host, const char* ca_path);
+int32_t loom_tls_connect(int64_t handle, int32_t fd);
+int64_t loom_tls_send(int64_t handle, const char* data, int64_t len);
+int64_t loom_tls_receive(int64_t handle, char* buf, int64_t capacity);
+int32_t loom_tls_close(int64_t handle);
 
 #ifdef __cplusplus
 }

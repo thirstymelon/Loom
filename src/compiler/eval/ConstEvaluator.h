@@ -140,8 +140,15 @@ public:
                    const std::vector<RecordDecl>& rs,
                    OptReport* rep = nullptr)
         : analyzer(a), functions(fs), globals(gs), records(rs), report(rep) {
-        for (const auto& f : functions) functionMap.emplace(f.name, &f);
-        for (const auto& g : globals) globalMap.emplace(g.name, &g);
+        std::unordered_set<std::string> dupFuncs, dupGlobals;
+        for (const auto& f : functions) {
+            if (!functionMap.emplace(f.name, &f).second) dupFuncs.insert(f.name);
+        }
+        for (const auto& df : dupFuncs) functionMap.erase(df);
+        for (const auto& g : globals) {
+            if (!globalMap.emplace(g.name, &g).second) dupGlobals.insert(g.name);
+        }
+        for (const auto& dg : dupGlobals) globalMap.erase(dg);
         for (const auto& r : records) recordMap.emplace(r.name, &r);
         analyzePurity();
     }
@@ -193,7 +200,13 @@ public:
         while (changed) {
             changed = false;
             for (auto it = pureFunctions.begin(); it != pureFunctions.end(); ) {
-                const auto* f = functionMap.at(*it);
+                auto fit = functionMap.find(*it);
+                if (fit == functionMap.end()) {
+                    it = pureFunctions.erase(it);
+                    changed = true;
+                    continue;
+                }
+                const auto* f = fit->second;
                 bool pure = true;
                 for (const auto& s : f->body) {
                     if (!isPureStmt(s, pureFunctions)) { pure = false; break; }

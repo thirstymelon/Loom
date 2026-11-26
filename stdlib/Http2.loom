@@ -1,0 +1,415 @@
+Module Http2
+Import Net
+Import Tls
+Import Hpack
+use Hpack
+Import Http
+
+Record Frame
+    Length : Unsigned_32
+    Type_Id : Unsigned_8
+    Flags : Unsigned_8
+    Stream_Id : Unsigned_32
+    Payload : Text
+End Frame
+
+Record Http2_Connection
+    Tls_Conn : Connection
+    Next_Stream_Id : Unsigned_32
+    Peer_Window : Signed_32
+    Hpack_Ctx : Context
+    Is_Connected : Boolean
+End Http2_Connection
+
+Block Write_32_Big_Endian Takes
+    Val : Unsigned_32
+Produces Text
+Declares
+    Out : Text
+    B0 : Unsigned_32
+    B1 : Unsigned_32
+    B2 : Unsigned_32
+    B3 : Unsigned_32
+    C : Character
+Implements
+    B0 = (Val / 16777216) % 256
+    B1 = (Val / 65536) % 256
+    B2 = (Val / 256) % 256
+    B3 = Val % 256
+    C = (B0 as Signed_32) as Character
+    Out += C
+    C = (B1 as Signed_32) as Character
+    Out += C
+    C = (B2 as Signed_32) as Character
+    Out += C
+    C = (B3 as Signed_32) as Character
+    Out += C
+    Give Out
+End Write_32_Big_Endian
+
+Block Write_24_Big_Endian Takes
+    Val : Unsigned_32
+Produces Text
+Declares
+    Out : Text
+    B0 : Unsigned_32
+    B1 : Unsigned_32
+    B2 : Unsigned_32
+    C : Character
+Implements
+    B0 = (Val / 65536) % 256
+    B1 = (Val / 256) % 256
+    B2 = Val % 256
+    C = (B0 as Signed_32) as Character
+    Out += C
+    C = (B1 as Signed_32) as Character
+    Out += C
+    C = (B2 as Signed_32) as Character
+    Out += C
+    Give Out
+End Write_24_Big_Endian
+
+Block Format_Frame Takes
+    Length : Unsigned_32
+    Type_Id : Unsigned_8
+    Flags : Unsigned_8
+    Stream_Id : Unsigned_32
+    Payload : Text
+Produces Text
+Declares
+    Out : Text
+    C : Character
+Implements
+    Out += Write_24_Big_Endian(Length)
+    C = ((Type_Id as Unsigned_32) as Signed_32) as Character
+    Out += C
+    C = ((Flags as Unsigned_32) as Signed_32) as Character
+    Out += C
+    Out += Write_32_Big_Endian(Stream_Id)
+    Out += Payload
+    Give Out
+End Format_Frame
+
+Block Send_Frame Takes
+    Conn : Http2_Connection
+    Type_Id : Unsigned_8
+    Flags : Unsigned_8
+    Stream_Id : Unsigned_32
+    Payload : Text
+Produces Signed_32
+Declares
+    Raw : Text
+    Sent : Signed_64
+Implements
+    Raw = Format_Frame(Payload.Length as Unsigned_32, Type_Id, Flags, Stream_Id, Payload)
+    Sent = Tls.Send_All(Conn.Tls_Conn, Raw)
+    If Sent < 0
+        Give -1
+    End If
+    Give 0
+End Send_Frame
+
+Block Send_Settings Takes
+    Conn : Http2_Connection
+    Is_Ack : Boolean
+Produces Signed_32
+Declares
+    Flags : Unsigned_8 = 0
+    Empty_Payload : Text
+Implements
+    If Is_Ack
+        Flags = 1
+    End If
+    Give Send_Frame(Conn, 4 as Unsigned_8, Flags, 0 as Unsigned_32, Empty_Payload)
+End Send_Settings
+
+Block Send_Window_Update Takes
+    Conn : Http2_Connection
+    Stream_Id : Unsigned_32
+    Increment : Unsigned_32
+Produces Signed_32
+Declares
+    Payload : Text
+Implements
+    Payload = Write_32_Big_Endian(Increment)
+    Give Send_Frame(Conn, 8 as Unsigned_8, 0 as Unsigned_8, Stream_Id, Payload)
+End Send_Window_Update
+
+Block Read_Exact Takes
+    Tls_Conn : Connection
+    Needed : Unsigned_64
+Produces Text
+Declares
+    Out : Text
+    Remaining : Unsigned_64
+    Chunk : Text
+    Read_Len : Signed_64
+Implements
+    Remaining = Needed
+    Loop while (Remaining > 0)
+        Chunk = Tls.Receive(Tls_Conn, Remaining)
+        Read_Len = Chunk.Length as Signed_64
+        If Read_Len <= 0
+            Exit
+        End If
+        Out += Chunk
+        Remaining = Remaining - (Read_Len as Unsigned_64)
+    End Loop
+    Give Out
+End Read_Exact
+
+Block Read_Frame Takes
+    Conn : Http2_Connection
+Produces Frame
+Declares
+    F : Frame
+    Hdr : Text
+    Len : Unsigned_32
+    T_Id : Unsigned_8
+    Flg : Unsigned_8
+    Strm : Unsigned_32
+    B0 : Unsigned_32
+    B1 : Unsigned_32
+    B2 : Unsigned_32
+    B3 : Unsigned_32
+    Payload_Data : Text
+Implements
+    F.Length = 0
+    F.Type_Id = 0
+    F.Flags = 0
+    F.Stream_Id = 0
+    F.Payload = Empty_Text()
+
+    Hdr = Read_Exact(Conn.Tls_Conn, 9)
+    If Hdr.Length < 9
+        Give F
+    End If
+
+    B0 = Hdr[1] as Unsigned_32
+    B1 = Hdr[2] as Unsigned_32
+    B2 = Hdr[3] as Unsigned_32
+    Len = B0 * 65536 + B1 * 256 + B2
+
+    T_Id = (Hdr[4] as Unsigned_32) as Unsigned_8
+    Flg = (Hdr[5] as Unsigned_32) as Unsigned_8
+
+    B0 = (Hdr[6] as Unsigned_32) % 128 # Mask out R bit
+    B1 = Hdr[7] as Unsigned_32
+    B2 = Hdr[8] as Unsigned_32
+    B3 = Hdr[9] as Unsigned_32
+    Strm = B0 * 16777216 + B1 * 65536 + B2 * 256 + B3
+
+    F.Length = Len
+    F.Type_Id = T_Id
+    F.Flags = Flg
+    F.Stream_Id = Strm
+
+    If Len > 0
+        Payload_Data = Read_Exact(Conn.Tls_Conn, Len as Unsigned_64)
+        F.Payload += Payload_Data
+    End If
+
+    Give F
+End Read_Frame
+
+Block Connect_H2_With_Roots Takes
+    Host : Text
+    Port : Signed_32
+    Ca_Path : Text
+Produces Http2_Connection
+Declares
+    Conn : Http2_Connection
+    Tls_Conn : Connection
+    Fd : Signed_32
+    Handle : Signed_64
+    Alpn_Status : Signed_32
+    Conn_Status : Signed_32
+    Sent : Signed_64
+    Preface : Text
+    Init_Settings_Status : Signed_32
+    Negotiated_Alpn : Text
+Implements
+    Conn.Next_Stream_Id = 1
+    Conn.Peer_Window = 65535
+    Conn.Hpack_Ctx = Hpack.Context_New(4096)
+    Conn.Is_Connected = False
+
+    Fd = Tcp_Connect(Host, Port)
+    If Fd < 0
+        Give Conn
+    End If
+
+    Handle = Tls_Client_New(Host, Ca_Path)
+    If Handle <= 0
+        Tcp_Close(Fd)
+        Give Conn
+    End If
+
+    Alpn_Status = Tls_Set_Alpn(Handle, "h2,http/1.1")
+    Conn_Status = Tls_Connect(Handle, Fd)
+    If Conn_Status != 0
+        Conn_Status = Tls_Close(Handle)
+        Tcp_Close(Fd)
+        Give Conn
+    End If
+
+    Negotiated_Alpn = Tls_Get_Alpn(Handle)
+    Tls_Conn.Handle = Handle
+    Tls_Conn.Socket = Fd
+    Tls_Conn.Host += Host
+    Tls_Conn.Connected = True
+    Conn.Tls_Conn = Tls_Conn
+
+    # Send HTTP/2 client connection preface: 24 bytes
+    Preface += "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+    Sent = Tls.Send_All(Conn.Tls_Conn, Preface)
+    If Sent < 24
+        Conn_Status = Tls.Close(Conn.Tls_Conn)
+        Give Conn
+    End If
+
+    # Send client initial empty SETTINGS frame
+    Init_Settings_Status = Send_Settings(Conn, False)
+
+    Conn.Is_Connected = True
+    Give Conn
+End Connect_H2_With_Roots
+
+Block Connect_H2 Takes
+    Host : Text
+    Port : Signed_32
+Produces Http2_Connection
+Declares
+    Empty_Roots : Text
+Implements
+    Give Connect_H2_With_Roots(Host, Port, Empty_Roots)
+End Connect_H2
+
+Block Request_H2 Takes
+    Conn : Http2_Connection
+    Method : String
+    Path : Text
+    Headers : Text
+    Body : Text
+Produces Response
+Declares
+    Resp : Response
+    Stream_Id : Unsigned_32
+    Raw_Hdr_Block : Text
+    Enc_Headers : Text
+    Hdr_Flags : Unsigned_8
+    Send_Res : Signed_32
+    F : Frame
+    Stream_Done : Boolean = False
+    Decoded_Headers : Text
+    I : Unsigned_64
+    C : Unsigned_32
+    Status_Digit : Signed_32
+    Line_End : Unsigned_64
+Implements
+    Resp.Status = 0
+    Resp.Status_Text = Empty_Text()
+    Resp.Headers = Empty_Text()
+    Resp.Body = Empty_Text()
+
+    If Not Conn.Is_Connected
+        Give Resp
+    End If
+
+    Stream_Id = Conn.Next_Stream_Id
+    Conn.Next_Stream_Id = Conn.Next_Stream_Id + 2
+
+    # Prepare pseudo-headers + request headers
+    Raw_Hdr_Block += ":method: "
+    Raw_Hdr_Block += Method
+    Raw_Hdr_Block += "\r\n:path: "
+    Raw_Hdr_Block += Path
+    Raw_Hdr_Block += "\r\n:scheme: https\r\n:authority: "
+    Raw_Hdr_Block += Conn.Tls_Conn.Host
+    Raw_Hdr_Block += "\r\n"
+    Raw_Hdr_Block += Headers
+
+    Enc_Headers = Hpack.Encode_Headers(Conn.Hpack_Ctx, Raw_Hdr_Block)
+
+    # HEADERS frame: flags = END_HEADERS (0x04)
+    # If body is empty, also set END_STREAM (0x01) -> 0x05
+    Hdr_Flags = 4
+    If Body.Length == 0
+        Hdr_Flags = 5
+    End If
+
+    Send_Res = Send_Frame(Conn, 1 as Unsigned_8, Hdr_Flags, Stream_Id, Enc_Headers)
+    If Send_Res != 0
+        Give Resp
+    End If
+
+    If Body.Length > 0
+        # DATA frame on stream with END_STREAM (0x01)
+        Send_Res = Send_Frame(Conn, 0 as Unsigned_8, 1 as Unsigned_8, Stream_Id, Body)
+        If Send_Res != 0
+            Give Resp
+        End If
+    End If
+
+    # Read response frames loop
+    Loop while (Not Stream_Done)
+        F = Read_Frame(Conn)
+        If F.Type_Id == 4 # SETTINGS
+            If (F.Flags % 2) == 0 # Not ACK
+                Send_Res = Send_Settings(Conn, True)
+            End If
+        Else If F.Type_Id == 6 # PING
+            If (F.Flags % 2) == 0 # Not ACK
+                Send_Res = Send_Frame(Conn, 6 as Unsigned_8, 1 as Unsigned_8, 0 as Unsigned_32, F.Payload)
+            End If
+        Else If F.Type_Id == 1 And F.Stream_Id == Stream_Id # HEADERS
+            Decoded_Headers = Hpack.Decode_Headers(Conn.Hpack_Ctx, F.Payload)
+            Resp.Headers += Decoded_Headers
+
+            # Extract :status from headers
+            # Find ":status: "
+            I = 1
+            Loop while (I + 8 <= Decoded_Headers.Length)
+                If (Decoded_Headers[I] as Unsigned_32) == 58 And (Decoded_Headers[I+1] as Unsigned_32) == 115 And (Decoded_Headers[I+2] as Unsigned_32) == 116 And (Decoded_Headers[I+3] as Unsigned_32) == 97 And (Decoded_Headers[I+4] as Unsigned_32) == 116 And (Decoded_Headers[I+5] as Unsigned_32) == 117 And (Decoded_Headers[I+6] as Unsigned_32) == 115 And (Decoded_Headers[I+7] as Unsigned_32) == 58
+                    # Parse 3 digits of status code
+                    Status_Digit = ((Decoded_Headers[I+9] as Signed_32) - 48) * 100 + ((Decoded_Headers[I+10] as Signed_32) - 48) * 10 + ((Decoded_Headers[I+11] as Signed_32) - 48)
+                    Resp.Status = Status_Digit
+                    Exit
+                End If
+                I = I + 1
+            End Loop
+
+            If (F.Flags % 2) == 1 # END_STREAM
+                Stream_Done = True
+            End If
+        Else If F.Type_Id == 0 And F.Stream_Id == Stream_Id # DATA
+            Resp.Body += F.Payload
+            # Send WINDOW_UPDATE to keep peer stream flowing
+            Send_Res = Send_Window_Update(Conn, 0 as Unsigned_32, F.Payload.Length as Unsigned_32)
+            Send_Res = Send_Window_Update(Conn, Stream_Id, F.Payload.Length as Unsigned_32)
+
+            If (F.Flags % 2) == 1 # END_STREAM
+                Stream_Done = True
+            End If
+        Else If F.Type_Id == 7 # GOAWAY
+            Stream_Done = True
+        Else If F.Type_Id == 3 And F.Stream_Id == Stream_Id # RST_STREAM
+            Stream_Done = True
+        End If
+    End Loop
+
+    Give Resp
+End Request_H2
+
+Block Close_H2 Takes
+    Conn : Http2_Connection
+Produces Signed_32
+Declares
+    Status : Signed_32
+Implements
+    If Conn.Is_Connected
+        Status = Tls.Close(Conn.Tls_Conn)
+        Conn.Is_Connected = False
+    End If
+    Give 0
+End Close_H2

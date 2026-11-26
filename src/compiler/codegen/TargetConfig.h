@@ -314,6 +314,7 @@ struct OptReport {
     std::vector<std::string> inlinedBlocks;
     std::vector<std::string> vectorizations;
     std::vector<std::string> autoParallelizations;
+    std::vector<std::string> loopLowerings;
 
     void print(std::ostream& os) const {
         os << "================================================================================\n";
@@ -357,13 +358,20 @@ struct OptReport {
         os << "    * Loom does not provide a garbage collector or implicit reference counting\n";
         os << "    * Runtime allocation behavior depends on the program and linked libraries\n";
         os << "--------------------------------------------------------------------------------\n";
-        os << "[6] Implicit Safe Multi-Threading (Auto-Parallelization):\n";
+        os << "[6] Automatic Parallelization (proven transformations only):\n";
         if (autoParallelizations.empty()) {
-            os << "    * No loops met data-parallel purity criteria for auto-threading\n";
+            os << "    * No proven automatic parallel transformation was selected\n";
         } else {
             for (const auto& item : autoParallelizations) {
                 os << "    * " << item << "\n";
             }
+        }
+        os << "--------------------------------------------------------------------------------\n";
+        os << "[7] Loop Lowerings and Profitability:\n";
+        if (loopLowerings.empty()) {
+            os << "    * No specialized loop lowering selected\n";
+        } else {
+            for (const auto& item : loopLowerings) os << "    * " << item << "\n";
         }
         os << "================================================================================\n";
     }

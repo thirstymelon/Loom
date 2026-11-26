@@ -1,0 +1,150 @@
+Module Tls
+Import Net
+
+Record Connection
+    Handle : Signed_64
+    Socket : Signed_32
+    Host : Text
+    Connected : Boolean
+End Connection
+
+Block Connect_With_Roots Takes
+    Host : Text
+    Port : Signed_32
+    Ca_Path : Text
+Produces Connection
+Declares
+    Conn : Connection
+    Fd : Signed_32
+    Handle : Signed_64
+    Status : Signed_32
+Implements
+    Conn.Handle = 0
+    Conn.Socket = -1
+    Conn.Connected = False
+    Fd = Tcp_Connect(Host, Port)
+    If Fd < 0
+        Give Conn
+    End If
+    Handle = Tls_Client_New(Host, Ca_Path)
+    If Handle <= 0
+        Tcp_Close(Fd)
+        Give Conn
+    End If
+    Status = Tls_Connect(Handle, Fd)
+    If Status != 0
+        Status = Tls_Close(Handle)
+        Tcp_Close(Fd)
+        Give Conn
+    End If
+    Conn.Handle = Handle
+    Conn.Socket = Fd
+    Conn.Host += Host
+    Conn.Connected = True
+    Give Conn
+End Connect_With_Roots
+
+Block Connect Takes
+    Host : Text
+    Port : Signed_32
+Produces Connection
+Declares
+    Empty_Roots : Text
+Implements
+    Give Connect_With_Roots(Host, Port, Empty_Roots)
+End Connect
+
+Block Send Takes
+    Conn : Connection
+    Data : Text
+Produces Signed_64
+Implements
+    If Not Conn.Connected
+        Give -1
+    End If
+    Give Tls_Send(Conn.Handle, Data)
+End Send
+
+Block Send_Slice Takes
+    Conn : Connection
+    Bytes : Unsigned_8 Slice
+Produces Signed_64
+Implements
+    If Not Conn.Connected
+        Give -1
+    End If
+    Give Tls_Send_Slice(Conn.Handle, Bytes)
+End Send_Slice
+
+Block Send_All Takes
+    Conn : Connection
+    Data : Text
+Produces Signed_64
+Declares
+    Sent : Signed_64
+Implements
+    If Not Conn.Connected
+        Give -1
+    End If
+    Sent = Tls_Send(Conn.Handle, Data)
+    Give Sent
+End Send_All
+
+Block Receive Takes
+    Conn : Connection
+    Max_Bytes : Unsigned_64
+Produces Text
+Declares
+    Empty : Text
+Implements
+    If Not Conn.Connected
+        Give Empty
+    End If
+    Give Tls_Receive(Conn.Handle, Max_Bytes as Signed_64)
+End Receive
+
+Block Receive_Buffer Takes
+    Conn : Connection
+    Buffer : Unsigned_8 Pointer
+    Capacity : Signed_64
+Produces Signed_64
+Implements
+    If Not Conn.Connected
+        Give -1
+    End If
+    Give Tls_Receive_Buffer(Conn.Handle, Buffer, Capacity)
+End Receive_Buffer
+
+Block Receive_Until_Close Takes
+    Conn : Connection
+    Chunk_Size : Unsigned_64
+Produces Text
+Declares
+    Result : Text
+    Chunk : Text
+Implements
+    If Not Conn.Connected
+        Give Result
+    End If
+    Loop
+        Chunk = Tls_Receive(Conn.Handle, Chunk_Size as Signed_64)
+        If Chunk.Length == 0
+            Exit
+        End If
+        Result += Chunk
+    End Loop
+    Give Result
+End Receive_Until_Close
+
+Block Close Takes
+    Conn : Connection
+Produces Signed_32
+Declares
+    Status : Signed_32 = 0
+Implements
+    If Conn.Connected
+        Status = Tls_Close(Conn.Handle)
+        Tcp_Close(Conn.Socket)
+    End If
+    Give Status
+End Close

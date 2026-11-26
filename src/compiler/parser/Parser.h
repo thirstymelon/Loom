@@ -53,6 +53,36 @@ class Parser {
     std::unordered_map<std::size_t, std::string> fileModules;
     std::unordered_map<std::size_t, std::unordered_set<std::string>> fileImports;
     std::unordered_map<std::size_t, std::unordered_set<std::string>> fileUses;
+    std::unordered_map<std::size_t, std::unordered_map<std::string, std::string>> fileImportAliases;
+    std::vector<GenericModuleDecl> genericModules;
+    std::vector<ModuleInstantiation> moduleInstantiations;
+
+    Token expectIdentOrWrite(const std::string& msg) {
+        if (at(K::Id) || at(K::Write)) return pop();
+        fail(msg);
+        return Token{};
+    }
+    std::string parseDottedName(const std::string& context) {
+        Token first = expect(K::Id, "expected a module name after " + context);
+        std::string name = first.text;
+        while (eat(K::Dot)) {
+            Token part = expect(K::Id, "expected identifier after '.' in " + context);
+            name += "." + part.text;
+        }
+        return name;
+    }
+
+    static std::optional<std::string> flattenDottedExpr(const Expr& e) {
+        if (e.kind == Expr::Kind::Variable) {
+            if (!e.qualifier.empty()) return e.qualifier + "." + e.text;
+            return e.text;
+        }
+        if (e.kind == Expr::Kind::Member && e.left) {
+            auto prefix = flattenDottedExpr(*e.left);
+            if (prefix) return *prefix + "." + e.text;
+        }
+        return std::nullopt;
+    }
     const Token& t() const {
         currentSourceIndex = ts[pos].sourceIndex;
         return ts[pos];
@@ -98,6 +128,8 @@ class Parser {
         e->kind = k;
         e->text = op.text;
         e->line = op.line;
+        e->column = op.column;
+        e->length = static_cast<int>(op.length > 0 ? op.length : (op.text.empty() ? 1 : op.text.length()));
         e->left = std::move(a);
         e->right = std::move(b);
         return e;
@@ -301,13 +333,23 @@ class Parser {
             base = Type::smartPointer(std::move(pointee));
         } else if (eat(K::Channel) || (at(K::Id) && (t().text == "Channel" || t().text == "channel"))) {
             if (at(K::Id)) pop();
-            expect(K::LBracket, "expected '[' after 'Channel'");
-            Type elem = parseTypeRef();
-            expect(K::RBracket, "expected ']' after Channel type parameter");
-            base = Type::channelType(std::move(elem));
+            auto recIt = recordTypes.find("Channel");
+            if (recIt != recordTypes.end() && !at(K::LBracket)) {
+                base = recIt->second;
+            } else {
+                expect(K::LBracket, "expected '[' after 'Channel'");
+                Type elem = parseTypeRef();
+                expect(K::RBracket, "expected ']' after Channel type parameter");
+                base = Type::channelType(std::move(elem));
+            }
         } else if (eat(K::Mutex) || (at(K::Id) && (t().text == "Mutex" || t().text == "mutex"))) {
             if (at(K::Id)) pop();
-            base = Type::mutexType();
+            auto recIt = recordTypes.find("Mutex");
+            if (recIt != recordTypes.end()) {
+                base = recIt->second;
+            } else {
+                base = Type::mutexType();
+            }
         } else if (eat(K::Atomic) || (at(K::Id) && (t().text == "Atomic" || t().text == "atomic"))) {
             if (at(K::Id)) pop();
             expect(K::LBracket, "expected '[' after 'Atomic'");
@@ -398,7 +440,20 @@ class Parser {
                 expect(K::RBracket, "expected ']' after type arguments");
                 base = instantiateGenericRecord(name.text, typeArgs, name.line);
             } else {
-                base = resolveType(name);
+                Token lastTok = name;
+                while (eat(K::Dot)) {
+                    lastTok = expect(K::Id, "expected type name after '.'");
+                }
+                if (eat(K::LBracket)) {
+                    std::vector<Type> typeArgs;
+                    do {
+                        typeArgs.push_back(parseTypeRef());
+                    } while (eat(K::Comma));
+                    expect(K::RBracket, "expected ']' after type arguments");
+                    base = instantiateGenericRecord(lastTok.text, typeArgs, lastTok.line);
+                } else {
+                    base = resolveType(lastTok);
+                }
             }
         } else {
             fail("expected type name");
@@ -472,8 +527,23 @@ class Parser {
         for (std::size_t i = 0; i < ts.size(); ++i) {
             if (ts[i].kind == K::Record && i + 1 < ts.size() && ts[i + 1].kind == K::Id) {
                 recordTypes.emplace(ts[i + 1].text, Type::recordType(ts[i + 1].text));
+            } else if (ts[i].kind == K::Tagged && i + 2 < ts.size() && ts[i + 1].kind == K::Record && ts[i + 2].kind == K::Id) {
+                recordTypes.emplace(ts[i + 2].text, Type::recordType(ts[i + 2].text));
             } else if (ts[i].kind == K::Enum && i + 1 < ts.size() && ts[i + 1].kind == K::Id) {
-                enumTypes.emplace(ts[i + 1].text, Type::enumType(ts[i + 1].text, 32, false));
+                unsigned bits = 32;
+                bool isSigned = false;
+                if (i + 3 < ts.size() && ts[i + 2].kind == K::Colon && ts[i + 3].kind == K::Id) {
+                    const std::string& ut = ts[i + 3].text;
+                    if (ut == "Signed_8") { bits = 8; isSigned = true; }
+                    else if (ut == "Signed_16") { bits = 16; isSigned = true; }
+                    else if (ut == "Signed_32") { bits = 32; isSigned = true; }
+                    else if (ut == "Signed_64") { bits = 64; isSigned = true; }
+                    else if (ut == "Unsigned_8") { bits = 8; isSigned = false; }
+                    else if (ut == "Unsigned_16") { bits = 16; isSigned = false; }
+                    else if (ut == "Unsigned_32") { bits = 32; isSigned = false; }
+                    else if (ut == "Unsigned_64") { bits = 64; isSigned = false; }
+                }
+                enumTypes.emplace(ts[i + 1].text, Type::enumType(ts[i + 1].text, bits, isSigned));
             }
         }
     }
@@ -611,12 +681,26 @@ class Parser {
             e->arguments.push_back(std::move(ptr));
             base = std::move(e);
         } else if (x.kind == K::Spawn) {
+            bool isPrivileged = false;
+            if (at(K::Id) && (t().text == "Privileged" || t().text == "privileged")) {
+                pop();
+                isPrivileged = true;
+            }
+            if (at(K::Id) && (t().text == "Task" || t().text == "task") && pos + 1 < ts.size() && (ts[pos + 1].kind == K::Id || ts[pos + 1].kind == K::LParen)) {
+                pop();
+            }
             auto target = primary();
             if (target->kind != Expr::Kind::Call) {
                 throw Error("line " + std::to_string(x.line) + ": Spawn requires a procedure call, e.g. 'Spawn Calculate(10)'");
             }
             auto e = make(Expr::Kind::Spawn, x);
+            e->isPrivileged = isPrivileged;
             e->arguments.push_back(std::move(target));
+            if (at(K::Id) && (t().text == "On" || t().text == "on")) {
+                pop();
+                auto onTarget = primary();
+                e->arguments.push_back(std::move(onTarget));
+            }
             base = std::move(e);
         } else if (x.kind == K::Join) {
             if (at(K::Id) && (t().text == "Task" || t().text == "task") && pos + 1 < ts.size() && (ts[pos + 1].kind == K::Id || ts[pos + 1].kind == K::LParen)) pop();
@@ -850,15 +934,55 @@ class Parser {
 
         while (at(K::Dot) || at(K::LBracket)) {
             if (eat(K::Dot)) {
-                Token field = expect(K::Id, "expected field after '.'");
+                Token field = expectIdentOrWrite("expected field after '.'");
+                if (field.text == "On_Error") {
+                    expect(K::LParen, "expected '(' after On_Error");
+                    Token actionTok = expect(K::Id, "expected error action (Panic, Ignore, Propagate) in On_Error");
+                    std::string actionName = actionTok.text;
+                    while (eat(K::Dot)) {
+                        Token sub = expect(K::Id, "expected action identifier");
+                        actionName = sub.text;
+                    }
+                    expect(K::RParen, "expected ')' after On_Error action");
+                    auto onErr = make(Expr::Kind::OnError, field);
+                    onErr->left = std::move(base);
+                    onErr->text = actionName;
+                    base = std::move(onErr);
+                    continue;
+                }
                 if (eat(K::LParen)) {
                     auto call = make(Expr::Kind::Call, field);
+                    if (auto qual = flattenDottedExpr(*base)) {
+                        call->qualifier = *qual;
+                    }
                     call->left = std::move(base);
                     if (!at(K::RParen)) {
                         do { call->arguments.push_back(expression()); } while (eat(K::Comma));
                     }
                     expect(K::RParen, "expected ')' after function arguments");
                     base = std::move(call);
+                } else if (at(K::LBrace)) {
+                    auto qual = flattenDottedExpr(*base);
+                    if (!qual) fail("record literal qualifier must be a module path");
+                    pop();
+                    auto recLit = make(Expr::Kind::RecordLiteral, field);
+                    recLit->qualifier = *qual;
+                    newlines();
+                    if (!at(K::RBrace)) {
+                        do {
+                            newlines();
+                            if (at(K::RBrace)) break;
+                            Token fn = expect(K::Id, "expected field name in record literal");
+                            expect(K::Colon, "expected ':' after field name in record literal");
+                            auto fval = expression();
+                            recLit->fieldNames.push_back(fn.text);
+                            recLit->arguments.push_back(std::move(fval));
+                            newlines();
+                        } while (eat(K::Comma));
+                    }
+                    newlines();
+                    expect(K::RBrace, "expected '}' after record literal");
+                    base = std::move(recLit);
                 } else {
                     base = make(Expr::Kind::Member, field, std::move(base));
                 }
@@ -1031,6 +1155,8 @@ class Parser {
         Token x = t();
         Stmt s;
         s.line = x.line;
+        s.column = x.column;
+        s.length = static_cast<int>(x.length > 0 ? x.length : 1);
         if (at(K::LParen)) {
             size_t look = pos + 1;
             bool isTupleAssign = false;
@@ -1114,6 +1240,30 @@ class Parser {
             e->arguments.push_back(std::move(ptr));
             s.kind = Stmt::Kind::Call;
             s.expr = std::move(e);
+        } else if (at(K::Spawn)) {
+            Token spawnTok = pop();
+            bool isPrivileged = false;
+            if (at(K::Id) && (t().text == "Privileged" || t().text == "privileged")) {
+                pop();
+                isPrivileged = true;
+            }
+            if (at(K::Id) && (t().text == "Task" || t().text == "task") && pos + 1 < ts.size() && (ts[pos + 1].kind == K::Id || ts[pos + 1].kind == K::LParen)) {
+                pop();
+            }
+            auto target = primary();
+            if (target->kind != Expr::Kind::Call) {
+                throw Error("line " + std::to_string(spawnTok.line) + ": Spawn requires a procedure call, e.g. 'Spawn Calculate(10)'");
+            }
+            auto e = make(Expr::Kind::Spawn, spawnTok);
+            e->isPrivileged = isPrivileged;
+            e->arguments.push_back(std::move(target));
+            if (at(K::Id) && (t().text == "On" || t().text == "on")) {
+                pop();
+                auto onTarget = primary();
+                e->arguments.push_back(std::move(onTarget));
+            }
+            s.kind = Stmt::Kind::Call;
+            s.expr = std::move(e);
         } else if (at(K::Join)) {
             Token joinTok = pop();
             if (at(K::Id) && (t().text == "Task" || t().text == "task") && pos + 1 < ts.size() && (ts[pos + 1].kind == K::Id || ts[pos + 1].kind == K::LParen)) pop();
@@ -1166,7 +1316,10 @@ class Parser {
             s.kind = Stmt::Kind::Use;
             s.name = modTok.text;
             return s;
-        } else if (at(K::Id)) {
+        } else if (at(K::Id) || (at(K::Lock) && pos + 1 < ts.size() && (ts[pos + 1].kind == K::Dot || ts[pos + 1].kind == K::Assign || ts[pos + 1].kind == K::LParen))) {
+            if (at(K::Lock)) {
+                ts[pos].kind = K::Id;
+            }
             if (pos + 1 < ts.size() && ts[pos + 1].kind == K::Comma) {
                 size_t look = pos;
                 bool isMultiAssign = false;
@@ -1201,37 +1354,114 @@ class Parser {
                 return s;
             }
             if (eat(K::Dot)) {
-                Token field = expect(K::Id, "expected record field or function name after '.'");
+                std::vector<Token> parts;
+                parts.push_back(id);
+                do {
+                    parts.push_back(expectIdentOrWrite("expected record field or function name after '.'"));
+                } while (eat(K::Dot));
+
+                auto buildLeftChain = [&](std::size_t upto) {
+                    auto node = make(Expr::Kind::Variable, parts[0]);
+                    for (std::size_t idx = 1; idx < upto; ++idx) {
+                        node = make(Expr::Kind::Member, parts[idx], std::move(node));
+                    }
+                    return node;
+                };
+                auto joinPrefix = [&](std::size_t upto) {
+                    std::string q = parts[0].text;
+                    for (std::size_t idx = 1; idx < upto; ++idx) {
+                        q += "." + parts[idx].text;
+                    }
+                    return q;
+                };
+
+                const Token& lastPart = parts.back();
                 if (at(K::LParen)) {
-                    if (field.text == "Write_UART" || field.text == "Write") {
-                        parseWriteStatement(s, field.text);
+                    if (lastPart.text == "Write_UART") {
+                        parseWriteStatement(s, lastPart.text);
                         return s;
                     }
                     expect(K::LParen, "expected '(' after function name");
-                    auto callExpr = make(Expr::Kind::Call, field);
-                    callExpr->qualifier = id.text;
-                    callExpr->left = make(Expr::Kind::Variable, id);
+                    auto callExpr = make(Expr::Kind::Call, lastPart);
+                    callExpr->qualifier = joinPrefix(parts.size() - 1);
+                    callExpr->left = buildLeftChain(parts.size() - 1);
                     if (!at(K::RParen)) {
                         do { callExpr->arguments.push_back(expression()); } while (eat(K::Comma));
                     }
                     expect(K::RParen, "expected ')' after arguments");
+                    while (at(K::Dot)) {
+                        eat(K::Dot);
+                        Token nextField = expectIdentOrWrite("expected method or On_Error after '.'");
+                        if (nextField.text == "On_Error") {
+                            expect(K::LParen, "expected '(' after On_Error");
+                            Token actionTok = expect(K::Id, "expected error action (Panic, Ignore, Propagate) in On_Error");
+                            std::string actionName = actionTok.text;
+                            while (eat(K::Dot)) {
+                                Token sub = expect(K::Id, "expected action identifier");
+                                actionName = sub.text;
+                            }
+                            expect(K::RParen, "expected ')' after On_Error action");
+                            auto onErr = make(Expr::Kind::OnError, nextField);
+                            onErr->left = std::move(callExpr);
+                            onErr->text = actionName;
+                            callExpr = std::move(onErr);
+                            continue;
+                        }
+                        if (eat(K::LParen)) {
+                            auto chained = make(Expr::Kind::Call, nextField);
+                            chained->left = std::move(callExpr);
+                            if (!at(K::RParen)) {
+                                do { chained->arguments.push_back(expression()); } while (eat(K::Comma));
+                            }
+                            expect(K::RParen, "expected ')' after arguments");
+                            callExpr = std::move(chained);
+                        } else {
+                            auto chained = make(Expr::Kind::Call, nextField);
+                            chained->left = std::move(callExpr);
+                            callExpr = std::move(chained);
+                        }
+                    }
                     s.kind = Stmt::Kind::Call;
                     s.expr = std::move(callExpr);
                     return s;
                 }
-                if (at(K::Dot)) fail("nested record field assignment is not supported yet");
-                s.kind = Stmt::Kind::Assign;
-                s.name = id.text;
-                s.member = field.text;
-                if (isCompoundAssign(t().kind)) {
-                    Token op = pop();
-                    Token binOp = compoundToBinaryToken(op);
-                    auto rhs = expression();
-                    auto lhsMember = make(Expr::Kind::Member, field, make(Expr::Kind::Variable, id));
-                    s.expr = make(Expr::Kind::Binary, binOp, std::move(lhsMember), std::move(rhs));
+                if (at(K::Newline) || at(K::Eof) || at(K::End) || at(K::When) || at(K::Else)) {
+                    auto callExpr = make(Expr::Kind::Call, lastPart);
+                    callExpr->qualifier = joinPrefix(parts.size() - 1);
+                    callExpr->left = buildLeftChain(parts.size() - 1);
+                    s.kind = Stmt::Kind::Call;
+                    s.expr = std::move(callExpr);
+                    return s;
+                }
+                if (parts.size() == 2) {
+                    s.kind = Stmt::Kind::Assign;
+                    s.name = parts[0].text;
+                    s.member = parts[1].text;
+                    if (isCompoundAssign(t().kind)) {
+                        Token op = pop();
+                        Token binOp = compoundToBinaryToken(op);
+                        auto rhs = expression();
+                        auto lhsMember = make(Expr::Kind::Member, parts[1], make(Expr::Kind::Variable, parts[0]));
+                        s.expr = make(Expr::Kind::Binary, binOp, std::move(lhsMember), std::move(rhs));
+                    } else {
+                        expect(K::Assign, "expected '=' after record field");
+                        s.expr = expression();
+                    }
                 } else {
-                    expect(K::Assign, "expected '=' after record field");
-                    s.expr = expression();
+                    auto target = buildLeftChain(parts.size());
+                    if (isCompoundAssign(t().kind)) {
+                        Token op = pop();
+                        Token binOp = compoundToBinaryToken(op);
+                        auto rhs = expression();
+                        s.kind = Stmt::Kind::TargetAssign;
+                        s.target = cloneExpr(*target);
+                        s.expr = make(Expr::Kind::Binary, binOp, std::move(target), std::move(rhs));
+                    } else {
+                        expect(K::Assign, "expected '=' after record field");
+                        s.kind = Stmt::Kind::TargetAssign;
+                        s.target = std::move(target);
+                        s.expr = expression();
+                    }
                 }
             } else if (at(K::LParen)) {
                 expect(K::LParen, "expected '(' after procedure name");
@@ -1275,6 +1505,11 @@ class Parser {
                     s.target = std::move(target);
                     s.expr = expression();
                 }
+            } else if (at(K::Newline) || at(K::Eof) || at(K::End) || at(K::When) || at(K::Else)) {
+                auto callExpr = make(Expr::Kind::Call, id);
+                s.kind = Stmt::Kind::Call;
+                s.expr = std::move(callExpr);
+                return s;
             } else {
                 s.kind = Stmt::Kind::Assign;
                 s.name = id.text;
@@ -1307,6 +1542,8 @@ class Parser {
             Token x = t();
             Stmt s;
             s.line = x.line;
+            s.column = x.column;
+            s.length = static_cast<int>(x.length > 0 ? x.length : 1);
             if (eat(K::Ensure)) {
                 if (hasEnsureInThisBlock) {
                     fail("block cannot contain multiple Ensure blocks; consolidate cleanup into a single Ensure block");
@@ -1337,6 +1574,8 @@ class Parser {
                         Stmt elseIfStmt;
                         elseIfStmt.kind = Stmt::Kind::If;
                         elseIfStmt.line = t().line;
+                        elseIfStmt.column = t().column;
+                        elseIfStmt.length = static_cast<int>(t().length > 0 ? t().length : 1);
                         elseIfStmt.expr = expression();
                         requireLineEnd("Else If condition");
                         elseIfStmt.body = statements(true, true);
@@ -1353,6 +1592,8 @@ class Parser {
                 Token loopTok = pop();
                 s.kind = Stmt::Kind::Loop;
                 s.line = loopTok.line;
+                s.column = loopTok.column;
+                s.length = static_cast<int>(loopTok.length > 0 ? loopTok.length : 1);
                 if (eat(K::Until)) {
                     s.until = true;
                     s.expr = expression();
@@ -1386,6 +1627,8 @@ class Parser {
                 Token matchTok = pop();
                 s.kind = Stmt::Kind::Match;
                 s.line = matchTok.line;
+                s.column = matchTok.column;
+                s.length = static_cast<int>(matchTok.length > 0 ? matchTok.length : 1);
                 s.expr = expression();
                 requireLineEnd("Match expression");
                 newlines();
@@ -1393,6 +1636,8 @@ class Parser {
                     Token whenTok = pop();
                     MatchCase mc;
                     mc.line = whenTok.line;
+                    mc.column = whenTok.column;
+                    mc.length = static_cast<int>(whenTok.length > 0 ? whenTok.length : 1);
                     if (at(K::Id) && t().text == "_") {
                         pop();
                         mc.isWildcard = true;
@@ -1416,6 +1661,8 @@ class Parser {
                     Token defTok = pop();
                     MatchCase mc;
                     mc.line = defTok.line;
+                    mc.column = defTok.column;
+                    mc.length = static_cast<int>(defTok.length > 0 ? defTok.length : 1);
                     mc.isDefault = true;
                     expect(K::Colon, "expected ':' after default");
                     requireLineEnd("default in Match");
@@ -1427,7 +1674,39 @@ class Parser {
                 }
                 expect(K::End, "expected 'End Match'");
                 expect(K::Match, "expected 'Match' after 'End'");
-            } else if (at(K::Lock) || (at(K::Id) && (t().text == "Lock" || t().text == "lock") && pos + 1 < ts.size() && ts[pos + 1].kind != K::Equal && ts[pos + 1].kind != K::Colon)) {
+            } else if (at(K::Unsafe)) {
+                pop();
+                s.kind = Stmt::Kind::UnsafeBlock;
+                requireLineEnd("Unsafe");
+                s.body = statements(false);
+                expect(K::End, "expected 'End Unsafe'");
+                if (!eat(K::Unsafe)) {
+                    fail("expected 'Unsafe' after 'End'");
+                }
+            } else if (at(K::Id) && (t().text == "Asm" || t().text == "asm") && pos + 1 < ts.size() && ts[pos + 1].kind == K::Newline) {
+                pop();
+                s.kind = Stmt::Kind::AsmBlock;
+                requireLineEnd("Asm");
+                std::string instStr;
+                while (!at(K::End) && !at(K::Eof)) {
+                    if (at(K::String)) {
+                        Token strTok = pop();
+                        if (!instStr.empty()) instStr += "\n";
+                        instStr += strTok.text;
+                    } else if (at(K::Newline)) {
+                        pop();
+                    } else {
+                        fail("expected string literal in Asm block");
+                    }
+                }
+                expect(K::End, "expected 'End Asm'");
+                if (at(K::Id) && (t().text == "Asm" || t().text == "asm")) {
+                    pop();
+                } else {
+                    fail("expected 'Asm' after 'End'");
+                }
+                s.asmTemplate = instStr;
+            } else if ((at(K::Lock) || (at(K::Id) && (t().text == "Lock" || t().text == "lock"))) && pos + 1 < ts.size() && ts[pos + 1].kind != K::Equal && ts[pos + 1].kind != K::Colon && ts[pos + 1].kind != K::Dot) {
                 pop();
                 s.kind = Stmt::Kind::Lock;
                 s.expr = expression();
@@ -1463,6 +1742,8 @@ class Parser {
             Token x = t();
             Stmt s;
             s.line = x.line;
+            s.column = x.column;
+            s.length = static_cast<int>(x.length > 0 ? x.length : 1);
             if (eat(K::Ensure)) {
                 if (hasEnsureInThisBlock) {
                     fail("block cannot contain multiple Ensure blocks; consolidate cleanup into a single Ensure block");
@@ -1493,6 +1774,8 @@ class Parser {
                         Stmt elseIfStmt;
                         elseIfStmt.kind = Stmt::Kind::If;
                         elseIfStmt.line = t().line;
+                        elseIfStmt.column = t().column;
+                        elseIfStmt.length = static_cast<int>(t().length > 0 ? t().length : 1);
                         elseIfStmt.expr = expression();
                         requireLineEnd("Else If condition");
                         elseIfStmt.body = statements(true, true);
@@ -1509,6 +1792,8 @@ class Parser {
                 Token loopTok = pop();
                 s.kind = Stmt::Kind::Loop;
                 s.line = loopTok.line;
+                s.column = loopTok.column;
+                s.length = static_cast<int>(loopTok.length > 0 ? loopTok.length : 1);
                 if (eat(K::Until)) {
                     s.until = true;
                     s.expr = expression();
@@ -1542,6 +1827,8 @@ class Parser {
                 Token matchTok = pop();
                 s.kind = Stmt::Kind::Match;
                 s.line = matchTok.line;
+                s.column = matchTok.column;
+                s.length = static_cast<int>(matchTok.length > 0 ? matchTok.length : 1);
                 s.expr = expression();
                 requireLineEnd("Match expression");
                 newlines();
@@ -1549,6 +1836,8 @@ class Parser {
                     Token whenTok = pop();
                     MatchCase mc;
                     mc.line = whenTok.line;
+                    mc.column = whenTok.column;
+                    mc.length = static_cast<int>(whenTok.length > 0 ? whenTok.length : 1);
                     if (at(K::Id) && t().text == "_") {
                         pop();
                         mc.isWildcard = true;
@@ -1572,6 +1861,8 @@ class Parser {
                     Token defTok = pop();
                     MatchCase mc;
                     mc.line = defTok.line;
+                    mc.column = defTok.column;
+                    mc.length = static_cast<int>(defTok.length > 0 ? defTok.length : 1);
                     mc.isDefault = true;
                     expect(K::Colon, "expected ':' after default");
                     requireLineEnd("default in Match");
@@ -1583,7 +1874,39 @@ class Parser {
                 }
                 expect(K::End, "expected 'End Match'");
                 expect(K::Match, "expected 'Match' after 'End'");
-            } else if (at(K::Lock) || (at(K::Id) && (t().text == "Lock" || t().text == "lock") && pos + 1 < ts.size() && ts[pos + 1].kind != K::Equal && ts[pos + 1].kind != K::Colon)) {
+            } else if (at(K::Unsafe)) {
+                pop();
+                s.kind = Stmt::Kind::UnsafeBlock;
+                requireLineEnd("Unsafe");
+                s.body = statements(false);
+                expect(K::End, "expected 'End Unsafe'");
+                if (!eat(K::Unsafe)) {
+                    fail("expected 'Unsafe' after 'End'");
+                }
+            } else if (at(K::Id) && (t().text == "Asm" || t().text == "asm") && pos + 1 < ts.size() && ts[pos + 1].kind == K::Newline) {
+                pop();
+                s.kind = Stmt::Kind::AsmBlock;
+                requireLineEnd("Asm");
+                std::string instStr;
+                while (!at(K::End) && !at(K::Eof)) {
+                    if (at(K::String)) {
+                        Token strTok = pop();
+                        if (!instStr.empty()) instStr += "\n";
+                        instStr += strTok.text;
+                    } else if (at(K::Newline)) {
+                        pop();
+                    } else {
+                        fail("expected string literal in Asm block");
+                    }
+                }
+                expect(K::End, "expected 'End Asm'");
+                if (at(K::Id) && (t().text == "Asm" || t().text == "asm")) {
+                    pop();
+                } else {
+                    fail("expected 'Asm' after 'End'");
+                }
+                s.asmTemplate = instStr;
+            } else if ((at(K::Lock) || (at(K::Id) && (t().text == "Lock" || t().text == "lock"))) && pos + 1 < ts.size() && ts[pos + 1].kind != K::Equal && ts[pos + 1].kind != K::Colon && ts[pos + 1].kind != K::Dot) {
                 pop();
                 s.kind = Stmt::Kind::Lock;
                 s.expr = expression();
@@ -1609,7 +1932,15 @@ class Parser {
         bool isRef = eat(K::Ref);
         bool isMut = false;
         if (!isRef) isMut = eat(K::Mut);
-        Token n = expect(K::Id, "expected identifier in declaration");
+        Token n;
+        if (at(K::Id)) {
+            n = pop();
+        } else if (at(K::Lock) && pos + 1 < ts.size() && ts[pos + 1].kind == K::Colon) {
+            n = pop();
+            n.kind = K::Id;
+        } else {
+            n = expect(K::Id, "expected identifier in declaration");
+        }
         expect(K::Colon, "expected ':' after '" + n.text + "'");
         bool constant = eat(K::Constant);
         Type typ = parseTypeRef();
@@ -1783,6 +2114,8 @@ class Parser {
                 requireLineEnd("concise Produces");
                 Stmt giveStmt;
                 giveStmt.line = retExpr->line;
+                giveStmt.column = retExpr->column;
+                giveStmt.length = retExpr->length;
                 giveStmt.kind = Stmt::Kind::Give;
                 giveStmt.expr = std::move(retExpr);
                 f.body.push_back(std::move(giveStmt));
@@ -1823,15 +2156,45 @@ class Parser {
         return f;
     }
 
-    Function function(bool isAsync = false) {
+    Function function(bool isAsync = false, bool isInterrupt = false) {
         if (!isAsync && eat(K::Async)) isAsync = true;
+        if (!isInterrupt && eat(K::Interrupt)) isInterrupt = true;
         Token b = expect(K::Block, "expected Block");
         Function f;
         f.line = b.line;
         f.isAsync = isAsync;
-        Token name = expect(K::Id, "expected function name after Block");
+        f.isInterrupt = isInterrupt;
+        Token name = expectIdentOrWrite("expected function name after Block");
+        std::string originalBlockName = name.text;
         f.name = name.text;
         f.sourceIndex = b.sourceIndex;
+        if (!f.isInterrupt && eat(K::Interrupt)) {
+            f.isInterrupt = true;
+            if (eat(K::LParen)) {
+                expect(K::RParen, "expected ')' after Interrupt");
+            }
+        }
+        if (at(K::Id) && (t().text == "Pio_Interrupt" || t().text == "pio_interrupt")) {
+            pop();
+            f.isInterrupt = true;
+            expect(K::LParen, "expected '(' after Pio_Interrupt");
+            auto unitTok = expect(K::Number, "expected PIO Unit (0 or 1)");
+            expect(K::Comma, "expected ','");
+            auto irqTok = expect(K::Number, "expected PIO IRQ (0 or 1)");
+            expect(K::RParen, "expected ')'");
+            int u = std::stoi(unitTok.text);
+            int q = std::stoi(irqTok.text);
+            f.name = "PIO" + std::to_string(u) + "_IRQ_" + std::to_string(q) + "_Handler";
+        }
+        if (at(K::Id) && (t().text == "Periodic" || t().text == "periodic")) {
+            pop();
+            f.isPeriodic = true;
+            f.periodicIntervalExpr = expression();
+            if (at(K::Id) && (t().text == "Max_Jitter" || t().text == "max_jitter")) {
+                pop();
+                f.periodicJitterExpr = expression();
+            }
+        }
         if (eat(K::LBracket)) {
             do {
                 Token tp = expect(K::Id, "expected type parameter name");
@@ -1877,12 +2240,14 @@ class Parser {
                 requireLineEnd("concise Produces");
                 Stmt giveStmt;
                 giveStmt.line = retExpr->line;
+                giveStmt.column = retExpr->column;
+                giveStmt.length = retExpr->length;
                 giveStmt.kind = Stmt::Kind::Give;
                 giveStmt.expr = std::move(retExpr);
                 f.body.push_back(std::move(giveStmt));
                 Token end = expect(K::End, "expected 'End " + f.name + "' to close Block '" + f.name + "'");
-                Token close = expect(K::Id, "expected function name after End");
-                if (close.text != f.name)
+                Token close = expectIdentOrWrite("expected function name after End");
+                if (close.text != f.name && close.text != originalBlockName)
                     throw Error("line " + std::to_string(end.line) + ": mismatched block ending: expected 'End " + f.name +
                                 "', found 'End " + close.text + "'");
                 if (!at(K::Newline) && !at(K::Eof))
@@ -1912,8 +2277,8 @@ class Parser {
         requireLineEnd("Implements");
         f.body = statements(false);
         Token end = expect(K::End, "expected 'End " + f.name + "' to close Block '" + f.name + "'");
-        Token close = expect(K::Id, "expected function name after End");
-        if (close.text != f.name)
+        Token close = expectIdentOrWrite("expected function name after End");
+        if (close.text != f.name && close.text != originalBlockName)
             throw Error("line " + std::to_string(end.line) + ": mismatched block ending: expected 'End " + f.name +
                                 "', found 'End " + close.text + "'");
         if (!at(K::Newline) && !at(K::Eof))
@@ -1976,13 +2341,21 @@ class Parser {
         enumTypes.insert_or_assign(name.text, Type::enumType(name.text, underlying.bits, underlying.kind == TypeKind::Signed));
         requireLineEnd("enum header");
         newlines();
+        std::uint64_t nextAutoVal = 0;
         while (!(at(K::End) && pos + 1 < ts.size() && ts[pos + 1].kind == K::Id && ts[pos + 1].text == name.text)) {
             if (at(K::Eof)) fail("expected 'End " + name.text + "'");
             Token variant = expect(K::Id, "expected enum variant name");
-            expect(K::Assign, "enum variants require explicit values using '='");
-            bool negative = eat(K::Minus);
-            Token number = expect(K::Number, "expected integer enum value");
-            decl.variants.push_back({variant.text, number.magnitude, negative, variant.line});
+            std::uint64_t val = nextAutoVal;
+            bool negative = false;
+            if (eat(K::Assign)) {
+                negative = eat(K::Minus);
+                Token number = expect(K::Number, "expected integer enum value");
+                val = number.magnitude;
+                nextAutoVal = negative ? (nextAutoVal + 1) : (val + 1);
+            } else {
+                nextAutoVal++;
+            }
+            decl.variants.push_back({variant.text, val, negative, variant.line});
             if (!at(K::Newline) && !at(K::End)) fail("expected newline after enum variant");
             newlines();
         }
@@ -1993,7 +2366,7 @@ class Parser {
         newlines();
         enumDeclarations.push_back(std::move(decl));
     }
-    void record(bool isPacked = false) {
+    void record(bool isPacked = false, bool isTagged = false) {
         Token start = expect(K::Record, "expected Record declaration");
         Token name = expect(K::Id, "expected record name");
         std::vector<std::string> typeParams;
@@ -2003,6 +2376,11 @@ class Parser {
                 typeParams.push_back(tp.text);
             } while (eat(K::Comma));
             expect(K::RBracket, "expected ']' after type parameters");
+        }
+        std::string parentName;
+        if (eat(K::Inherits)) {
+            parentName = parseDottedName("Inherits");
+            isTagged = true;
         }
         unsigned alignment = 0;
         if (eat(K::Align)) {
@@ -2014,7 +2392,7 @@ class Parser {
         });
         if (isDuplicateRecord)
             throw Error("line " + std::to_string(name.line) + ": duplicate type '" + name.text + "'");
-        RecordDecl decl{name.text, {}, start.line, start.sourceIndex, isPacked, alignment, typeParams};
+        RecordDecl decl{name.text, {}, start.line, start.sourceIndex, isPacked, alignment, typeParams, {}, false, isTagged, parentName};
         requireLineEnd("record header");
         newlines();
         for (const auto& tp : typeParams) currentTypeParams.insert(tp);
@@ -2028,7 +2406,15 @@ class Parser {
                 decl.dropBody = statements(true);
                 break;
             }
-            Token field = expect(K::Id, "expected record field name");
+            Token field;
+            if (at(K::Id)) {
+                field = pop();
+            } else if (at(K::Lock) && pos + 1 < ts.size() && ts[pos + 1].kind == K::Colon) {
+                field = pop();
+                field.kind = K::Id;
+            } else {
+                field = expect(K::Id, "expected record field name");
+            }
             if (!fields.insert(field.text).second)
                 throw Error("line " + std::to_string(field.line) + ": duplicate field '" + field.text + "' in record '" + name.text + "'");
             expect(K::Colon, "expected ':' after record field name");
@@ -2087,7 +2473,7 @@ class Parser {
             newlines();
         }
         Token end = expect(K::End, "expected 'End " + f.name + "' to close Extern Block '" + f.name + "'");
-        Token close = expect(K::Id, "expected function name after End");
+        Token close = expectIdentOrWrite("expected function name after End");
         if (close.text != f.name)
             throw Error("line " + std::to_string(end.line) + ": mismatched block ending: expected 'End " + f.name +
                         "', found 'End " + close.text + "'");
@@ -2097,6 +2483,399 @@ class Parser {
         return f;
     }
 
+    void parsePioProgram() {
+        pop(); // consume 'Pio_Program' or 'pio_program'
+        newlines();
+        Token nameTok = expect(K::Id, "expected PIO program name after 'Pio_Program'");
+        std::string progName = nameTok.text;
+        newlines();
+
+        uint8_t sideSetBits = 0;
+        bool sideSetOpt = false;
+        bool sideSetPindirs = false;
+        (void)sideSetPindirs;
+        int8_t origin = -1;
+        uint8_t wrapTarget = 0;
+        uint8_t wrap = 0;
+        bool wrapSet = false;
+
+        while (!at(K::Implements) && !at(K::Eof) && !at(K::End)) {
+            newlines();
+            if (at(K::Id) && (t().text == "Side_Set" || t().text == "side_set")) {
+                pop();
+                Token countTok = expect(K::Number, "expected number of side-set bits");
+                sideSetBits = static_cast<uint8_t>(countTok.magnitude);
+                while (at(K::Id)) {
+                    if (t().text == "Opt" || t().text == "opt") { pop(); sideSetOpt = true; }
+                    else if (t().text == "Pindirs" || t().text == "pindirs") { pop(); sideSetPindirs = true; }
+                    else break;
+                }
+                newlines();
+            } else if (at(K::Id) && (t().text == "Origin" || t().text == "origin")) {
+                pop();
+                Token origTok = expect(K::Number, "expected origin address");
+                origin = static_cast<int8_t>(origTok.magnitude);
+                newlines();
+            } else {
+                break;
+            }
+        }
+
+        expect(K::Implements, "expected 'Implements' in Pio_Program");
+        newlines();
+
+        struct RawPioInstr {
+            int line = 1;
+            std::string op;
+            std::vector<std::string> args;
+            std::optional<uint8_t> side;
+            std::optional<uint8_t> delay;
+        };
+
+        std::vector<RawPioInstr> rawInstrs;
+        std::unordered_map<std::string, uint8_t> labels;
+
+        while (!at(K::End) && !at(K::Eof)) {
+            newlines();
+            if (at(K::End) || at(K::Eof)) break;
+
+            if (at(K::Dot)) {
+                pop();
+                Token dir = expect(K::Id, "expected directive after '.' in Pio_Program");
+                if (dir.text == "Wrap_Target" || dir.text == "wrap_target") {
+                    wrapTarget = static_cast<uint8_t>(rawInstrs.size());
+                } else if (dir.text == "Wrap" || dir.text == "wrap") {
+                    wrap = rawInstrs.empty() ? 0 : static_cast<uint8_t>(rawInstrs.size() - 1);
+                    wrapSet = true;
+                }
+                newlines();
+                continue;
+            }
+
+            if (at(K::Id) && pos + 1 < ts.size() && ts[pos + 1].kind == K::Colon) {
+                std::string lbl = pop().text;
+                pop(); // consume ':'
+                labels[lbl] = static_cast<uint8_t>(rawInstrs.size());
+                newlines();
+                continue;
+            }
+
+            int instrLine = t().line;
+            std::string opName = "";
+            if (at(K::Id)) opName = pop().text;
+            else if (at(K::In)) { pop(); opName = "In"; }
+            else {
+                fail("expected PIO instruction (Jmp, Wait, In, Out, Push, Pull, Mov, Irq, Set, Nop)");
+            }
+
+            RawPioInstr instr;
+            instr.line = instrLine;
+            instr.op = opName;
+
+            while (!at(K::Newline) && !at(K::End) && !at(K::Eof)) {
+                if (at(K::Id) && (t().text == "Side" || t().text == "side")) {
+                    pop();
+                    Token sVal = expect(K::Number, "expected side-set value");
+                    instr.side = static_cast<uint8_t>(sVal.magnitude);
+                    continue;
+                }
+                if (at(K::LBracket)) {
+                    pop();
+                    Token dVal = expect(K::Number, "expected delay cycle count");
+                    instr.delay = static_cast<uint8_t>(dVal.magnitude);
+                    expect(K::RBracket, "expected ']' after delay count");
+                    continue;
+                }
+                if (eat(K::Comma)) continue;
+
+                if (at(K::Id)) {
+                    instr.args.push_back(pop().text);
+                } else if (at(K::Number)) {
+                    instr.args.push_back(std::to_string(pop().magnitude));
+                } else if (at(K::Not)) {
+                    pop();
+                    Token next = expect(K::Id, "expected register name after '!'");
+                    instr.args.push_back("!" + next.text);
+                } else if (at(K::Tilde)) {
+                    pop();
+                    Token next = expect(K::Id, "expected register name after '~'");
+                    instr.args.push_back("~" + next.text);
+                } else {
+                    break;
+                }
+            }
+
+            rawInstrs.push_back(instr);
+            newlines();
+        }
+
+        expect(K::End, "expected 'End' after Pio_Program body");
+        if (at(K::Id)) pop(); // optional name
+        newlines();
+
+        if (!wrapSet && !rawInstrs.empty()) {
+            wrap = static_cast<uint8_t>(rawInstrs.size() - 1);
+        }
+
+        std::vector<uint16_t> assembledWords;
+        for (std::size_t idx = 0; idx < rawInstrs.size(); ++idx) {
+            const auto& ri = rawInstrs[idx];
+            uint16_t word = 0;
+            std::string op = lower(ri.op);
+
+            uint8_t delaySideField = 0;
+            uint8_t sideVal = ri.side.value_or(0);
+            uint8_t delayVal = ri.delay.value_or(0);
+
+            if (sideSetBits > 0) {
+                if (sideSetOpt) {
+                    uint8_t optBit = ri.side.has_value() ? 1 : 0;
+                    uint8_t totalSide = (optBit << sideSetBits) | (sideVal & ((1 << sideSetBits) - 1));
+                    uint8_t delayBitsCount = 5 - (sideSetBits + 1);
+                    delaySideField = (totalSide << delayBitsCount) | (delayVal & ((1 << delayBitsCount) - 1));
+                } else {
+                    uint8_t delayBitsCount = 5 - sideSetBits;
+                    delaySideField = ((sideVal & ((1 << sideSetBits) - 1)) << delayBitsCount) | (delayVal & ((1 << delayBitsCount) - 1));
+                }
+            } else {
+                delaySideField = delayVal & 0x1F;
+            }
+
+            word |= (static_cast<uint16_t>(delaySideField) << 8);
+
+            if (op == "set") {
+                word |= (0x7 << 13);
+                uint8_t dest = 0;
+                if (!ri.args.empty()) {
+                    std::string d = lower(ri.args[0]);
+                    if (d == "pins") dest = 0;
+                    else if (d == "x") dest = 1;
+                    else if (d == "y") dest = 2;
+                    else if (d == "pindirs") dest = 4;
+                }
+                uint8_t data = 0;
+                if (ri.args.size() > 1) {
+                    try { data = static_cast<uint8_t>(std::stoul(ri.args[1])) & 0x1F; } catch (...) {}
+                }
+                word |= ((dest & 0x7) << 5) | (data & 0x1F);
+            } else if (op == "jmp") {
+                uint8_t cond = 0;
+                std::string targetStr = "";
+                if (ri.args.size() == 1) {
+                    targetStr = ri.args[0];
+                } else if (ri.args.size() >= 2) {
+                    std::string c = lower(ri.args[0]);
+                    if (c == "!x" || c == "~x" || c == "not_x") cond = 1;
+                    else if (c == "x--" || c == "x_dec") cond = 2;
+                    else if (c == "!y" || c == "~y" || c == "not_y") cond = 3;
+                    else if (c == "y--" || c == "y_dec") cond = 4;
+                    else if (c == "x!=y" || c == "x_not_y") cond = 5;
+                    else if (c == "pin") cond = 6;
+                    else if (c == "!osre" || c == "~osre" || c == "not_osre") cond = 7;
+                    targetStr = ri.args[1];
+                }
+                uint8_t addr = 0;
+                if (labels.count(targetStr)) {
+                    addr = labels[targetStr];
+                } else {
+                    try { addr = static_cast<uint8_t>(std::stoul(targetStr)) & 0x1F; } catch (...) {}
+                }
+                word |= ((cond & 0x7) << 5) | (addr & 0x1F);
+            } else if (op == "wait") {
+                word |= (0x1 << 13);
+                uint8_t pol = 0;
+                uint8_t src = 0;
+                uint8_t index = 0;
+                if (!ri.args.empty()) pol = (ri.args[0] == "1") ? 1 : 0;
+                if (ri.args.size() > 1) {
+                    std::string s = lower(ri.args[1]);
+                    if (s == "gpio") src = 0;
+                    else if (s == "pin") src = 1;
+                    else if (s == "irq") src = 2;
+                }
+                if (ri.args.size() > 2) {
+                    try { index = static_cast<uint8_t>(std::stoul(ri.args[2])) & 0x1F; } catch (...) {}
+                }
+                word |= ((pol & 0x1) << 7) | ((src & 0x3) << 5) | (index & 0x1F);
+            } else if (op == "in") {
+                word |= (0x2 << 13);
+                uint8_t src = 0;
+                if (!ri.args.empty()) {
+                    std::string s = lower(ri.args[0]);
+                    if (s == "pins") src = 0;
+                    else if (s == "x") src = 1;
+                    else if (s == "y") src = 2;
+                    else if (s == "null") src = 3;
+                    else if (s == "isr") src = 6;
+                    else if (s == "osr") src = 7;
+                }
+                uint8_t count = 0;
+                if (ri.args.size() > 1) {
+                    try {
+                        uint32_t val = std::stoul(ri.args[1]);
+                        count = (val == 32) ? 0 : static_cast<uint8_t>(val & 0x1F);
+                    } catch (...) {}
+                }
+                word |= ((src & 0x7) << 5) | (count & 0x1F);
+            } else if (op == "out") {
+                word |= (0x3 << 13);
+                uint8_t dest = 0;
+                if (!ri.args.empty()) {
+                    std::string d = lower(ri.args[0]);
+                    if (d == "pins") dest = 0;
+                    else if (d == "x") dest = 1;
+                    else if (d == "y") dest = 2;
+                    else if (d == "null") dest = 3;
+                    else if (d == "pindirs") dest = 4;
+                    else if (d == "pc") dest = 5;
+                    else if (d == "isr") dest = 6;
+                    else if (d == "exec") dest = 7;
+                }
+                uint8_t count = 0;
+                if (ri.args.size() > 1) {
+                    try {
+                        uint32_t val = std::stoul(ri.args[1]);
+                        count = (val == 32) ? 0 : static_cast<uint8_t>(val & 0x1F);
+                    } catch (...) {}
+                }
+                word |= ((dest & 0x7) << 5) | (count & 0x1F);
+            } else if (op == "push") {
+                word |= (0x4 << 13);
+                uint8_t block = 1;
+                uint8_t iffull = 0;
+                for (const auto& a : ri.args) {
+                    std::string al = lower(a);
+                    if (al == "noblock") block = 0;
+                    else if (al == "iffull") iffull = 1;
+                }
+                word |= ((iffull & 0x1) << 6) | ((block & 0x1) << 5);
+            } else if (op == "pull") {
+                word |= (0x4 << 13) | (1 << 7);
+                uint8_t block = 1;
+                uint8_t ifempty = 0;
+                for (const auto& a : ri.args) {
+                    std::string al = lower(a);
+                    if (al == "noblock") block = 0;
+                    else if (al == "ifempty") ifempty = 1;
+                }
+                word |= ((ifempty & 0x1) << 6) | ((block & 0x1) << 5);
+            } else if (op == "mov") {
+                word |= (0x5 << 13);
+                uint8_t dest = 0;
+                uint8_t movOp = 0;
+                uint8_t src = 0;
+                if (!ri.args.empty()) {
+                    std::string d = lower(ri.args[0]);
+                    if (d == "pins") dest = 0;
+                    else if (d == "x") dest = 1;
+                    else if (d == "y") dest = 2;
+                    else if (d == "exec") dest = 3;
+                    else if (d == "pc") dest = 4;
+                    else if (d == "isr") dest = 5;
+                    else if (d == "osr") dest = 6;
+                }
+                std::string sArg = (ri.args.size() > 1) ? ri.args[1] : "";
+                if (ri.args.size() > 2) {
+                    std::string opStr = lower(ri.args[1]);
+                    if (opStr == "~" || opStr == "invert" || opStr == "not") movOp = 1;
+                    else if (opStr == "::" || opStr == "bit_reverse" || opStr == "reverse") movOp = 2;
+                    sArg = ri.args[2];
+                } else if (!sArg.empty() && (sArg[0] == '~' || sArg[0] == '!')) {
+                    movOp = 1;
+                    sArg = sArg.substr(1);
+                }
+                std::string sl = lower(sArg);
+                if (sl == "pins") src = 0;
+                else if (sl == "x") src = 1;
+                else if (sl == "y") src = 2;
+                else if (sl == "null") src = 3;
+                else if (sl == "status") src = 5;
+                else if (sl == "isr") src = 6;
+                else if (sl == "osr") src = 7;
+
+                word |= ((dest & 0x7) << 5) | ((movOp & 0x3) << 3) | (src & 0x7);
+            } else if (op == "irq") {
+                word |= (0x6 << 13);
+                uint8_t clear = 0;
+                uint8_t wait = 0;
+                uint8_t idx = 0;
+                std::string idxStr = "";
+                if (ri.args.size() == 1) {
+                    idxStr = ri.args[0];
+                } else if (ri.args.size() >= 2) {
+                    std::string m = lower(ri.args[0]);
+                    if (m == "clear") clear = 1;
+                    else if (m == "wait") wait = 1;
+                    idxStr = ri.args[1];
+                }
+                try { idx = static_cast<uint8_t>(std::stoul(idxStr)) & 0x1F; } catch (...) {}
+                word |= ((clear & 0x1) << 6) | ((wait & 0x1) << 5) | (idx & 0x1F);
+            } else if (op == "nop") {
+                word |= (0x5 << 13) | ((2 & 0x7) << 5) | (2 & 0x7);
+            }
+
+            assembledWords.push_back(word);
+        }
+
+        std::ostringstream ss;
+        ss << "Block Global\nDeclares\n";
+        ss << "    " << progName << "_Instructions : Constant Unsigned_16 Array[" << assembledWords.size() << "] = { ";
+        for (std::size_t i = 0; i < assembledWords.size(); ++i) {
+            if (i > 0) ss << ", ";
+            ss << assembledWords[i];
+        }
+        ss << " }\n";
+        ss << "    " << progName << "_Length : Constant Unsigned_32 = " << assembledWords.size() << "\n";
+        ss << "    " << progName << "_Origin : Constant Signed_32 = " << static_cast<int>(origin) << "\n";
+        ss << "    " << progName << "_Wrap_Target : Constant Unsigned_32 = " << static_cast<int>(wrapTarget) << "\n";
+        ss << "    " << progName << "_Wrap : Constant Unsigned_32 = " << static_cast<int>(wrap) << "\n";
+        ss << "End Global\n\n";
+
+        if (!recordTypes.count("Pio_Program")) {
+            ss << "Record Pio_Program\n";
+            ss << "    Instructions : Unsigned_16 Pointer\n";
+            ss << "    Length : Unsigned_32\n";
+            ss << "    Origin : Signed_32\n";
+            ss << "    Wrap_Target : Unsigned_32\n";
+            ss << "    Wrap : Unsigned_32\n";
+            ss << "End Pio_Program\n\n";
+        }
+
+        ss << "Block " << progName << "_Program Produces Pio_Program\n";
+        ss << "Declares\n";
+        ss << "    P : Pio_Program\n";
+        ss << "Implements\n";
+        ss << "    Unsafe\n";
+        ss << "        P.Instructions = Address(" << progName << "_Instructions[1])\n";
+        ss << "    End Unsafe\n";
+        ss << "    P.Length = " << assembledWords.size() << "\n";
+        ss << "    P.Origin = " << static_cast<int>(origin) << "\n";
+        ss << "    P.Wrap_Target = " << static_cast<int>(wrapTarget) << "\n";
+        ss << "    P.Wrap = " << static_cast<int>(wrap) << "\n";
+        ss << "    Give P\n";
+        ss << "End " << progName << "_Program\n\n";
+
+        ss << "Block " << progName << "_Get_Program Produces Pio_Program\n";
+        ss << "Implements\n";
+        ss << "    Give " << progName << "_Program()\n";
+        ss << "End " << progName << "_Get_Program\n\n";
+
+        ss << "Block " << progName << "_Load Takes\n";
+        ss << "    Unit : Unsigned_32\n";
+        ss << "    Sm : Unsigned_32\n";
+        ss << "Produces Signed_32 or Pio.Pio_Error\n";
+        ss << "Implements\n";
+        ss << "    Give Pio.Load_Program(Unit, Sm, " << progName << "_Program())\n";
+        ss << "End " << progName << "_Load\n\n";
+
+        Lexer subLex(ss.str(), currentSourceIndex);
+        auto injected = subLex.run();
+        if (!injected.empty() && injected.back().kind == K::Eof) {
+            injected.pop_back();
+        }
+        ts.insert(ts.begin() + pos, injected.begin(), injected.end());
+    }
+
     public:
     explicit Parser(std::vector<Token> x) : ts(std::move(x)) {}
     std::vector<Function> run() {
@@ -2104,25 +2883,179 @@ class Parser {
         std::vector<Function> fs;
         newlines();
         while (!at(K::Eof)) {
+            newlines();
+            if (at(K::Eof)) break;
             if (at(K::End))
                 fail("unexpected End outside a nested construct or Block");
+            if (eat(K::Generic)) {
+                expect(K::Module, "expected Module after Generic");
+                std::size_t modSrc = t().sourceIndex;
+                int modLine = t().line;
+                std::string modName = parseDottedName("Generic Module");
+                GenericModuleDecl gm;
+                gm.name = modName;
+                gm.line = modLine;
+                gm.sourceIndex = modSrc;
+                if (eat(K::LBracket)) {
+                    do {
+                        Token tp = expect(K::Id, "expected type parameter name in Generic Module");
+                        gm.typeParams.push_back(tp.text);
+                        currentTypeParams.insert(tp.text);
+                    } while (eat(K::Comma));
+                    expect(K::RBracket, "expected ']' after Generic Module type parameters");
+                }
+                if (eat(K::Takes)) {
+                    newlines();
+                    while (!at(K::Newline) && !at(K::Eof)) {
+                        if (at(K::Id) && (peek().kind == K::Colon)) {
+                            Token pName = pop();
+                            expect(K::Colon, "expected ':' after generic parameter name");
+                            Type pType = parseTypeRef();
+                            gm.valueParams.emplace_back(pName.text, pType, pName.line, true, nullptr, pName.sourceIndex);
+                            if (!eat(K::Comma)) break;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                requireLineEnd("Generic Module header");
+                newlines();
+                auto dotPos = modName.rfind('.');
+                std::string shortModName = (dotPos != std::string::npos) ? modName.substr(dotPos + 1) : modName;
+                std::size_t savedRecCount = recordDeclarations.size();
+                std::size_t savedEnumCount = enumDeclarations.size();
+                std::size_t savedGlobCount = globalDeclarations.size();
+                while (!(at(K::End) && (peek().kind == K::Module || (peek().kind == K::Id && peek().text == shortModName)))) {
+                    if (at(K::Eof)) fail("expected 'End " + shortModName + "' to close Generic Module '" + modName + "'");
+                    if (eat(K::Import)) {
+                        std::size_t impSrc = t().sourceIndex;
+                        std::string imp = parseDottedName("Import");
+                        if (eat(K::As)) {
+                            Token al = expect(K::Id, "expected alias after As");
+                            gm.importAliases[lower(al.text)] = lower(imp);
+                        }
+                        requireLineEnd("Import declaration");
+                        gm.imports.insert(lower(imp));
+                        (void)impSrc;
+                    } else if (eat(K::Use)) {
+                        std::string u = parseDottedName("use");
+                        requireLineEnd("use declaration");
+                        gm.imports.insert(lower(u));
+                        gm.uses.insert(lower(u));
+                    } else if (at(K::Enum)) {
+                        enumeration();
+                    } else if (at(K::Tagged)) {
+                        pop();
+                        record(false, true);
+                    } else if (at(K::Packed)) {
+                        pop();
+                        record(true, false);
+                    } else if (at(K::Record)) {
+                        record();
+                    } else if (at(K::Block) && peek().kind == K::Id && peek().text == "Global") {
+                        globalBlock();
+                    } else if (at(K::Async)) {
+                        pop();
+                        gm.functions.push_back(function(true));
+                    } else {
+                        gm.functions.push_back(function());
+                    }
+                    newlines();
+                }
+                expect(K::End, "expected 'End " + shortModName + "'");
+                pop();
+                requireLineEnd("End Generic Module");
+                for (std::size_t idx = savedRecCount; idx < recordDeclarations.size(); ++idx) {
+                    gm.records.push_back(recordDeclarations[idx]);
+                }
+                recordDeclarations.resize(savedRecCount);
+                for (std::size_t idx = savedEnumCount; idx < enumDeclarations.size(); ++idx) {
+                    gm.enums.push_back(std::move(enumDeclarations[idx]));
+                }
+                enumDeclarations.resize(savedEnumCount);
+                for (std::size_t idx = savedGlobCount; idx < globalDeclarations.size(); ++idx) {
+                    gm.globals.push_back(std::move(globalDeclarations[idx]));
+                }
+                globalDeclarations.resize(savedGlobCount);
+                currentTypeParams.clear();
+                genericModules.push_back(std::move(gm));
+                continue;
+            }
             if (eat(K::Module)) {
-                Token m = expect(K::Id, "expected a module name after Module");
+                std::size_t mSrc = t().sourceIndex;
+                int mLine = t().line;
+                std::string mName = parseDottedName("Module");
+                if (eat(K::Assign)) {
+                    ModuleInstantiation inst;
+                    inst.instanceName = mName;
+                    inst.line = mLine;
+                    inst.sourceIndex = mSrc;
+                    inst.isImport = false;
+                    inst.templateName = parseDottedName("generic module template");
+                    if (eat(K::LBracket)) {
+                        do { inst.typeArgs.push_back(parseTypeRef()); } while (eat(K::Comma));
+                        expect(K::RBracket, "expected ']' after module type arguments");
+                    }
+                    if (eat(K::LParen)) {
+                        if (!at(K::RParen)) {
+                            do { inst.valueArgs.push_back(expression()); } while (eat(K::Comma));
+                        }
+                        expect(K::RParen, "expected ')' after module arguments");
+                    }
+                    requireLineEnd("Module instantiation");
+                    fileModules[mSrc] = mName;
+                    moduleInstantiations.push_back(std::move(inst));
+                    continue;
+                }
                 requireLineEnd("Module declaration");
-                fileModules[m.sourceIndex] = m.text;
+                fileModules[mSrc] = mName;
                 continue;
             }
             if (eat(K::Import)) {
-                Token imp = expect(K::Id, "expected module name after Import");
+                std::size_t impSrc = t().sourceIndex;
+                int impLine = t().line;
+                std::string imp = parseDottedName("Import");
+                if (eat(K::Assign)) {
+                    ModuleInstantiation inst;
+                    inst.instanceName = imp;
+                    inst.line = impLine;
+                    inst.sourceIndex = impSrc;
+                    inst.isImport = true;
+                    inst.templateName = parseDottedName("generic module template");
+                    if (eat(K::LBracket)) {
+                        do { inst.typeArgs.push_back(parseTypeRef()); } while (eat(K::Comma));
+                        expect(K::RBracket, "expected ']' after module type arguments");
+                    }
+                    if (eat(K::LParen)) {
+                        if (!at(K::RParen)) {
+                            do { inst.valueArgs.push_back(expression()); } while (eat(K::Comma));
+                        }
+                        expect(K::RParen, "expected ')' after module arguments");
+                    }
+                    if (eat(K::As)) {
+                        Token al = expect(K::Id, "expected alias after As");
+                        inst.alias = al.text;
+                        fileImportAliases[impSrc][lower(al.text)] = lower(imp);
+                    }
+                    requireLineEnd("Import instantiation");
+                    fileImports[impSrc].insert(lower(imp));
+                    moduleInstantiations.push_back(std::move(inst));
+                    continue;
+                }
+                if (eat(K::As)) {
+                    Token al = expect(K::Id, "expected alias after As");
+                    fileImportAliases[impSrc][lower(al.text)] = lower(imp);
+                }
                 requireLineEnd("Import declaration");
-                fileImports[imp.sourceIndex].insert(lower(imp.text));
+                fileImports[impSrc].insert(lower(imp));
                 continue;
             }
             if (eat(K::Use)) {
-                Token u = expect(K::Id, "expected module name after use");
+                std::size_t uSrc = t().sourceIndex;
+                std::string u = parseDottedName("use");
                 requireLineEnd("use declaration");
-                fileImports[u.sourceIndex].insert(lower(u.text));
-                fileUses[u.sourceIndex].insert(lower(u.text));
+                fileImports[uSrc].insert(lower(u));
+                fileUses[uSrc].insert(lower(u));
                 continue;
             }
             if (eat(K::Extern)) {
@@ -2132,6 +3065,11 @@ class Parser {
                 continue;
             }
             if (at(K::Enum)) { enumeration(); continue; }
+            if (at(K::Tagged)) {
+                pop();
+                record(/*isPacked=*/false, /*isTagged=*/true);
+                continue;
+            }
             if (at(K::Packed)) {
                 pop();
                 record(/*isPacked=*/true);
@@ -2141,6 +3079,10 @@ class Parser {
             if (at(K::Id) && (t().text == "Test" || t().text == "test") && pos + 1 < ts.size() && ts[pos + 1].kind == K::String) {
                 pop();
                 fs.push_back(testBlock());
+                continue;
+            }
+            if (at(K::Id) && (t().text == "Pio_Program" || t().text == "pio_program")) {
+                parsePioProgram();
                 continue;
             }
             if (at(K::Block) && pos + 1 < ts.size() && ts[pos + 1].kind == K::Id &&
@@ -2155,6 +3097,14 @@ class Parser {
             if (at(K::Async)) {
                 pop();
                 Function fn = function(/*isAsync=*/true);
+                if (fn.typeParams.empty()) {
+                    fs.push_back(std::move(fn));
+                }
+                continue;
+            }
+            if (at(K::Interrupt)) {
+                pop();
+                Function fn = function(/*isAsync=*/false, /*isInterrupt=*/true);
                 if (fn.typeParams.empty()) {
                     fs.push_back(std::move(fn));
                 }
@@ -2176,6 +3126,9 @@ class Parser {
     const std::unordered_map<std::size_t, std::string>& modules() const { return fileModules; }
     const std::unordered_map<std::size_t, std::unordered_set<std::string>>& imports() const { return fileImports; }
     const std::unordered_map<std::size_t, std::unordered_set<std::string>>& uses() const { return fileUses; }
+    const std::unordered_map<std::size_t, std::unordered_map<std::string, std::string>>& importAliases() const { return fileImportAliases; }
+    const std::vector<GenericModuleDecl>& genericModuleDecls() const { return genericModules; }
+    const std::vector<ModuleInstantiation>& instantiations() const { return moduleInstantiations; }
 };
 
 

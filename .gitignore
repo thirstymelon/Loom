@@ -1,7 +1,10 @@
 # Build artifacts
 .build/
+.build-release/
 build/
 bin/
+lib/
+share/
 dist/
 target/
 compiler/build/

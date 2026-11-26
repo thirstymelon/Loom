@@ -6,7 +6,8 @@ class LoomLanguageClient extends EventEmitter {
   constructor(node, server) { super(); this.node = node; this.server = server; this.child = null; this.seq = 0; this.pending = new Map(); this.buffer = Buffer.alloc(0); this.state = 'stopped'; }
   async start(root, initializationOptions = {}) {
     await this.stop(); this.root = root;
-    this.child = cp.spawn(this.node, [this.server], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+    this.child = cp.spawn(this.node, [this.server], { stdio: ['pipe', 'pipe', 'pipe'], env });
     const child = this.child;
     child.stdout.on('data', b => { if (this.child === child) this._read(b); }); child.stderr.on('data', b => this.emit('log', b.toString()));
     child.on('error', e => { if (this.child !== child) return; this.child = null; this.state = 'stopped'; this.emit('state', this.state); for (const p of this.pending.values()) { p.cancellation?.dispose(); p.reject(e); } this.pending.clear(); this.emit('error', e); });

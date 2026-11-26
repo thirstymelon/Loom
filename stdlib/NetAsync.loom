@@ -1,0 +1,111 @@
+Module NetAsync
+Import Net
+
+Record Poll_Result
+    Events : Signed_32
+    Readable : Boolean
+    Writable : Boolean
+    Error : Boolean
+    Timed_Out : Boolean
+End Poll_Result
+
+Block Wait_Socket Takes
+    Connection : Signed_32
+    Want_Read : Boolean
+    Want_Write : Boolean
+    Timeout_Milliseconds : Signed_32
+Produces Poll_Result
+Declares
+    Result : Poll_Result
+    Mask : Unsigned_32 = 0
+    Raw_Events : Signed_32
+Implements
+    If Want_Read
+        Mask = Mask | 1
+    End If
+    If Want_Write
+        Mask = Mask | 2
+    End If
+    Raw_Events = Socket_Wait(Connection, Mask, Timeout_Milliseconds)
+    Result.Events = Raw_Events
+    If Raw_Events == 0
+        Result.Timed_Out = True
+        Result.Readable = False
+        Result.Writable = False
+        Result.Error = False
+    Else If Raw_Events < 0
+        Result.Timed_Out = False
+        Result.Readable = False
+        Result.Writable = False
+        Result.Error = True
+    Else
+        Result.Timed_Out = False
+        Result.Readable = (Raw_Events & 1) != 0
+        Result.Writable = (Raw_Events & 2) != 0
+        Result.Error = (Raw_Events & 4) != 0
+    End If
+    Give Result
+End Wait_Socket
+
+Block Wait_Connect Takes
+    Connection : Signed_32
+    Timeout_Milliseconds : Signed_32
+Produces Signed_32
+Declares
+    Events : Signed_32
+    Socket_Err : Signed_32
+Implements
+    Events = Socket_Wait(Connection, 2, Timeout_Milliseconds)
+    If Events == 0
+        Give -1
+    End If
+    If (Events & 2) != 0
+        Socket_Err = Socket_Get_Error(Connection)
+        If Socket_Err == 0
+            Give 0
+        Else
+            Give -1
+        End If
+    End If
+    Give -1
+End Wait_Connect
+
+Block Set_Nonblocking Takes
+    Connection : Signed_32
+    Nonblocking : Boolean
+Produces Signed_32
+Implements
+    Give Socket_Set_Nonblocking(Connection, Nonblocking)
+End Set_Nonblocking
+
+Block Read_Nonblocking Takes
+    Connection : Signed_32
+    Max_Bytes : Unsigned_64
+    Timeout_Milliseconds : Signed_32
+Produces Text
+Declares
+    Result : Text
+    Events : Signed_32
+Implements
+    Events = Socket_Wait(Connection, 1, Timeout_Milliseconds)
+    If (Events & 1) != 0
+        Result = Tcp_Receive(Connection, Max_Bytes)
+        Give Result
+    End If
+    Give Result
+End Read_Nonblocking
+
+Block Write_Nonblocking Takes
+    Connection : Signed_32
+    Data : Text
+    Timeout_Milliseconds : Signed_32
+Produces Signed_64
+Declares
+    Events : Signed_32
+Implements
+    Events = Socket_Wait(Connection, 2, Timeout_Milliseconds)
+    If (Events & 2) != 0
+        Give Tcp_Send(Connection, Data)
+    End If
+    Give 0
+End Write_Nonblocking

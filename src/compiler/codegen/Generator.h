@@ -72,6 +72,22 @@ class Generator {
     std::unordered_map<std::string, llvm::Function*> functions;
     std::unordered_map<std::string, llvm::GlobalVariable*> globalStorage;
     std::unordered_map<std::string, llvm::StructType*> recordStorageTypes;
+    std::unordered_map<std::string, llvm::GlobalVariable*> vtableGlobals;
+    unsigned llvmFieldIndex(const std::string& record, const std::string& field) const {
+        return static_cast<unsigned>(analyzer.fieldIndex(record, field) + (analyzer.isTaggedRecord(record) ? 1 : 0));
+    }
+    llvm::GlobalVariable* findGlobal(const std::string& name) const {
+        auto g = globalStorage.find(name);
+        if (g != globalStorage.end()) return g->second;
+        if (currentFn) {
+            std::string modPrefix = analyzer.functionModulePrefix(*currentFn);
+            if (!modPrefix.empty()) {
+                auto mg = globalStorage.find(modPrefix + name);
+                if (mg != globalStorage.end()) return mg->second;
+            }
+        }
+        return nullptr;
+    }
     unsigned stringCounter = 0;
     std::string sourcePath;
     std::unordered_map<std::string, llvm::Constant*> stringPool;
@@ -86,6 +102,303 @@ class Generator {
         auto* ptr = llvm::ConstantExpr::getInBoundsGetElementPtr(data->getType(), global, indices);
         stringPool[str] = ptr;
         return ptr;
+    }
+    llvm::Function* ensureNativeEndpointFunction(const std::string& name, bool datagram, bool connect, bool ipv6 = false) {
+        if (auto* existing = module->getFunction(name)) return existing;
+        auto* fnType = llvm::FunctionType::get(builder.getInt32Ty(),
+            {builder.getPtrTy(), builder.getInt64Ty()}, false);
+        auto* fn = llvm::Function::Create(fnType, llvm::Function::InternalLinkage, name, module.get());
+        auto arg = fn->arg_begin();
+        llvm::Value* host = &*arg++;
+        llvm::Value* port = &*arg;
+        host->setName("host"); port->setName("port");
+        auto savedIP = builder.saveIP();
+        auto* entry = llvm::BasicBlock::Create(context, "entry", fn);
+        auto* addressOK = llvm::BasicBlock::Create(context, "address.ok", fn);
+        auto* socketOK = llvm::BasicBlock::Create(context, "socket.ok", fn);
+        auto* setupOK = llvm::BasicBlock::Create(context, "setup.ok", fn);
+        auto* closeFailure = llvm::BasicBlock::Create(context, "setup.failed", fn);
+        auto* fail = llvm::BasicBlock::Create(context, "failed", fn);
+        auto* success = llvm::BasicBlock::Create(context, "success", fn);
+        builder.SetInsertPoint(entry);
+#if defined(__APPLE__)
+        const bool darwin = true;
+#else
+        const bool darwin = false;
+#endif
+        auto* zero8 = llvm::ArrayType::get(builder.getInt8Ty(), 8);
+        auto* zero16 = llvm::ArrayType::get(builder.getInt8Ty(), 16);
+        llvm::StructType* sockaddrType = darwin
+            ? (ipv6 ? llvm::StructType::get(context, {builder.getInt8Ty(), builder.getInt8Ty(), builder.getInt16Ty(), builder.getInt32Ty(), zero16, builder.getInt32Ty()})
+                    : llvm::StructType::get(context, {builder.getInt8Ty(), builder.getInt8Ty(), builder.getInt16Ty(), builder.getInt32Ty(), zero8}))
+            : (ipv6 ? llvm::StructType::get(context, {builder.getInt16Ty(), builder.getInt16Ty(), builder.getInt32Ty(), zero16, builder.getInt32Ty()})
+                    : llvm::StructType::get(context, {builder.getInt16Ty(), builder.getInt16Ty(), builder.getInt32Ty(), zero8}));
+        auto* sockaddr = builder.CreateAlloca(sockaddrType, nullptr, "sockaddr.in");
+        builder.CreateStore(llvm::Constant::getNullValue(sockaddrType), sockaddr);
+        builder.CreateCondBr(builder.CreateICmpULE(port, builder.getInt64(65535)), addressOK, fail);
+        auto* addressSetup = llvm::BasicBlock::Create(context, "address.setup", fn);
+        // Reuse the address-parse block only after the port has been range checked.
+        builder.SetInsertPoint(addressOK);
+        builder.CreateBr(addressSetup);
+        builder.SetInsertPoint(addressSetup);
+        unsigned familyIndex = darwin ? 1u : 0u;
+        unsigned portIndex = darwin ? 2u : 1u;
+        unsigned addressIndex = darwin ? (ipv6 ? 4u : 3u) : (ipv6 ? 3u : 2u);
+        if (darwin) builder.CreateStore(builder.getInt8(ipv6 ? 28 : 16), builder.CreateStructGEP(sockaddrType, sockaddr, 0));
+        const int addressFamily = ipv6 ? (darwin ? 30 : 10) : 2;
+        const int sockaddrLength = ipv6 ? 28 : 16;
+        llvm::Type* familyType = sockaddrType->getElementType(familyIndex);
+        builder.CreateStore(llvm::ConstantInt::get(familyType, addressFamily), builder.CreateStructGEP(sockaddrType, sockaddr, familyIndex));
+        auto* port16 = builder.CreateTrunc(port, builder.getInt16Ty());
+        auto* swappedPort = builder.CreateIntrinsic(llvm::Intrinsic::bswap, {builder.getInt16Ty()}, {port16});
+        builder.CreateStore(swappedPort, builder.CreateStructGEP(sockaddrType, sockaddr, portIndex));
+        if (ipv6) builder.CreateStore(builder.getInt32(0), builder.CreateStructGEP(sockaddrType, sockaddr, darwin ? 3u : 2u));
+        auto* addressField = builder.CreateStructGEP(sockaddrType, sockaddr, addressIndex);
+        auto* inetType = llvm::FunctionType::get(builder.getInt32Ty(),
+            {builder.getInt32Ty(), builder.getPtrTy(), builder.getPtrTy()}, false);
+        auto inet = module->getOrInsertFunction("inet_pton", inetType);
+        auto* parsed = builder.CreateCall(inet, {builder.getInt32(addressFamily), host, addressField}, "address.parsed");
+        auto* parsedOK = llvm::BasicBlock::Create(context, "address.parsed", fn);
+        builder.CreateCondBr(builder.CreateICmpEQ(parsed, builder.getInt32(1)), parsedOK, fail);
+        builder.SetInsertPoint(parsedOK);
+        auto* socketType = llvm::FunctionType::get(builder.getInt32Ty(),
+            {builder.getInt32Ty(), builder.getInt32Ty(), builder.getInt32Ty()}, false);
+        auto socketFn = module->getOrInsertFunction("socket", socketType);
+        auto* fd = builder.CreateCall(socketFn, {builder.getInt32(addressFamily), builder.getInt32(datagram ? 2 : 1), builder.getInt32(0)}, "socket.fd");
+        builder.CreateCondBr(builder.CreateICmpSGE(fd, builder.getInt32(0)), socketOK, fail);
+
+        builder.SetInsertPoint(socketOK);
+        if (!connect) {
+            auto* optVal = builder.CreateAlloca(builder.getInt32Ty(), nullptr, "so_reuseaddr");
+            builder.CreateStore(builder.getInt32(1), optVal);
+            const int socketLevel = darwin ? 0xffff : 1;
+            const int reuseAddrOption = darwin ? 0x0004 : 2;
+            auto* setOptionType = llvm::FunctionType::get(builder.getInt32Ty(),
+                {builder.getInt32Ty(), builder.getInt32Ty(), builder.getInt32Ty(), builder.getPtrTy(), builder.getInt32Ty()}, false);
+            auto setOption = module->getOrInsertFunction("setsockopt", setOptionType);
+            builder.CreateCall(setOption, {fd, builder.getInt32(socketLevel), builder.getInt32(reuseAddrOption), optVal, builder.getInt32(4)});
+        }
+        auto* setupType = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt32Ty()}, false);
+        auto setupFn = module->getOrInsertFunction(connect ? "connect" : "bind", setupType);
+        auto* setupResult = builder.CreateCall(setupFn, {fd, sockaddr, builder.getInt32(sockaddrLength)}, "endpoint.status");
+        builder.CreateCondBr(builder.CreateICmpEQ(setupResult, builder.getInt32(0)), setupOK, closeFailure);
+
+        builder.SetInsertPoint(setupOK);
+        if (!connect && !datagram) {
+            auto* listenType = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty(), builder.getInt32Ty()}, false);
+            auto listenFn = module->getOrInsertFunction("listen", listenType);
+            auto* listenResult = builder.CreateCall(listenFn, {fd, builder.getInt32(128)}, "listen.status");
+            auto* listenOK = llvm::BasicBlock::Create(context, "listen.ok", fn);
+            auto* listenFailed = llvm::BasicBlock::Create(context, "listen.failed", fn);
+            builder.CreateCondBr(builder.CreateICmpSGE(listenResult, builder.getInt32(0)), listenOK, listenFailed);
+            builder.SetInsertPoint(listenOK);
+            builder.CreateRet(fd);
+            builder.SetInsertPoint(listenFailed);
+            auto closeFn = module->getOrInsertFunction("close", llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty()}, false));
+            builder.CreateCall(closeFn, {fd});
+            builder.CreateBr(fail);
+        } else {
+            builder.CreateBr(success);
+        }
+
+        builder.SetInsertPoint(closeFailure);
+        auto closeFn = module->getOrInsertFunction("close", llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty()}, false));
+        builder.CreateCall(closeFn, {fd});
+        builder.CreateBr(fail);
+        builder.SetInsertPoint(success);
+        builder.CreateRet(fd);
+        builder.SetInsertPoint(fail);
+        builder.CreateRet(builder.getInt32(-1));
+        builder.restoreIP(savedIP);
+        return fn;
+    }
+    llvm::Function* ensureNativeUdpSendFunction(bool ipv6 = false) {
+        const std::string name = ipv6 ? "__loom_native_udp_send_to_v6" : "__loom_native_udp_send_to";
+        if (auto* existing = module->getFunction(name)) return existing;
+        auto* fnType = llvm::FunctionType::get(builder.getInt64Ty(),
+            {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty(), builder.getPtrTy(), builder.getInt64Ty()}, false);
+        auto* fn = llvm::Function::Create(fnType, llvm::Function::InternalLinkage, name, module.get());
+        auto arg = fn->arg_begin();
+        llvm::Value* fd = &*arg++; llvm::Value* host = &*arg++; llvm::Value* port = &*arg++;
+        llvm::Value* data = &*arg++; llvm::Value* length = &*arg;
+        auto savedIP = builder.saveIP();
+        auto* entry = llvm::BasicBlock::Create(context, "entry", fn);
+        auto* sendBlock = llvm::BasicBlock::Create(context, "send", fn);
+        auto* invalidBlock = llvm::BasicBlock::Create(context, "invalid", fn);
+        builder.SetInsertPoint(entry);
+#if defined(__APPLE__)
+        const bool darwin = true;
+#else
+        const bool darwin = false;
+#endif
+        auto* zero8 = llvm::ArrayType::get(builder.getInt8Ty(), 8);
+        auto* zero16 = llvm::ArrayType::get(builder.getInt8Ty(), 16);
+        auto* addressType = darwin
+            ? (ipv6 ? llvm::StructType::get(context, {builder.getInt8Ty(), builder.getInt8Ty(), builder.getInt16Ty(), builder.getInt32Ty(), zero16, builder.getInt32Ty()})
+                    : llvm::StructType::get(context, {builder.getInt8Ty(), builder.getInt8Ty(), builder.getInt16Ty(), builder.getInt32Ty(), zero8}))
+            : (ipv6 ? llvm::StructType::get(context, {builder.getInt16Ty(), builder.getInt16Ty(), builder.getInt32Ty(), zero16, builder.getInt32Ty()})
+                    : llvm::StructType::get(context, {builder.getInt16Ty(), builder.getInt16Ty(), builder.getInt32Ty(), zero8}));
+        auto* address = builder.CreateAlloca(addressType, nullptr, "destination");
+        builder.CreateStore(llvm::Constant::getNullValue(addressType), address);
+        unsigned familyIndex = darwin ? 1u : 0u;
+        unsigned portIndex = darwin ? 2u : 1u;
+        unsigned ipIndex = darwin ? (ipv6 ? 4u : 3u) : (ipv6 ? 3u : 2u);
+        if (darwin) builder.CreateStore(builder.getInt8(ipv6 ? 28 : 16), builder.CreateStructGEP(addressType, address, 0));
+        const int addressFamily = ipv6 ? (darwin ? 30 : 10) : 2;
+        const int addressLength = ipv6 ? 28 : 16;
+        builder.CreateStore(llvm::ConstantInt::get(addressType->getElementType(familyIndex), addressFamily),
+                            builder.CreateStructGEP(addressType, address, familyIndex));
+        if (ipv6) builder.CreateStore(builder.getInt32(0), builder.CreateStructGEP(addressType, address, darwin ? 3u : 2u));
+        llvm::Value* validPort = builder.CreateICmpULE(port, builder.getInt64(65535));
+        llvm::Value* port16 = builder.CreateTrunc(port, builder.getInt16Ty());
+        auto* networkPort = builder.CreateIntrinsic(llvm::Intrinsic::bswap, {builder.getInt16Ty()}, {port16});
+        builder.CreateStore(networkPort, builder.CreateStructGEP(addressType, address, portIndex));
+        auto* ipField = builder.CreateStructGEP(addressType, address, ipIndex);
+        auto* inetType = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty(), builder.getPtrTy(), builder.getPtrTy()}, false);
+        auto inet = module->getOrInsertFunction("inet_pton", inetType);
+        auto* parsed = builder.CreateCall(inet, {builder.getInt32(addressFamily), host, ipField});
+        builder.CreateCondBr(builder.CreateAnd(validPort, builder.CreateICmpEQ(parsed, builder.getInt32(1))), sendBlock, invalidBlock);
+        builder.SetInsertPoint(sendBlock);
+        auto* sendType = llvm::FunctionType::get(builder.getInt64Ty(),
+            {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty(), builder.getPtrTy(), builder.getInt32Ty()}, false);
+        auto sendTo = module->getOrInsertFunction("sendto", sendType);
+        auto* sent = builder.CreateCall(sendTo, {fd, data, length, builder.getInt32(0), address, builder.getInt32(addressLength)});
+        builder.CreateRet(sent);
+        builder.SetInsertPoint(invalidBlock);
+        builder.CreateRet(builder.getInt64(-1));
+        builder.restoreIP(savedIP);
+        return fn;
+    }
+    llvm::Function* ensureNativeRandomFunction() {
+        const std::string name = "__loom_native_random_bytes";
+        if (auto* existing = module->getFunction(name)) return existing;
+        auto* fnType = llvm::FunctionType::get(builder.getInt64Ty(),
+            {builder.getPtrTy(), builder.getInt64Ty()}, false);
+        auto* fn = llvm::Function::Create(fnType, llvm::Function::InternalLinkage, name, module.get());
+        auto arg = fn->arg_begin();
+        llvm::Value* buffer = &*arg++; llvm::Value* length = &*arg;
+        auto savedIP = builder.saveIP();
+#if defined(__APPLE__)
+        auto* entry = llvm::BasicBlock::Create(context, "entry", fn);
+        auto* empty = llvm::BasicBlock::Create(context, "empty", fn);
+        auto* sizeOK = llvm::BasicBlock::Create(context, "size.ok", fn);
+        auto* tooLarge = llvm::BasicBlock::Create(context, "too.large", fn);
+        auto* done = llvm::BasicBlock::Create(context, "done", fn);
+        builder.SetInsertPoint(entry);
+        builder.CreateCondBr(builder.CreateICmpEQ(length, builder.getInt64(0)), empty,
+            llvm::BasicBlock::Create(context, "check.size", fn));
+        auto* checkSize = &fn->back();
+        builder.SetInsertPoint(empty);
+        builder.CreateRet(builder.getInt64(0));
+        builder.SetInsertPoint(checkSize);
+        builder.CreateCondBr(builder.CreateICmpULE(length, builder.getInt64(256)), sizeOK, tooLarge);
+        builder.SetInsertPoint(sizeOK);
+        auto* getentropyType = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy(), builder.getInt64Ty()}, false);
+        auto getentropy = module->getOrInsertFunction("getentropy", getentropyType);
+        llvm::Value* status = builder.CreateCall(getentropy, {buffer, length});
+        builder.CreateCondBr(builder.CreateICmpEQ(status, builder.getInt32(0)), done, tooLarge);
+        builder.SetInsertPoint(done);
+        builder.CreateRet(length);
+        builder.SetInsertPoint(tooLarge);
+        builder.CreateRet(builder.getInt64(-1));
+#else
+        auto* entry = llvm::BasicBlock::Create(context, "entry", fn);
+        auto* header = llvm::BasicBlock::Create(context, "random.header", fn);
+        auto* body = llvm::BasicBlock::Create(context, "random.body", fn);
+        auto* failed = llvm::BasicBlock::Create(context, "random.failed", fn);
+        auto* complete = llvm::BasicBlock::Create(context, "random.complete", fn);
+        builder.SetInsertPoint(entry);
+        auto* offset = builder.CreateAlloca(builder.getInt64Ty(), nullptr, "random.offset");
+        builder.CreateStore(builder.getInt64(0), offset);
+        builder.CreateBr(header);
+        builder.SetInsertPoint(header);
+        llvm::Value* currentOffset = builder.CreateLoad(builder.getInt64Ty(), offset);
+        builder.CreateCondBr(builder.CreateICmpULT(currentOffset, length), body, complete);
+        builder.SetInsertPoint(body);
+        llvm::Value* destination = builder.CreateGEP(builder.getInt8Ty(), buffer, currentOffset);
+        llvm::Value* remaining = builder.CreateSub(length, currentOffset);
+        auto* getrandomType = llvm::FunctionType::get(builder.getInt64Ty(),
+            {builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty()}, false);
+        auto getrandom = module->getOrInsertFunction("getrandom", getrandomType);
+        llvm::Value* received = builder.CreateCall(getrandom, {destination, remaining, builder.getInt32(0)});
+        builder.CreateCondBr(builder.CreateICmpSGT(received, builder.getInt64(0)),
+            llvm::BasicBlock::Create(context, "random.progress", fn), failed);
+        auto* progress = &fn->back();
+        builder.SetInsertPoint(progress);
+        currentOffset = builder.CreateLoad(builder.getInt64Ty(), offset);
+        builder.CreateStore(builder.CreateAdd(currentOffset, received), offset);
+        builder.CreateBr(header);
+        builder.SetInsertPoint(failed);
+        builder.CreateRet(builder.getInt64(-1));
+        builder.SetInsertPoint(complete);
+        builder.CreateRet(length);
+#endif
+        builder.restoreIP(savedIP);
+        return fn;
+    }
+    llvm::Function* ensureNativeSetNonblockingFunction() {
+        const std::string name = "__loom_native_socket_set_nonblocking";
+        if (auto* existing = module->getFunction(name)) return existing;
+        auto* fnType = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty(), builder.getInt1Ty()}, false);
+        auto* fn = llvm::Function::Create(fnType, llvm::Function::InternalLinkage, name, module.get());
+        auto arg = fn->arg_begin();
+        llvm::Value* fd = &*arg++; llvm::Value* nb = &*arg;
+        auto savedIP = builder.saveIP();
+        auto* entry = llvm::BasicBlock::Create(context, "entry", fn);
+        auto* getOk = llvm::BasicBlock::Create(context, "get.ok", fn);
+        auto* fail = llvm::BasicBlock::Create(context, "fail", fn);
+        builder.SetInsertPoint(entry);
+#if defined(__APPLE__)
+        const int fGetFl = 3, fSetFl = 4, oNonblock = 4;
+#else
+        const int fGetFl = 3, fSetFl = 4, oNonblock = 2048;
+#endif
+        auto* fcntlGetTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty(), builder.getInt32Ty()}, true);
+        auto fcntlFn = module->getOrInsertFunction("fcntl", fcntlGetTy);
+        llvm::Value* curFlags = builder.CreateCall(fcntlFn, {fd, builder.getInt32(fGetFl)}, "cur.flags");
+        builder.CreateCondBr(builder.CreateICmpSLT(curFlags, builder.getInt32(0)), fail, getOk);
+
+        builder.SetInsertPoint(getOk);
+        llvm::Value* setBits = builder.CreateOr(curFlags, builder.getInt32(oNonblock));
+        llvm::Value* clearBits = builder.CreateAnd(curFlags, builder.getInt32(~oNonblock));
+        llvm::Value* newFlags = builder.CreateSelect(nb, setBits, clearBits);
+        llvm::Value* setRes = builder.CreateCall(fcntlFn, {fd, builder.getInt32(fSetFl), newFlags}, "set.flags");
+        auto* success = builder.CreateICmpEQ(setRes, builder.getInt32(0));
+        builder.CreateRet(builder.CreateSelect(success, builder.getInt32(0), builder.getInt32(-1)));
+
+        builder.SetInsertPoint(fail);
+        builder.CreateRet(builder.getInt32(-1));
+        builder.restoreIP(savedIP);
+        return fn;
+    }
+    llvm::Function* ensureNativeGetSocketErrorFunction() {
+        const std::string name = "__loom_native_socket_get_error";
+        if (auto* existing = module->getFunction(name)) return existing;
+        auto* fnType = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty()}, false);
+        auto* fn = llvm::Function::Create(fnType, llvm::Function::InternalLinkage, name, module.get());
+        auto arg = fn->arg_begin();
+        llvm::Value* fd = &*arg;
+        auto savedIP = builder.saveIP();
+        auto* entry = llvm::BasicBlock::Create(context, "entry", fn);
+        builder.SetInsertPoint(entry);
+#if defined(__APPLE__)
+        const int solSocket = 0xffff, soError = 0x1007;
+#else
+        const int solSocket = 1, soError = 4;
+#endif
+        auto* errVal = builder.CreateAlloca(builder.getInt32Ty(), nullptr, "so.error.val");
+        auto* lenVal = builder.CreateAlloca(builder.getInt32Ty(), nullptr, "so.error.len");
+        builder.CreateStore(builder.getInt32(0), errVal);
+        builder.CreateStore(builder.getInt32(4), lenVal);
+        auto* getOptTy = llvm::FunctionType::get(builder.getInt32Ty(),
+            {builder.getInt32Ty(), builder.getInt32Ty(), builder.getInt32Ty(), builder.getPtrTy(), builder.getPtrTy()}, false);
+        auto getOptFn = module->getOrInsertFunction("getsockopt", getOptTy);
+        llvm::Value* res = builder.CreateCall(getOptFn, {fd, builder.getInt32(solSocket), builder.getInt32(soError), errVal, lenVal});
+        auto* ok = builder.CreateICmpEQ(res, builder.getInt32(0));
+        llvm::Value* err = builder.CreateLoad(builder.getInt32Ty(), errVal);
+        builder.CreateRet(builder.CreateSelect(ok, err, builder.getInt32(-1)));
+        builder.restoreIP(savedIP);
+        return fn;
     }
     struct LoopTarget {
         llvm::BasicBlock* exit;
@@ -138,6 +451,8 @@ class Generator {
     bool baremetal = false;
     OptReport* optReport = nullptr;
     bool emitDebug = false;
+    std::unordered_set<std::string> currentLocalArrays;
+    std::string provenParallelIndex;
     std::unique_ptr<llvm::DIBuilder> dibuilder;
     llvm::DICompileUnit* diCompileUnit = nullptr;
     llvm::DIFile* diFile = nullptr;
@@ -149,6 +464,298 @@ class Generator {
         }
     }
     std::unique_ptr<ConstEvaluator> constEvaluator;
+
+    bool emitAutoParallelArrayFill(const Stmt& s) {
+        if (baremetal || !s.isRange || !s.loopIndexVar.empty() || s.body.size() != 1 ||
+            !s.expr || s.expr->kind != Expr::Kind::Integer || s.expr->magnitude != 1 ||
+            !s.rangeEnd || s.rangeEnd->kind != Expr::Kind::Integer) return false;
+        if (s.body[0].kind != Stmt::Kind::TargetAssign || !s.body[0].target || !s.body[0].expr ||
+            s.body[0].target->kind != Expr::Kind::Index || !s.body[0].target->left ||
+            s.body[0].target->left->kind != Expr::Kind::Variable || !s.body[0].target->right ||
+            s.body[0].target->right->kind != Expr::Kind::Variable ||
+            s.body[0].target->right->text != s.loopVar) return false;
+        const Expr& valueExpr = *s.body[0].expr;
+        if (valueExpr.kind != Expr::Kind::Integer && valueExpr.kind != Expr::Kind::Floating &&
+            valueExpr.kind != Expr::Kind::Boolean && valueExpr.kind != Expr::Kind::Character) return false;
+
+        Type arrayType = analyzer.typeOf(*s.body[0].target->left);
+        if (arrayType.kind != TypeKind::Array || !arrayType.pointeeType || arrayType.isVolatile ||
+            s.rangeEnd->magnitude != arrayType.arraySize) return false;
+        Type elementType = *arrayType.pointeeType;
+        if (elementType.isVolatile || !(elementType.integer() || elementType.kind == TypeKind::Float ||
+              elementType.kind == TypeKind::Boolean || elementType.kind == TypeKind::Character ||
+              elementType.kind == TypeKind::Enum)) return false;
+        if (analyzer.typeOf(valueExpr) != elementType) return false;
+
+        llvm::Value* arrayAddress = address(*s.body[0].target->left);
+        llvm::Value* fillValue = emit(valueExpr);
+        llvm::Type* arrayLlvmType = loomType(arrayType);
+        llvm::Type* elementLlvmType = loomType(elementType);
+        if (elementType.integer()) {
+            if (auto* constant = llvm::dyn_cast<llvm::ConstantInt>(fillValue)) {
+                const llvm::APInt& bits = constant->getValue();
+                const unsigned width = bits.getBitWidth();
+                const std::uint8_t byte = static_cast<std::uint8_t>(bits.getLoBits(std::min(8u, width)).getZExtValue());
+                bool uniformBytes = true;
+                for (unsigned shift = 8; shift < width; shift += 8) {
+                    if (bits.extractBits(8, shift).getZExtValue() != byte) {
+                        uniformBytes = false;
+                        break;
+                    }
+                }
+                if (uniformBytes) {
+                    const auto& layout = module->getDataLayout();
+                    const std::uint64_t bytes = static_cast<std::uint64_t>(arrayType.arraySize) *
+                        layout.getTypeAllocSize(elementLlvmType).getFixedValue();
+                    builder.CreateMemSet(arrayAddress, builder.getInt8(byte), builder.getInt64(bytes),
+                                         layout.getABITypeAlign(arrayLlvmType));
+                    if (optReport && optReport->enabled) {
+                        optReport->loopLowerings.push_back("line " + std::to_string(s.line) +
+                            ": lowered full fixed-array constant fill to a byte-pattern memset; kept sequential to avoid thread dispatch overhead");
+                    }
+                    return true;
+                }
+            }
+        }
+        if (arrayType.arraySize < 1048576) return false;
+        auto* contextType = llvm::StructType::get(context, {builder.getPtrTy(), elementLlvmType});
+        auto* contextValue = builder.CreateAlloca(contextType, nullptr, "loom.parallel.fill.context");
+        builder.CreateStore(arrayAddress, builder.CreateStructGEP(contextType, contextValue, 0));
+        builder.CreateStore(fillValue, builder.CreateStructGEP(contextType, contextValue, 1));
+
+        auto* workerType = llvm::FunctionType::get(builder.getVoidTy(),
+            {builder.getPtrTy(), builder.getInt64Ty(), builder.getInt64Ty()}, false);
+        auto* worker = llvm::Function::Create(workerType, llvm::Function::InternalLinkage,
+            ".loom.parallel.array.fill." + std::to_string(++stringCounter), module.get());
+        auto arg = worker->arg_begin();
+        llvm::Value* workerContext = &*arg++;
+        workerContext->setName("context");
+        llvm::Value* beginArg = &*arg++;
+        beginArg->setName("begin");
+        llvm::Value* endArg = &*arg;
+        endArg->setName("end");
+
+        auto savedInsertPoint = builder.saveIP();
+        auto* entry = llvm::BasicBlock::Create(context, "entry", worker);
+        auto* header = llvm::BasicBlock::Create(context, "fill.header", worker);
+        auto* body = llvm::BasicBlock::Create(context, "fill.body", worker);
+        auto* exit = llvm::BasicBlock::Create(context, "fill.exit", worker);
+        builder.SetInsertPoint(entry);
+        auto* baseSlot = builder.CreateStructGEP(contextType, workerContext, 0);
+        llvm::Value* base = builder.CreateLoad(builder.getPtrTy(), baseSlot, "array.base");
+        auto* valueSlot = builder.CreateStructGEP(contextType, workerContext, 1);
+        llvm::Value* fill = builder.CreateLoad(elementLlvmType, valueSlot, "fill.value");
+        auto* indexSlot = builder.CreateAlloca(builder.getInt64Ty(), nullptr, "fill.index");
+        builder.CreateStore(beginArg, indexSlot);
+        builder.CreateBr(header);
+        builder.SetInsertPoint(header);
+        llvm::Value* index = builder.CreateLoad(builder.getInt64Ty(), indexSlot);
+        builder.CreateCondBr(builder.CreateICmpULT(index, endArg), body, exit);
+        builder.SetInsertPoint(body);
+        llvm::Value* elementAddress = builder.CreateInBoundsGEP(arrayLlvmType, base,
+            {builder.getInt32(0), index}, "fill.element");
+        builder.CreateStore(fill, elementAddress);
+        builder.CreateStore(builder.CreateAdd(index, builder.getInt64(1)), indexSlot);
+        builder.CreateBr(header);
+        builder.SetInsertPoint(exit);
+        builder.CreateRetVoid();
+        builder.restoreIP(savedInsertPoint);
+
+        auto* dispatchType = llvm::FunctionType::get(builder.getVoidTy(),
+            {builder.getInt64Ty(), builder.getInt64Ty(), builder.getPtrTy(), builder.getPtrTy()}, false);
+        auto dispatch = module->getOrInsertFunction("loom_parallel_for_chunks", dispatchType);
+        builder.CreateCall(dispatch, {builder.getInt64(arrayType.arraySize), builder.getInt64(32768),
+                                      worker, contextValue});
+        if (optReport && optReport->enabled) {
+            optReport->autoParallelizations.push_back("line " + std::to_string(s.line) +
+                ": parallelized proven independent fixed-array fill over " +
+                std::to_string(arrayType.arraySize) + " elements (single constant write per distinct index)");
+        }
+        return true;
+    }
+
+    bool emitAutoParallelArrayMapLoop(const Stmt& s) {
+        if (baremetal || !s.isRange || !s.loopIndexVar.empty() || s.body.empty() ||
+            !s.expr || s.expr->kind != Expr::Kind::Integer || s.expr->magnitude != 1 ||
+            !s.rangeEnd || s.rangeEnd->kind != Expr::Kind::Integer) return false;
+        const Stmt& first = s.body.front();
+        if (first.kind != Stmt::Kind::TargetAssign || !first.target ||
+            first.target->kind != Expr::Kind::Index || !first.target->left ||
+            first.target->left->kind != Expr::Kind::Variable) return false;
+        Type outputType = analyzer.typeOf(*first.target->left);
+        if (outputType.kind != TypeKind::Array || !outputType.pointeeType || outputType.isVolatile ||
+            outputType.arraySize < 524288 || s.rangeEnd->magnitude != outputType.arraySize) return false;
+
+        std::unordered_map<std::string, Type> capturedArrays;
+        auto isScalar = [](const Type& t) {
+            return t.integer() || t.kind == TypeKind::Float || t.kind == TypeKind::Boolean ||
+                   t.kind == TypeKind::Character || t.kind == TypeKind::Enum;
+        };
+        bool readsArrayElement = false;
+        std::function<bool(const Expr&)> isPureElementExpression = [&](const Expr& e) {
+            switch (e.kind) {
+                case Expr::Kind::Integer:
+                case Expr::Kind::Floating:
+                case Expr::Kind::Boolean:
+                case Expr::Kind::Character:
+                case Expr::Kind::EnumVariant:
+                    return true;
+                case Expr::Kind::Variable:
+                    return e.text == s.loopVar;
+                case Expr::Kind::Index: {
+                    if (!e.left || e.left->kind != Expr::Kind::Variable || !e.right ||
+                        e.right->kind != Expr::Kind::Variable || e.right->text != s.loopVar) return false;
+                    Type inputType = analyzer.typeOf(*e.left);
+                    if (inputType.kind != TypeKind::Array || !inputType.pointeeType || inputType.isVolatile ||
+                        inputType.arraySize != outputType.arraySize || !isScalar(*inputType.pointeeType)) return false;
+                    const std::string& name = e.left->text;
+                    // Only stack-local arrays are eligible: a global can be concurrently
+                    // accessed by another Loom task even when this loop itself is pure.
+                    if (!currentLocalArrays.count(name)) return false;
+                    capturedArrays.emplace(name, inputType);
+                    readsArrayElement = true;
+                    return true;
+                }
+                case Expr::Kind::Unary:
+                    return (e.text == "-" || e.text == "~" || e.text == "not") && e.left &&
+                           isScalar(analyzer.typeOf(*e.left)) && isPureElementExpression(*e.left);
+                case Expr::Kind::Binary: {
+                    static const std::unordered_set<std::string> pureOperators = {
+                        "+", "-", "*", "/", "%", "mod", "and", "or", "xor", "&", "|", "^",
+                        "<<", ">>", "==", "!=", "<", "<=", ">", ">="
+                    };
+                    return pureOperators.count(e.text) && e.left && e.right &&
+                           isScalar(analyzer.typeOf(*e.left)) && isScalar(analyzer.typeOf(*e.right)) &&
+                           isPureElementExpression(*e.left) && isPureElementExpression(*e.right);
+                }
+                case Expr::Kind::Call: {
+                    static const std::unordered_set<std::string> pureIntrinsics = {
+                        "Wrapping_Add", "Wrapping_Sub", "Wrapping_Mul", "Sqrt", "Abs", "Floor", "Ceil",
+                        "Min", "Max"
+                    };
+                    if (!pureIntrinsics.count(e.text) || e.arguments.empty() || !isScalar(analyzer.typeOf(e)))
+                        return false;
+                    for (const auto& argument : e.arguments) {
+                        if (!isScalar(analyzer.typeOf(*argument)) || !isPureElementExpression(*argument)) return false;
+                    }
+                    return true;
+                }
+                default:
+                    return false;
+            }
+        };
+        std::unordered_set<std::string> writtenArrays;
+        for (const Stmt& assignment : s.body) {
+            if (assignment.kind != Stmt::Kind::TargetAssign || !assignment.target || !assignment.expr ||
+                assignment.target->kind != Expr::Kind::Index || !assignment.target->left ||
+                assignment.target->left->kind != Expr::Kind::Variable || !assignment.target->right ||
+                assignment.target->right->kind != Expr::Kind::Variable ||
+                assignment.target->right->text != s.loopVar) return false;
+            const std::string& outputName = assignment.target->left->text;
+            Type targetType = analyzer.typeOf(*assignment.target->left);
+            if (!currentLocalArrays.count(outputName) || targetType.kind != TypeKind::Array ||
+                !targetType.pointeeType || targetType.isVolatile || targetType.arraySize != outputType.arraySize ||
+                targetType.pointeeType->isVolatile || !isScalar(*targetType.pointeeType) ||
+                !isPureElementExpression(*assignment.expr) ||
+                analyzer.typeOf(*assignment.expr) != *targetType.pointeeType) return false;
+            capturedArrays.emplace(outputName, targetType);
+            writtenArrays.insert(outputName);
+        }
+        if (writtenArrays.empty() || !readsArrayElement) return false;
+
+        std::vector<std::string> names;
+        for (const auto& item : capturedArrays) {
+            names.push_back(item.first);
+        }
+        std::sort(names.begin(), names.end());
+        std::vector<llvm::Type*> contextFields(names.size(), builder.getPtrTy());
+        auto* contextType = llvm::StructType::get(context, contextFields);
+        auto* contextValue = builder.CreateAlloca(contextType, nullptr, "loom.parallel.map.context");
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            Expr arrayExpr;
+            arrayExpr.kind = Expr::Kind::Variable;
+            arrayExpr.text = names[i];
+            llvm::Value* arrayValue = address(arrayExpr);
+            builder.CreateStore(arrayValue, builder.CreateStructGEP(contextType, contextValue, static_cast<unsigned>(i)));
+        }
+
+        auto* workerType = llvm::FunctionType::get(builder.getVoidTy(),
+            {builder.getPtrTy(), builder.getInt64Ty(), builder.getInt64Ty()}, false);
+        auto* worker = llvm::Function::Create(workerType, llvm::Function::InternalLinkage,
+            ".loom.parallel.array.map." + std::to_string(++stringCounter), module.get());
+        auto arg = worker->arg_begin();
+        llvm::Value* workerContext = &*arg++;
+        workerContext->setName("context");
+        llvm::Value* beginArg = &*arg++;
+        beginArg->setName("begin");
+        llvm::Value* endArg = &*arg;
+        endArg->setName("end");
+
+        auto savedInsertPoint = builder.saveIP();
+        auto savedCurrent = current;
+        auto savedStorage = storage;
+        auto savedTypes = types;
+        auto savedLoops = loops;
+        const bool savedReachable = reachable;
+        const std::string savedParallelIndex = provenParallelIndex;
+        current = worker;
+        storage.clear();
+        types.clear();
+        loops.clear();
+        reachable = true;
+        auto* entry = llvm::BasicBlock::Create(context, "entry", worker);
+        auto* header = llvm::BasicBlock::Create(context, "map.header", worker);
+        auto* body = llvm::BasicBlock::Create(context, "map.body", worker);
+        auto* exit = llvm::BasicBlock::Create(context, "map.exit", worker);
+        builder.SetInsertPoint(entry);
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            auto* field = builder.CreateStructGEP(contextType, workerContext, static_cast<unsigned>(i));
+            storage[names[i]] = builder.CreateLoad(builder.getPtrTy(), field, names[i] + ".base");
+            types[names[i]] = capturedArrays.at(names[i]);
+        }
+        auto* indexSlot = builder.CreateAlloca(builder.getInt64Ty(), nullptr, "map.index");
+        builder.CreateStore(beginArg, indexSlot);
+        auto* loopValueSlot = builder.CreateAlloca(loomType(analyzer.typeOf(*s.expr)), nullptr, s.loopVar + ".addr");
+        storage[s.loopVar] = loopValueSlot;
+        types[s.loopVar] = analyzer.typeOf(*s.expr);
+        builder.CreateBr(header);
+        builder.SetInsertPoint(header);
+        llvm::Value* index = builder.CreateLoad(builder.getInt64Ty(), indexSlot);
+        builder.CreateCondBr(builder.CreateICmpULT(index, endArg), body, exit);
+        builder.SetInsertPoint(body);
+        llvm::Value* sourceIndex = builder.CreateAdd(index, builder.getInt64(1), "loom.index.onebased");
+        if (sourceIndex->getType() != loomType(types.at(s.loopVar)))
+            sourceIndex = builder.CreateIntCast(sourceIndex, loomType(types.at(s.loopVar)), false);
+        builder.CreateStore(sourceIndex, loopValueSlot);
+        provenParallelIndex = s.loopVar;
+        for (const Stmt& assignment : s.body) {
+            llvm::Value* destination = address(*assignment.target);
+            builder.CreateStore(emit(*assignment.expr), destination);
+        }
+        builder.CreateStore(builder.CreateAdd(index, builder.getInt64(1)), indexSlot);
+        builder.CreateBr(header);
+        builder.SetInsertPoint(exit);
+        builder.CreateRetVoid();
+
+        current = savedCurrent;
+        storage = std::move(savedStorage);
+        types = std::move(savedTypes);
+        loops = std::move(savedLoops);
+        reachable = savedReachable;
+        provenParallelIndex = savedParallelIndex;
+        builder.restoreIP(savedInsertPoint);
+
+        auto* dispatchType = llvm::FunctionType::get(builder.getVoidTy(),
+            {builder.getInt64Ty(), builder.getInt64Ty(), builder.getPtrTy(), builder.getPtrTy()}, false);
+        auto dispatch = module->getOrInsertFunction("loom_parallel_for_chunks", dispatchType);
+        builder.CreateCall(dispatch, {builder.getInt64(outputType.arraySize), builder.getInt64(32768), worker, contextValue});
+        if (optReport && optReport->enabled) {
+            optReport->autoParallelizations.push_back("line " + std::to_string(s.line) +
+                ": parallelized independent fixed-array element loop over " +
+                std::to_string(outputType.arraySize) + " indices (pure per-index arithmetic and same-index accesses)");
+        }
+        return true;
+    }
 
     bool isParallelSafeLoop(const Stmt& s, std::string& inductionVar) const {
         if (s.kind != Stmt::Kind::Loop || !s.whileLoop || !s.expr) return false;
@@ -201,15 +808,21 @@ class Generator {
             bool isVol = types.at(name).isVolatile;
             return builder.CreateLoad(loomType(types.at(name)), i->second, isVol, name);
         }
-        auto g = globalStorage.find(name);
-        if (g != globalStorage.end()) {
+        if (auto* gv = findGlobal(name)) {
             bool isVol = analyzer.typeOfGlobal(name).isVolatile;
-            return builder.CreateLoad(g->second->getValueType(), g->second, isVol, name);
+            return builder.CreateLoad(gv->getValueType(), gv, isVol, name);
         }
         throw Error("internal error: missing variable '" + name + "'");
     }
     llvm::Value* emitCast(llvm::Value* val, Type src, Type dst) {
         if (src == dst) return val;
+        if (src.kind == TypeKind::Text && dst.kind == TypeKind::String) {
+            if (val->getType()->isPointerTy()) {
+                llvm::Value* dataPtrPtr = builder.CreateStructGEP(loomType(src), val, 0, "text.dataptr");
+                return builder.CreateLoad(builder.getPtrTy(), dataPtrPtr, "text.as.str");
+            }
+            return builder.CreateExtractValue(val, 0, "text.as.str");
+        }
         llvm::Type* dstLlvm = loomType(dst);
         if ((src.kind == TypeKind::Pointer || src.kind == TypeKind::NullType) &&
             (dst.kind == TypeKind::Pointer || dst.kind == TypeKind::NullType))
@@ -280,12 +893,22 @@ class Generator {
         if (e.kind == Expr::Kind::Variable) {
             auto local = storage.find(e.text);
             if (local != storage.end()) return local->second;
-            auto global = globalStorage.find(e.text);
-            if (global != globalStorage.end()) return global->second;
+            if (auto* gv = findGlobal(analyzer.resolvedGlobalName(e))) return gv;
         }
         if (e.kind == Expr::Kind::Member) {
+            std::string gName = analyzer.resolvedGlobalName(e);
+            if (gName != e.text) {
+                if (auto* gv = findGlobal(gName)) return gv;
+            }
             Type record = analyzer.typeOf(*e.left);
-            return builder.CreateStructGEP(loomType(record), address(*e.left), analyzer.fieldIndex(record.name, e.text), e.text + ".addr");
+            llvm::Value* basePtr = nullptr;
+            if ((record.kind == TypeKind::Pointer || record.kind == TypeKind::SmartPointer) && record.pointeeType) {
+                record = *record.pointeeType;
+                basePtr = emit(*e.left);
+            } else {
+                basePtr = address(*e.left);
+            }
+            return builder.CreateStructGEP(loomType(record), basePtr, llvmFieldIndex(record.name, e.text), e.text + ".addr");
         }
         if (e.kind == Expr::Kind::Index) {
             Type targetType = analyzer.typeOf(*e.left);
@@ -295,6 +918,10 @@ class Generator {
             llvm::Value* idx0 = builder.CreateSub(idx, builder.getInt64(1), "idx0");
 
             bool staticallyInBounds = false;
+            if (targetType.kind == TypeKind::Array && !provenParallelIndex.empty() &&
+                e.right->kind == Expr::Kind::Variable && e.right->text == provenParallelIndex) {
+                staticallyInBounds = true;
+            }
             if (e.right->kind == Expr::Kind::Integer) {
                 if (targetType.kind == TypeKind::Array && e.right->magnitude >= 1 && e.right->magnitude <= targetType.arraySize) {
                     staticallyInBounds = true;
@@ -314,6 +941,9 @@ class Generator {
                 } else if (targetType.kind == TypeKind::Slice) {
                     llvm::Value* sliceVal = emit(*e.left);
                     lenVal = builder.CreateExtractValue(sliceVal, 1, "slice.len");
+                } else if (targetType.kind == TypeKind::Text) {
+                    llvm::Value* textVal = emit(*e.left);
+                    lenVal = builder.CreateExtractValue(textVal, 1, "text.len");
                 } else if (targetType.kind == TypeKind::String) {
                     llvm::Value* stringVal = emit(*e.left);
                     auto* strlenType = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getPtrTy()}, false);
@@ -361,6 +991,11 @@ class Generator {
             if (targetType.kind == TypeKind::String) {
                 llvm::Value* strPtr = emit(*e.left);
                 return builder.CreateInBoundsGEP(builder.getInt8Ty(), strPtr, {idx0}, "string.elem.addr");
+            }
+            if (targetType.kind == TypeKind::Text) {
+                llvm::Value* textVal = emit(*e.left);
+                llvm::Value* dataPtr = builder.CreateExtractValue(textVal, 0, "text.ptr");
+                return builder.CreateInBoundsGEP(builder.getInt8Ty(), dataPtr, {idx0}, "text.byte.addr");
             }
         }
         throw Error("internal error: expression is not an addressable lvalue");
@@ -617,7 +1252,7 @@ class Generator {
             const Signature* sig = analyzer.signatureOf(call.text);
             if (!sig) throw Error("internal error: missing signature for spawned procedure '" + call.text + "'");
 
-            llvm::Function* tramp = getOrCreateTaskTrampoline(call.text, *sig);
+            llvm::Function* tramp = getOrCreateTaskTrampoline(analyzer.resolvedCallName(call), *sig);
             const auto& dl = module->getDataLayout();
 
             llvm::Value* argsPtr = nullptr;
@@ -643,6 +1278,23 @@ class Generator {
             if (sig->result && sig->result->kind != TypeKind::NullType) {
                 llvm::Type* llvmResType = loomType(*sig->result);
                 resSize = dl.getTypeAllocSize(llvmResType);
+            }
+
+            if (baremetal) {
+                auto* baremetalSpawnFnTy = llvm::FunctionType::get(
+                    builder.getPtrTy(),
+                    {builder.getPtrTy(), builder.getPtrTy(), builder.getInt64Ty(), builder.getInt64Ty(), builder.getInt32Ty(), builder.getInt1Ty()},
+                    false
+                );
+                auto baremetalSpawnCallee = module->getOrInsertFunction("loom_task_spawn_on_core", baremetalSpawnFnTy);
+                llvm::Value* coreAffinityVal = builder.getInt32(2); // AFFINITY_BOTH
+                if (e.arguments.size() > 1) {
+                    llvm::Value* userAff = emit(*e.arguments[1]);
+                    if (userAff->getType() != builder.getInt32Ty())
+                        userAff = builder.CreateZExtOrTrunc(userAff, builder.getInt32Ty());
+                    coreAffinityVal = userAff;
+                }
+                return builder.CreateCall(baremetalSpawnCallee, {tramp, argsPtr, builder.getInt64(argsSize), builder.getInt64(resSize), coreAffinityVal, builder.getInt1(e.isPrivileged)}, "task_handle");
             }
 
             return builder.CreateCall(getLoomTaskSpawn(), {tramp, argsPtr, builder.getInt64(argsSize), builder.getInt64(resSize)}, "task_handle");
@@ -694,8 +1346,11 @@ class Generator {
             Type recType = analyzer.typeOf(e);
             llvm::Type* llvmRecType = loomType(recType);
             llvm::Value* recVal = llvm::UndefValue::get(llvmRecType);
+            if (analyzer.isTaggedRecord(recType.name) && vtableGlobals.count(recType.name)) {
+                recVal = builder.CreateInsertValue(recVal, vtableGlobals.at(recType.name), 0, "rec.vptr");
+            }
             for (std::size_t i = 0; i < e.arguments.size(); ++i) {
-                unsigned fieldIdx = static_cast<unsigned>(analyzer.fieldIndex(recType.name, e.fieldNames[i]));
+                unsigned fieldIdx = llvmFieldIndex(recType.name, e.fieldNames[i]);
                 llvm::Value* fieldVal = emit(*e.arguments[i]);
                 recVal = builder.CreateInsertValue(recVal, fieldVal, fieldIdx, "rec.field");
             }
@@ -774,6 +1429,17 @@ class Generator {
         }
         if (e.kind == Expr::Kind::Integer) {
             Type t = analyzer.typeOf(e);
+            if (t.kind == TypeKind::Record) {
+                llvm::Type* llvmRecType = loomType(t);
+                llvm::Value* recVal = llvm::UndefValue::get(llvmRecType);
+                unsigned fIdx = analyzer.isTaggedRecord(t.name) ? 1 : 0;
+                if (analyzer.isTaggedRecord(t.name) && vtableGlobals.count(t.name)) {
+                    recVal = builder.CreateInsertValue(recVal, vtableGlobals.at(t.name), 0, "rec.vptr");
+                }
+                llvm::Type* fType = llvmRecType->getStructElementType(fIdx);
+                llvm::Value* intVal = llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(fType), e.magnitude);
+                return builder.CreateInsertValue(recVal, intVal, fIdx, "rec.field");
+            }
             return llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(loomType(t)), e.magnitude);
         }
         if (e.kind == Expr::Kind::Boolean)
@@ -848,7 +1514,7 @@ class Generator {
                 builder.SetInsertPoint(contBB);
                 return builder.CreateLoad(loomType(valType), resPtr, "hmap.val");
             }
-            if (containerType.kind == TypeKind::String) {
+            if (containerType.kind == TypeKind::String || containerType.kind == TypeKind::Text) {
                 llvm::Value* byteAddr = address(e);
                 return builder.CreateLoad(builder.getInt8Ty(), byteAddr, "str.byte");
             }
@@ -964,6 +1630,65 @@ class Generator {
             builder.SetInsertPoint(okBB);
             return builder.CreateExtractValue(unionVal, 1, "try.val");
         }
+        if (e.kind == Expr::Kind::OnError) {
+            llvm::Value* unionVal = emit(*e.left);
+            llvm::Value* errCode = builder.CreateExtractValue(unionVal, 0, "on_err.code");
+            llvm::Value* isErr = builder.CreateICmpNE(errCode, llvm::ConstantInt::get(errCode->getType(), 0), "on_err.is_err");
+
+            std::string action = "";
+            for (char c : e.text) action += (char)std::tolower(static_cast<unsigned char>(c));
+
+            if (action == "panic" || action == "halt") {
+                auto* okBB = llvm::BasicBlock::Create(context, "on_err.ok", current);
+                auto* panicBB = llvm::BasicBlock::Create(context, "on_err.panic", current);
+                builder.CreateCondBr(isErr, panicBB, okBB);
+
+                builder.SetInsertPoint(panicBB);
+                if (baremetal) {
+                    builder.CreateIntrinsic(builder.getVoidTy(), llvm::Intrinsic::debugtrap, {});
+                    builder.CreateUnreachable();
+                } else {
+                    auto abortFn = module->getOrInsertFunction("abort", llvm::FunctionType::get(builder.getVoidTy(), false));
+                    builder.CreateCall(abortFn, {});
+                    builder.CreateUnreachable();
+                }
+
+                builder.SetInsertPoint(okBB);
+                Type inner = analyzer.typeOf(*e.left);
+                inner.errorType = nullptr;
+                if (inner.kind == TypeKind::NullType) {
+                    return llvm::Constant::getNullValue(builder.getInt32Ty());
+                }
+                return builder.CreateExtractValue(unionVal, 1, "on_err.val");
+            } else if (action == "propagate" || action == "return") {
+                auto* okBB = llvm::BasicBlock::Create(context, "on_err.ok", current);
+                auto* errBB = llvm::BasicBlock::Create(context, "on_err.err_exit", current);
+                builder.CreateCondBr(isErr, errBB, okBB);
+
+                builder.SetInsertPoint(errBB);
+                for (auto it = activeEnsures.rbegin(); it != activeEnsures.rend(); ++it) {
+                    emitEnsureStmt(**it);
+                }
+                llvm::Value* errRet = llvm::UndefValue::get(current->getReturnType());
+                errRet = builder.CreateInsertValue(errRet, errCode, 0);
+                builder.CreateRet(errRet);
+
+                builder.SetInsertPoint(okBB);
+                Type inner = analyzer.typeOf(*e.left);
+                inner.errorType = nullptr;
+                if (inner.kind == TypeKind::NullType) {
+                    return llvm::Constant::getNullValue(builder.getInt32Ty());
+                }
+                return builder.CreateExtractValue(unionVal, 1, "on_err.val");
+            } else { // "ignore"
+                Type inner = analyzer.typeOf(*e.left);
+                inner.errorType = nullptr;
+                if (inner.kind == TypeKind::NullType) {
+                    return llvm::Constant::getNullValue(builder.getInt32Ty());
+                }
+                return builder.CreateExtractValue(unionVal, 1, "on_err.val");
+            }
+        }
         if (e.kind == Expr::Kind::EnumVariant) {
             const auto value = analyzer.enumValueOf(e);
             const std::uint64_t bits = value.negative ? std::uint64_t(0) - value.magnitude : value.magnitude;
@@ -978,11 +1703,24 @@ class Generator {
             return builder.CreateLoad(loomType(pointee), ptr, pointee.isVolatile, "deref");
         }
         if (e.kind == Expr::Kind::Variable) {
-            auto fit = functions.find(e.text);
+            std::string callKey = analyzer.resolvedCallName(e);
+            auto fit = functions.find(callKey);
             if (fit != functions.end()) return fit->second;
+            std::string gName = analyzer.resolvedGlobalName(e);
+            if (gName != e.text) {
+                if (auto* gv = findGlobal(gName)) {
+                    return builder.CreateLoad(gv->getValueType(), gv, analyzer.typeOf(e).isVolatile, e.text);
+                }
+            }
             return load(e.text);
         }
         if (e.kind == Expr::Kind::Member) {
+            std::string gName = analyzer.resolvedGlobalName(e);
+            if (gName != e.text) {
+                if (auto* gv = findGlobal(gName)) {
+                    return builder.CreateLoad(gv->getValueType(), gv, analyzer.typeOf(e).isVolatile, e.text);
+                }
+            }
             Type baseType = analyzer.typeOf(*e.left);
             if (baseType.kind == TypeKind::Array && e.text == "Length") {
                 return builder.getInt64(baseType.arraySize);
@@ -1048,9 +1786,23 @@ class Generator {
                 return builder.CreateLoad(loomType(analyzer.typeOf(e)), address(e), e.text);
             }
             Type record = analyzer.typeOf(*e.left);
-            return builder.CreateExtractValue(emit(*e.left), analyzer.fieldIndex(record.name, e.text), e.text);
+            return builder.CreateExtractValue(emit(*e.left), llvmFieldIndex(record.name, e.text), e.text);
         }
         if (e.kind == Expr::Kind::Call) {
+            static const std::unordered_set<std::string> networkCalls = {
+                "Tcp_Listen", "Tcp_Listen_V6", "Tcp_Accept", "Tcp_Connect", "Tcp_Connect_V6", "Tcp_Send", "Tcp_Send_At", "Tcp_Send_Slice",
+                "Tcp_Receive", "Tcp_Receive_Buffer", "Tcp_Close", "Udp_Bind", "Udp_Bind_V6", "Udp_Connect", "Udp_Connect_V6", "Udp_Send", "Udp_Send_Slice", "Udp_Send_To",
+                "Udp_Send_To_Slice", "Udp_Send_To_V6", "Udp_Send_To_Slice_V6", "Udp_Receive_From", "Udp_Receive_Buffer", "Udp_Close",
+                "Socket_Set_Timeout", "Socket_Wait", "Socket_Set_Nonblocking", "Socket_Get_Error", "System_Random",
+                "Tls_Client_New", "Tls_Connect", "Tls_Send", "Tls_Send_Slice", "Tls_Receive", "Tls_Receive_Buffer", "Tls_Close",
+                "Tls_Set_Alpn", "Tls_Get_Alpn", "Quic_Initial_Keys", "Quic_Hp_Mask", "Quic_Encrypt", "Quic_Decrypt"
+            };
+            if (baremetal && networkCalls.count(e.text))
+                throw Error("line " + std::to_string(e.line) + ": hosted networking is unavailable for freestanding targets");
+#if defined(_WIN32)
+            if (networkCalls.count(e.text))
+                throw Error("line " + std::to_string(e.line) + ": native networking backend is not yet available for Windows");
+#endif
             if (constEvaluator && (releaseMode || (optReport && optReport->enabled))) {
                 unsigned steps = 0;
                 auto constVal = constEvaluator->evalExpr(e, {}, 0, steps);
@@ -1104,6 +1856,16 @@ class Generator {
                     return builder.CreateStore(val, ptr, /*isVolatile=*/true);
                 }
             }
+            if (e.text == "Wrapping_Add" || e.text == "Wrapping_Sub" || e.text == "Wrapping_Mul") {
+                Type t = analyzer.typeOf(e);
+                llvm::Value* a = emit(*e.arguments[0]);
+                llvm::Value* b = emit(*e.arguments[1]);
+                if (a->getType() != loomType(t)) a = builder.CreateIntCast(a, loomType(t), t.kind == TypeKind::Signed);
+                if (b->getType() != loomType(t)) b = builder.CreateIntCast(b, loomType(t), t.kind == TypeKind::Signed);
+                if (e.text == "Wrapping_Add") return builder.CreateAdd(a, b, "wrapping.add");
+                if (e.text == "Wrapping_Sub") return builder.CreateSub(a, b, "wrapping.sub");
+                return builder.CreateMul(a, b, "wrapping.mul");
+            }
             if (isCpuIntrinsic(e.text)) {
                 if (e.text == "Nop") {
                     auto* asmFn = llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), false), "nop", "", true);
@@ -1113,10 +1875,32 @@ class Generator {
                     auto* asmFn = llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), false), "wfi", "", true);
                     return builder.CreateCall(asmFn, {});
                 }
-                if (e.text == "MemoryBarrier") {
-                    auto* asmFn = llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), false), "dmb sy", "", true);
+                if (e.text == "WaitForEvent") {
+                    auto* asmFn = llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), false), "wfe", "", true);
                     return builder.CreateCall(asmFn, {});
                 }
+                if (e.text == "SendEvent") {
+                    auto* asmFn = llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), false), "sev", "", true);
+                    return builder.CreateCall(asmFn, {});
+                }
+                if (e.text == "MemoryBarrier" || e.text == "DataMemoryBarrier") {
+                    auto* asmFn = llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), false), "dmb", "", true);
+                    return builder.CreateCall(asmFn, {});
+                }
+                if (e.text == "DataSyncBarrier") {
+                    auto* asmFn = llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), false), "dsb", "", true);
+                    return builder.CreateCall(asmFn, {});
+                }
+                if (e.text == "InstructionSyncBarrier") {
+                    auto* asmFn = llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), false), "isb", "", true);
+                    return builder.CreateCall(asmFn, {});
+                }
+            }
+            if (e.text == "Asm") {
+                std::string inst = e.arguments[0]->text;
+                std::string constraints = (e.arguments.size() > 1 && e.arguments[1]->kind == Expr::Kind::String) ? e.arguments[1]->text : "";
+                auto* asmFn = llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), false), inst, constraints, true);
+                return builder.CreateCall(asmFn, {});
             }
             if (isAIMLIntrinsic(e.text)) {
                 if (e.text == "Vector_Dot") {
@@ -1571,6 +2355,34 @@ class Generator {
                 auto toStrCallee = module->getOrInsertFunction("loom_text_to_string", toStrFnTy);
                 return builder.CreateCall(toStrCallee, {textSlot}, "to_string");
             }
+            if (e.text == "__loom_usb_is_configured" || e.text == "__loom_usb_available" || e.text == "__loom_usb_read_byte") {
+                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {}, false);
+                return builder.CreateCall(module->getOrInsertFunction(e.text, fnTy), {});
+            }
+            if (e.text == "__loom_usb_putchar") {
+                llvm::Value* ch = emit(*e.arguments[0]);
+                if (ch->getType() != builder.getInt32Ty()) ch = builder.CreateSExtOrTrunc(ch, builder.getInt32Ty());
+                auto* fnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getInt32Ty()}, false);
+                builder.CreateCall(module->getOrInsertFunction("__loom_usb_putchar", fnTy), {ch});
+                return llvm::UndefValue::get(builder.getInt32Ty());
+            }
+            if (e.text == "__loom_usb_write_str") {
+                llvm::Value* s = emit(*e.arguments[0]);
+                auto* fnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false);
+                builder.CreateCall(module->getOrInsertFunction("__loom_usb_write_str", fnTy), {s});
+                return llvm::UndefValue::get(builder.getInt32Ty());
+            }
+            if (e.text == "__loom_irq_save") {
+                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {}, false);
+                return builder.CreateCall(module->getOrInsertFunction("__loom_irq_save", fnTy), {});
+            }
+            if (e.text == "__loom_irq_restore") {
+                llvm::Value* v = emit(*e.arguments[0]);
+                if (v->getType() != builder.getInt32Ty()) v = builder.CreateZExtOrTrunc(v, builder.getInt32Ty());
+                auto* fnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getInt32Ty()}, false);
+                builder.CreateCall(module->getOrInsertFunction("__loom_irq_restore", fnTy), {v});
+                return llvm::UndefValue::get(builder.getInt32Ty());
+            }
             if (e.text == "__loom_task_cancel") {
                 llvm::Value* taskVal = emit(*e.arguments[0]);
                 auto* cancelFnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false);
@@ -1690,35 +2502,138 @@ class Generator {
                 llvm::Value* pair = builder.CreateAtomicCmpXchg(ptr, expected, desired, llvm::MaybeAlign(dl.getTypeAllocSize(expected->getType())), llvm::AtomicOrdering::SequentiallyConsistent, llvm::AtomicOrdering::SequentiallyConsistent);
                 return builder.CreateExtractValue(pair, 1, "cas.ok");
             }
-            if (e.text == "Tcp_Listen") {
+            if (e.text == "Socket_Set_Timeout") {
+                llvm::Value* fd = emit(*e.arguments[0]);
+                if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
+                llvm::Value* timeout = emit(*e.arguments[1]);
+                const bool signedTimeout = analyzer.typeOf(*e.arguments[1]).kind == TypeKind::Signed;
+                if (timeout->getType() != builder.getInt64Ty()) timeout = builder.CreateIntCast(timeout, builder.getInt64Ty(), signedTimeout);
+                llvm::Value* valid = signedTimeout ? builder.CreateICmpSGE(timeout, builder.getInt64(0)) : builder.getTrue();
+                auto* validBlock = llvm::BasicBlock::Create(context, "timeout.valid", current);
+                auto* invalidBlock = llvm::BasicBlock::Create(context, "timeout.invalid", current);
+                auto* mergeBlock = llvm::BasicBlock::Create(context, "timeout.merge", current);
+                builder.CreateCondBr(valid, validBlock, invalidBlock);
+                builder.SetInsertPoint(invalidBlock);
+                builder.CreateBr(mergeBlock);
+                builder.SetInsertPoint(validBlock);
+                auto* timevalType = llvm::StructType::get(context, {builder.getInt64Ty(), builder.getInt64Ty()});
+                auto* timeval = builder.CreateAlloca(timevalType, nullptr, "socket.timeout");
+                llvm::Value* seconds = builder.CreateUDiv(timeout, builder.getInt64(1000));
+                llvm::Value* micros = builder.CreateMul(builder.CreateURem(timeout, builder.getInt64(1000)), builder.getInt64(1000));
+                builder.CreateStore(seconds, builder.CreateStructGEP(timevalType, timeval, 0));
+                builder.CreateStore(micros, builder.CreateStructGEP(timevalType, timeval, 1));
+#if defined(__APPLE__)
+                const int socketLevel = 0xffff, receiveTimeoutOption = 0x1006, sendTimeoutOption = 0x1005;
+#else
+                const int socketLevel = 1, receiveTimeoutOption = 20, sendTimeoutOption = 21;
+#endif
+                auto* setOptionType = llvm::FunctionType::get(builder.getInt32Ty(),
+                    {builder.getInt32Ty(), builder.getInt32Ty(), builder.getInt32Ty(), builder.getPtrTy(), builder.getInt32Ty()}, false);
+                auto setOption = module->getOrInsertFunction("setsockopt", setOptionType);
+                llvm::Value* receiveStatus = builder.CreateCall(setOption,
+                    {fd, builder.getInt32(socketLevel), builder.getInt32(receiveTimeoutOption), timeval, builder.getInt32(16)});
+                llvm::Value* sendStatus = builder.CreateCall(setOption,
+                    {fd, builder.getInt32(socketLevel), builder.getInt32(sendTimeoutOption), timeval, builder.getInt32(16)});
+                llvm::Value* optionsOK = builder.CreateAnd(builder.CreateICmpEQ(receiveStatus, builder.getInt32(0)),
+                                                            builder.CreateICmpEQ(sendStatus, builder.getInt32(0)));
+                llvm::Value* status = builder.CreateSelect(optionsOK, builder.getInt32(0), builder.getInt32(-1));
+                builder.CreateBr(mergeBlock);
+                builder.SetInsertPoint(mergeBlock);
+                auto* result = builder.CreatePHI(builder.getInt32Ty(), 2, "timeout.status");
+                result->addIncoming(builder.getInt32(-1), invalidBlock);
+                result->addIncoming(status, validBlock);
+                return result;
+            }
+            if (e.text == "Socket_Wait") {
+                llvm::Value* fd = emit(*e.arguments[0]);
+                if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
+                llvm::Value* mask = emit(*e.arguments[1]);
+                llvm::Value* timeout = emit(*e.arguments[2]);
+                if (mask->getType() != builder.getInt32Ty()) mask = builder.CreateZExtOrTrunc(mask, builder.getInt32Ty());
+                if (timeout->getType() != builder.getInt32Ty())
+                    timeout = builder.CreateIntCast(timeout, builder.getInt32Ty(), analyzer.typeOf(*e.arguments[2]).kind == TypeKind::Signed);
+                auto* pollFdType = llvm::StructType::get(context, {builder.getInt32Ty(), builder.getInt16Ty(), builder.getInt16Ty()});
+                auto* pollFd = builder.CreateAlloca(pollFdType, nullptr, "poll.fd");
+                builder.CreateStore(fd, builder.CreateStructGEP(pollFdType, pollFd, 0));
+                llvm::Value* wantsRead = builder.CreateICmpNE(builder.CreateAnd(mask, builder.getInt32(1)), builder.getInt32(0));
+                llvm::Value* wantsWrite = builder.CreateICmpNE(builder.CreateAnd(mask, builder.getInt32(2)), builder.getInt32(0));
+                llvm::Value* events = builder.CreateOr(builder.CreateSelect(wantsRead, builder.getInt16(1), builder.getInt16(0)),
+                    builder.CreateSelect(wantsWrite, builder.getInt16(4), builder.getInt16(0)));
+                builder.CreateStore(events, builder.CreateStructGEP(pollFdType, pollFd, 1));
+                auto* returned = builder.CreateStructGEP(pollFdType, pollFd, 2);
+                builder.CreateStore(builder.getInt16(0), returned);
+                auto* pollType = llvm::FunctionType::get(builder.getInt32Ty(),
+                    {builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty()}, false);
+                auto pollFn = module->getOrInsertFunction("poll", pollType);
+                llvm::Value* result = builder.CreateCall(pollFn, {pollFd, builder.getInt64(1), timeout}, "poll.result");
+                auto* timedOut = builder.CreateICmpEQ(result, builder.getInt32(0));
+                auto* pollFailed = builder.CreateICmpSLT(result, builder.getInt32(0));
+                llvm::Value* nativeEvents = builder.CreateLoad(builder.getInt16Ty(), returned);
+                llvm::Value* readReady = builder.CreateICmpNE(builder.CreateAnd(nativeEvents, builder.getInt16(1)), builder.getInt16(0));
+                llvm::Value* writeReady = builder.CreateICmpNE(builder.CreateAnd(nativeEvents, builder.getInt16(4)), builder.getInt16(0));
+                llvm::Value* errorReady = builder.CreateICmpNE(builder.CreateAnd(nativeEvents, builder.getInt16(56)), builder.getInt16(0));
+                llvm::Value* mapped = builder.CreateOr(
+                    builder.CreateSelect(readReady, builder.getInt32(1), builder.getInt32(0)),
+                    builder.CreateOr(builder.CreateSelect(writeReady, builder.getInt32(2), builder.getInt32(0)),
+                                     builder.CreateSelect(errorReady, builder.getInt32(4), builder.getInt32(0))));
+                mapped = builder.CreateSelect(timedOut, builder.getInt32(0), mapped);
+                return builder.CreateSelect(pollFailed, result, mapped, "poll.events");
+            }
+            if (e.text == "Socket_Set_Nonblocking") {
+                llvm::Value* fd = emit(*e.arguments[0]);
+                if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
+                llvm::Value* nb = emit(*e.arguments[1]);
+                if (nb->getType() != builder.getInt1Ty()) nb = builder.CreateTrunc(nb, builder.getInt1Ty());
+                auto* fn = ensureNativeSetNonblockingFunction();
+                return builder.CreateCall(fn, {fd, nb}, "nonblocking.status");
+            }
+            if (e.text == "Socket_Get_Error") {
+                llvm::Value* fd = emit(*e.arguments[0]);
+                if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
+                auto* fn = ensureNativeGetSocketErrorFunction();
+                return builder.CreateCall(fn, {fd}, "socket.error");
+            }
+            if (e.text == "System_Random") {
+                llvm::Value* buffer = emit(*e.arguments[0]);
+                llvm::Value* length = emit(*e.arguments[1]);
+                const bool signedLength = analyzer.typeOf(*e.arguments[1]).kind == TypeKind::Signed;
+                if (length->getType() != builder.getInt64Ty()) length = builder.CreateIntCast(length, builder.getInt64Ty(), signedLength);
+                llvm::Value* invalid = signedLength ? builder.CreateICmpSLT(length, builder.getInt64(0)) : builder.getFalse();
+                llvm::Value* safeLength = builder.CreateSelect(invalid, builder.getInt64(0), length);
+                llvm::Value* result = builder.CreateCall(ensureNativeRandomFunction(), {buffer, safeLength}, "random.bytes.status");
+                return builder.CreateSelect(invalid, builder.getInt64(-1), result);
+            }
+            if (e.text == "Tcp_Listen" || e.text == "Tcp_Listen_V6") {
                 llvm::Value* host = emit(*e.arguments[0]);
                 if (analyzer.typeOf(*e.arguments[0]).kind == TypeKind::Text) {
                     auto* textDataField = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[0])), address(*e.arguments[0]), 0);
                     host = builder.CreateLoad(builder.getPtrTy(), textDataField);
                 }
                 llvm::Value* port = emit(*e.arguments[1]);
-                if (port->getType() != builder.getInt16Ty()) port = builder.CreateTruncOrBitCast(port, builder.getInt16Ty());
-                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy(), builder.getInt16Ty()}, false);
-                auto callee = module->getOrInsertFunction("loom_net_tcp_listen", fnTy);
+                Type portType = analyzer.typeOf(*e.arguments[1]);
+                if (port->getType() != builder.getInt64Ty()) port = builder.CreateIntCast(port, builder.getInt64Ty(), portType.kind == TypeKind::Signed);
+                const bool ipv6 = e.text == "Tcp_Listen_V6";
+                auto* callee = ensureNativeEndpointFunction(ipv6 ? "__loom_native_tcp_listen_v6" : "__loom_native_tcp_listen", false, false, ipv6);
                 return builder.CreateCall(callee, {host, port}, "listen_fd");
             }
             if (e.text == "Tcp_Accept") {
                 llvm::Value* fd = emit(*e.arguments[0]);
                 if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
-                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty()}, false);
-                auto callee = module->getOrInsertFunction("loom_net_tcp_accept", fnTy);
-                return builder.CreateCall(callee, {fd}, "client_fd");
+                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty(), builder.getPtrTy(), builder.getPtrTy()}, false);
+                auto callee = module->getOrInsertFunction("accept", fnTy);
+                return builder.CreateCall(callee, {fd, llvm::ConstantPointerNull::get(builder.getPtrTy()), llvm::ConstantPointerNull::get(builder.getPtrTy())}, "client_fd");
             }
-            if (e.text == "Tcp_Connect") {
+            if (e.text == "Tcp_Connect" || e.text == "Tcp_Connect_V6") {
                 llvm::Value* host = emit(*e.arguments[0]);
                 if (analyzer.typeOf(*e.arguments[0]).kind == TypeKind::Text) {
                     auto* textDataField = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[0])), address(*e.arguments[0]), 0);
                     host = builder.CreateLoad(builder.getPtrTy(), textDataField);
                 }
                 llvm::Value* port = emit(*e.arguments[1]);
-                if (port->getType() != builder.getInt16Ty()) port = builder.CreateTruncOrBitCast(port, builder.getInt16Ty());
-                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy(), builder.getInt16Ty()}, false);
-                auto callee = module->getOrInsertFunction("loom_net_tcp_connect", fnTy);
+                Type portType = analyzer.typeOf(*e.arguments[1]);
+                if (port->getType() != builder.getInt64Ty()) port = builder.CreateIntCast(port, builder.getInt64Ty(), portType.kind == TypeKind::Signed);
+                const bool ipv6 = e.text == "Tcp_Connect_V6";
+                auto* callee = ensureNativeEndpointFunction(ipv6 ? "__loom_native_tcp_connect_v6" : "__loom_native_tcp_connect", false, true, ipv6);
                 return builder.CreateCall(callee, {host, port}, "conn_fd");
             }
             if (e.text == "Tcp_Send") {
@@ -1733,31 +2648,98 @@ class Generator {
                     auto* lField = builder.CreateStructGEP(loomType(dataType), tSlot, 1);
                     dataPtr = builder.CreateLoad(builder.getPtrTy(), dField);
                     lenVal = builder.CreateLoad(builder.getInt64Ty(), lField);
-                } else {
+                } else if (dataType.kind == TypeKind::String) {
                     dataPtr = emit(*e.arguments[1]);
-                    lenVal = builder.getInt64(64);
+                    auto* strlenTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getPtrTy()}, false);
+                    lenVal = builder.CreateCall(module->getOrInsertFunction("strlen", strlenTy), {dataPtr}, "send.string.len");
+                } else {
+                    throw Error("Tcp_Send expects Text or String data");
                 }
-                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty()}, false);
-                auto callee = module->getOrInsertFunction("loom_net_tcp_send", fnTy);
-                return builder.CreateCall(callee, {fd, dataPtr, lenVal}, "sent_len");
+                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty()}, false);
+                auto callee = module->getOrInsertFunction("send", fnTy);
+                return builder.CreateCall(callee, {fd, dataPtr, lenVal, builder.getInt32(0)}, "sent_len");
+            }
+            if (e.text == "Tcp_Send_At") {
+                llvm::Value* fd = emit(*e.arguments[0]);
+                if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
+                Type dataType = analyzer.typeOf(*e.arguments[1]);
+                llvm::Value* dataSlot = address(*e.arguments[1]);
+                auto* dataField = builder.CreateStructGEP(loomType(dataType), dataSlot, 0);
+                auto* lengthField = builder.CreateStructGEP(loomType(dataType), dataSlot, 1);
+                llvm::Value* data = builder.CreateLoad(builder.getPtrTy(), dataField);
+                llvm::Value* total = builder.CreateLoad(builder.getInt64Ty(), lengthField);
+                llvm::Value* offset = emit(*e.arguments[2]);
+                if (offset->getType() != builder.getInt64Ty()) offset = builder.CreateZExtOrTrunc(offset, builder.getInt64Ty());
+                llvm::Value* atLeastOne = builder.CreateICmpUGE(offset, builder.getInt64(1));
+                llvm::Value* atMostEnd = builder.CreateICmpULE(offset, builder.CreateAdd(total, builder.getInt64(1)));
+                llvm::Value* valid = builder.CreateAnd(atLeastOne, atMostEnd);
+                llvm::Value* zeroBased = builder.CreateSelect(valid, builder.CreateSub(offset, builder.getInt64(1)), builder.getInt64(0));
+                llvm::Value* available = builder.CreateSelect(valid, builder.CreateSub(total, zeroBased), builder.getInt64(0));
+                llvm::Value* dataAt = builder.CreateGEP(builder.getInt8Ty(), data, zeroBased, "tcp.send.offset");
+                llvm::Value* ptr = builder.CreateSelect(valid, dataAt, data);
+                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(),
+                    {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty()}, false);
+                auto callee = module->getOrInsertFunction("send", fnTy);
+                llvm::Value* sent = builder.CreateCall(callee, {fd, ptr, available, builder.getInt32(0)}, "sent_from_offset");
+                return builder.CreateSelect(valid, sent, builder.getInt64(-1), "send_offset.status");
+            }
+            if (e.text == "Tcp_Send_Slice") {
+                llvm::Value* fd = emit(*e.arguments[0]);
+                if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
+                llvm::Value* bytes = emit(*e.arguments[1]);
+                llvm::Value* data = builder.CreateExtractValue(bytes, 0, "tcp.slice.ptr");
+                llvm::Value* length = builder.CreateExtractValue(bytes, 1, "tcp.slice.len");
+                if (length->getType() != builder.getInt64Ty()) length = builder.CreateZExtOrTrunc(length, builder.getInt64Ty());
+                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(),
+                    {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty()}, false);
+                auto callee = module->getOrInsertFunction("send", fnTy);
+                return builder.CreateCall(callee, {fd, data, length, builder.getInt32(0)}, "tcp.slice.sent");
+            }
+            if (e.text == "Tcp_Receive_Buffer" || e.text == "Udp_Receive_Buffer") {
+                llvm::Value* fd = emit(*e.arguments[0]);
+                if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
+                llvm::Value* data = emit(*e.arguments[1]);
+                llvm::Value* length = emit(*e.arguments[2]);
+                const bool signedLength = analyzer.typeOf(*e.arguments[2]).kind == TypeKind::Signed;
+                if (length->getType() != builder.getInt64Ty()) length = builder.CreateIntCast(length, builder.getInt64Ty(), signedLength);
+                llvm::Value* invalidLength = signedLength ? builder.CreateICmpSLT(length, builder.getInt64(0)) : builder.getFalse();
+                llvm::Value* safeLength = builder.CreateSelect(invalidLength, builder.getInt64(0), length);
+                if (e.text == "Tcp_Receive_Buffer") {
+                    auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(),
+                        {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty()}, false);
+                    auto callee = module->getOrInsertFunction("recv", fnTy);
+                    llvm::Value* received = builder.CreateCall(callee, {fd, data, safeLength, builder.getInt32(0)}, "tcp.bytes.received");
+                    return builder.CreateSelect(invalidLength, builder.getInt64(-1), received);
+                }
+                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(),
+                    {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty(), builder.getPtrTy(), builder.getPtrTy()}, false);
+                auto callee = module->getOrInsertFunction("recvfrom", fnTy);
+                llvm::Value* received = builder.CreateCall(callee, {fd, data, safeLength, builder.getInt32(0),
+                    llvm::ConstantPointerNull::get(builder.getPtrTy()), llvm::ConstantPointerNull::get(builder.getPtrTy())}, "udp.bytes.received");
+                return builder.CreateSelect(invalidLength, builder.getInt64(-1), received);
             }
             if (e.text == "Tcp_Receive") {
                 llvm::Value* fd = emit(*e.arguments[0]);
                 if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
                 llvm::Value* maxLen = emit(*e.arguments[1]);
-                if (maxLen->getType() != builder.getInt64Ty()) maxLen = builder.CreateZExtOrTrunc(maxLen, builder.getInt64Ty());
+                const bool signedMaxLen = analyzer.typeOf(*e.arguments[1]).kind == TypeKind::Signed;
+                if (maxLen->getType() != builder.getInt64Ty()) maxLen = builder.CreateIntCast(maxLen, builder.getInt64Ty(), signedMaxLen);
+                if (signedMaxLen) maxLen = builder.CreateSelect(builder.CreateICmpSLT(maxLen, builder.getInt64(0)), builder.getInt64(0), maxLen);
                 Type textType = Type::textType();
                 llvm::Value* textSlot = builder.CreateAlloca(loomType(textType), nullptr, "tcp.recv.text");
                 auto* initFnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy(), builder.getInt64Ty()}, false);
                 auto initCallee = module->getOrInsertFunction("loom_text_init", initFnTy);
-                builder.CreateCall(initCallee, {textSlot, maxLen});
+                llvm::Value* capacity = builder.CreateAdd(maxLen, builder.getInt64(1), "tcp.recv.capacity");
+                builder.CreateCall(initCallee, {textSlot, capacity});
                 auto* dField = builder.CreateStructGEP(loomType(textType), textSlot, 0);
                 llvm::Value* bufPtr = builder.CreateLoad(builder.getPtrTy(), dField);
-                auto* recvFnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty()}, false);
-                auto recvCallee = module->getOrInsertFunction("loom_net_tcp_receive", recvFnTy);
-                llvm::Value* recvdBytes = builder.CreateCall(recvCallee, {fd, bufPtr, maxLen}, "recvd_len");
+                auto* recvFnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty()}, false);
+                auto recvCallee = module->getOrInsertFunction("recv", recvFnTy);
+                llvm::Value* recvdBytes = builder.CreateCall(recvCallee, {fd, bufPtr, maxLen, builder.getInt32(0)}, "recvd_len");
                 auto* isNeg = builder.CreateICmpSLT(recvdBytes, builder.getInt64(0));
                 auto* safeRecvd = builder.CreateSelect(isNeg, builder.getInt64(0), recvdBytes, "safe_recvd");
+                auto* terminator = builder.CreateInBoundsGEP(builder.getInt8Ty(), bufPtr, safeRecvd, "recv.terminator");
+                builder.CreateStore(builder.getInt8(0), terminator);
                 auto* lField = builder.CreateStructGEP(loomType(textType), textSlot, 1);
                 builder.CreateStore(safeRecvd, lField);
                 return builder.CreateLoad(loomType(textType), textSlot, "tcp.text");
@@ -1766,22 +2748,71 @@ class Generator {
                 llvm::Value* fd = emit(*e.arguments[0]);
                 if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
                 auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty()}, false);
-                auto callee = module->getOrInsertFunction("loom_net_tcp_close", fnTy);
+                auto callee = module->getOrInsertFunction("close", fnTy);
                 return builder.CreateCall(callee, {fd}, "close_status");
             }
-            if (e.text == "Udp_Bind") {
+            if (e.text == "Udp_Bind" || e.text == "Udp_Bind_V6") {
                 llvm::Value* host = emit(*e.arguments[0]);
                 if (analyzer.typeOf(*e.arguments[0]).kind == TypeKind::Text) {
                     auto* textDataField = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[0])), address(*e.arguments[0]), 0);
                     host = builder.CreateLoad(builder.getPtrTy(), textDataField);
                 }
                 llvm::Value* port = emit(*e.arguments[1]);
-                if (port->getType() != builder.getInt16Ty()) port = builder.CreateTruncOrBitCast(port, builder.getInt16Ty());
-                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy(), builder.getInt16Ty()}, false);
-                auto callee = module->getOrInsertFunction("loom_net_udp_bind", fnTy);
+                Type portType = analyzer.typeOf(*e.arguments[1]);
+                if (port->getType() != builder.getInt64Ty()) port = builder.CreateIntCast(port, builder.getInt64Ty(), portType.kind == TypeKind::Signed);
+                const bool ipv6 = e.text == "Udp_Bind_V6";
+                auto* callee = ensureNativeEndpointFunction(ipv6 ? "__loom_native_udp_bind_v6" : "__loom_native_udp_bind", true, false, ipv6);
                 return builder.CreateCall(callee, {host, port}, "udp_fd");
             }
-            if (e.text == "Udp_Send_To") {
+            if (e.text == "Udp_Connect" || e.text == "Udp_Connect_V6") {
+                llvm::Value* host = emit(*e.arguments[0]);
+                if (analyzer.typeOf(*e.arguments[0]).kind == TypeKind::Text) {
+                    auto* textDataField = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[0])), address(*e.arguments[0]), 0);
+                    host = builder.CreateLoad(builder.getPtrTy(), textDataField);
+                }
+                llvm::Value* port = emit(*e.arguments[1]);
+                Type portType = analyzer.typeOf(*e.arguments[1]);
+                if (port->getType() != builder.getInt64Ty()) port = builder.CreateIntCast(port, builder.getInt64Ty(), portType.kind == TypeKind::Signed);
+                const bool ipv6 = e.text == "Udp_Connect_V6";
+                auto* callee = ensureNativeEndpointFunction(ipv6 ? "__loom_native_udp_connect_v6" : "__loom_native_udp_connect", true, true, ipv6);
+                return builder.CreateCall(callee, {host, port}, "udp_conn_fd");
+            }
+            if (e.text == "Udp_Send") {
+                llvm::Value* fd = emit(*e.arguments[0]);
+                if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
+                llvm::Value* dataPtr = nullptr;
+                llvm::Value* lenVal = nullptr;
+                Type dataType = analyzer.typeOf(*e.arguments[1]);
+                if (dataType.kind == TypeKind::Text) {
+                    llvm::Value* tSlot = address(*e.arguments[1]);
+                    auto* dField = builder.CreateStructGEP(loomType(dataType), tSlot, 0);
+                    auto* lField = builder.CreateStructGEP(loomType(dataType), tSlot, 1);
+                    dataPtr = builder.CreateLoad(builder.getPtrTy(), dField);
+                    lenVal = builder.CreateLoad(builder.getInt64Ty(), lField);
+                } else if (dataType.kind == TypeKind::String) {
+                    dataPtr = emit(*e.arguments[1]);
+                    auto* strlenTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getPtrTy()}, false);
+                    lenVal = builder.CreateCall(module->getOrInsertFunction("strlen", strlenTy), {dataPtr}, "udp.send.string.len");
+                } else {
+                    throw Error("Udp_Send expects Text or String data");
+                }
+                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty()}, false);
+                auto callee = module->getOrInsertFunction("send", fnTy);
+                return builder.CreateCall(callee, {fd, dataPtr, lenVal, builder.getInt32(0)}, "udp.sent_len");
+            }
+            if (e.text == "Udp_Send_Slice") {
+                llvm::Value* fd = emit(*e.arguments[0]);
+                if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
+                llvm::Value* bytes = emit(*e.arguments[1]);
+                llvm::Value* data = builder.CreateExtractValue(bytes, 0, "udp.slice.ptr");
+                llvm::Value* length = builder.CreateExtractValue(bytes, 1, "udp.slice.len");
+                if (length->getType() != builder.getInt64Ty()) length = builder.CreateZExtOrTrunc(length, builder.getInt64Ty());
+                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(),
+                    {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty()}, false);
+                auto callee = module->getOrInsertFunction("send", fnTy);
+                return builder.CreateCall(callee, {fd, data, length, builder.getInt32(0)}, "udp.slice.sent");
+            }
+            if (e.text == "Udp_Send_To" || e.text == "Udp_Send_To_V6") {
                 llvm::Value* fd = emit(*e.arguments[0]);
                 if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
                 llvm::Value* host = emit(*e.arguments[1]);
@@ -1790,7 +2821,8 @@ class Generator {
                     host = builder.CreateLoad(builder.getPtrTy(), textDataField);
                 }
                 llvm::Value* port = emit(*e.arguments[2]);
-                if (port->getType() != builder.getInt16Ty()) port = builder.CreateTruncOrBitCast(port, builder.getInt16Ty());
+                Type portType = analyzer.typeOf(*e.arguments[2]);
+                if (port->getType() != builder.getInt64Ty()) port = builder.CreateIntCast(port, builder.getInt64Ty(), portType.kind == TypeKind::Signed);
                 llvm::Value* dataPtr = nullptr;
                 llvm::Value* lenVal = nullptr;
                 Type dataType = analyzer.typeOf(*e.arguments[3]);
@@ -1800,46 +2832,301 @@ class Generator {
                     auto* lField = builder.CreateStructGEP(loomType(dataType), tSlot, 1);
                     dataPtr = builder.CreateLoad(builder.getPtrTy(), dField);
                     lenVal = builder.CreateLoad(builder.getInt64Ty(), lField);
-                } else {
+                } else if (dataType.kind == TypeKind::String) {
                     dataPtr = emit(*e.arguments[3]);
-                    lenVal = builder.getInt64(64);
+                    auto* strlenTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getPtrTy()}, false);
+                    lenVal = builder.CreateCall(module->getOrInsertFunction("strlen", strlenTy), {dataPtr}, "udp.string.len");
+                } else {
+                    throw Error("Udp_Send_To expects Text or String data");
                 }
-                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt16Ty(), builder.getPtrTy(), builder.getInt64Ty()}, false);
-                auto callee = module->getOrInsertFunction("loom_net_udp_send_to", fnTy);
+                auto* callee = ensureNativeUdpSendFunction(e.text == "Udp_Send_To_V6");
                 return builder.CreateCall(callee, {fd, host, port, dataPtr, lenVal}, "udp_sent");
+            }
+            if (e.text == "Udp_Send_To_Slice" || e.text == "Udp_Send_To_Slice_V6") {
+                llvm::Value* fd = emit(*e.arguments[0]);
+                if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
+                llvm::Value* host = emit(*e.arguments[1]);
+                if (analyzer.typeOf(*e.arguments[1]).kind == TypeKind::Text) {
+                    auto* field = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[1])), address(*e.arguments[1]), 0);
+                    host = builder.CreateLoad(builder.getPtrTy(), field);
+                }
+                llvm::Value* port = emit(*e.arguments[2]);
+                Type portType = analyzer.typeOf(*e.arguments[2]);
+                if (port->getType() != builder.getInt64Ty()) port = builder.CreateIntCast(port, builder.getInt64Ty(), portType.kind == TypeKind::Signed);
+                llvm::Value* bytes = emit(*e.arguments[3]);
+                llvm::Value* data = builder.CreateExtractValue(bytes, 0, "udp.slice.ptr");
+                llvm::Value* length = builder.CreateExtractValue(bytes, 1, "udp.slice.len");
+                if (length->getType() != builder.getInt64Ty()) length = builder.CreateZExtOrTrunc(length, builder.getInt64Ty());
+                auto* callee = ensureNativeUdpSendFunction(e.text == "Udp_Send_To_Slice_V6");
+                return builder.CreateCall(callee, {fd, host, port, data, length}, "udp.slice.sent");
             }
             if (e.text == "Udp_Receive_From") {
                 llvm::Value* fd = emit(*e.arguments[0]);
                 if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
                 llvm::Value* maxLen = emit(*e.arguments[1]);
-                if (maxLen->getType() != builder.getInt64Ty()) maxLen = builder.CreateZExtOrTrunc(maxLen, builder.getInt64Ty());
+                const bool signedMaxLen = analyzer.typeOf(*e.arguments[1]).kind == TypeKind::Signed;
+                if (maxLen->getType() != builder.getInt64Ty()) maxLen = builder.CreateIntCast(maxLen, builder.getInt64Ty(), signedMaxLen);
+                if (signedMaxLen) maxLen = builder.CreateSelect(builder.CreateICmpSLT(maxLen, builder.getInt64(0)), builder.getInt64(0), maxLen);
                 Type textType = Type::textType();
                 llvm::Value* textSlot = builder.CreateAlloca(loomType(textType), nullptr, "udp.recv.text");
                 auto* initFnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy(), builder.getInt64Ty()}, false);
                 auto initCallee = module->getOrInsertFunction("loom_text_init", initFnTy);
-                builder.CreateCall(initCallee, {textSlot, maxLen});
+                llvm::Value* capacity = builder.CreateAdd(maxLen, builder.getInt64(1), "udp.recv.capacity");
+                builder.CreateCall(initCallee, {textSlot, capacity});
                 auto* dField = builder.CreateStructGEP(loomType(textType), textSlot, 0);
                 llvm::Value* bufPtr = builder.CreateLoad(builder.getPtrTy(), dField);
-                auto* recvFnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty()}, false);
-                auto recvCallee = module->getOrInsertFunction("loom_net_udp_receive_from", recvFnTy);
-                llvm::Value* recvdBytes = builder.CreateCall(recvCallee, {fd, bufPtr, maxLen}, "udp_recvd_len");
+                auto* recvFnTy = llvm::FunctionType::get(builder.getInt64Ty(),
+                    {builder.getInt32Ty(), builder.getPtrTy(), builder.getInt64Ty(), builder.getInt32Ty(), builder.getPtrTy(), builder.getPtrTy()}, false);
+                auto recvCallee = module->getOrInsertFunction("recvfrom", recvFnTy);
+                llvm::Value* recvdBytes = builder.CreateCall(recvCallee, {fd, bufPtr, maxLen, builder.getInt32(0),
+                    llvm::ConstantPointerNull::get(builder.getPtrTy()), llvm::ConstantPointerNull::get(builder.getPtrTy())}, "udp_recvd_len");
+                auto* safeRecvd = builder.CreateSelect(builder.CreateICmpSLT(recvdBytes, builder.getInt64(0)), builder.getInt64(0), recvdBytes);
+                auto* terminator = builder.CreateInBoundsGEP(builder.getInt8Ty(), bufPtr, safeRecvd, "udp.recv.terminator");
+                builder.CreateStore(builder.getInt8(0), terminator);
                 auto* lField = builder.CreateStructGEP(loomType(textType), textSlot, 1);
-                builder.CreateStore(recvdBytes, lField);
+                builder.CreateStore(safeRecvd, lField);
                 return builder.CreateLoad(loomType(textType), textSlot, "udp.text");
             }
             if (e.text == "Udp_Close") {
                 llvm::Value* fd = emit(*e.arguments[0]);
                 if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
                 auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt32Ty()}, false);
-                auto callee = module->getOrInsertFunction("loom_net_udp_close", fnTy);
+                auto callee = module->getOrInsertFunction("close", fnTy);
                 return builder.CreateCall(callee, {fd}, "close_status");
             }
-            auto f = functions.find(e.text);
+            if (e.text == "Tls_Client_New") {
+                llvm::Value* host = emit(*e.arguments[0]);
+                if (analyzer.typeOf(*e.arguments[0]).kind == TypeKind::Text) {
+                    auto* field = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[0])), address(*e.arguments[0]), 0);
+                    host = builder.CreateLoad(builder.getPtrTy(), field);
+                }
+                llvm::Value* ca = emit(*e.arguments[1]);
+                if (analyzer.typeOf(*e.arguments[1]).kind == TypeKind::Text) {
+                    auto* field = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[1])), address(*e.arguments[1]), 0);
+                    ca = builder.CreateLoad(builder.getPtrTy(), field);
+                }
+                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getPtrTy(), builder.getPtrTy()}, false);
+                auto callee = module->getOrInsertFunction("loom_tls_client_new", fnTy);
+                return builder.CreateCall(callee, {host, ca}, "tls.handle");
+            }
+            if (e.text == "Tls_Connect") {
+                llvm::Value* handle = emit(*e.arguments[0]);
+                if (handle->getType() != builder.getInt64Ty()) handle = builder.CreateZExtOrTrunc(handle, builder.getInt64Ty());
+                llvm::Value* fd = emit(*e.arguments[1]);
+                if (fd->getType() != builder.getInt32Ty()) fd = builder.CreateTruncOrBitCast(fd, builder.getInt32Ty());
+                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt64Ty(), builder.getInt32Ty()}, false);
+                auto callee = module->getOrInsertFunction("loom_tls_connect", fnTy);
+                return builder.CreateCall(callee, {handle, fd}, "tls.conn_status");
+            }
+            if (e.text == "Tls_Send") {
+                llvm::Value* handle = emit(*e.arguments[0]);
+                if (handle->getType() != builder.getInt64Ty()) handle = builder.CreateZExtOrTrunc(handle, builder.getInt64Ty());
+                llvm::Value* dataPtr = nullptr;
+                llvm::Value* lenVal = nullptr;
+                Type dataType = analyzer.typeOf(*e.arguments[1]);
+                if (dataType.kind == TypeKind::Text) {
+                    llvm::Value* tSlot = address(*e.arguments[1]);
+                    auto* dField = builder.CreateStructGEP(loomType(dataType), tSlot, 0);
+                    auto* lField = builder.CreateStructGEP(loomType(dataType), tSlot, 1);
+                    dataPtr = builder.CreateLoad(builder.getPtrTy(), dField);
+                    lenVal = builder.CreateLoad(builder.getInt64Ty(), lField);
+                } else if (dataType.kind == TypeKind::String) {
+                    dataPtr = emit(*e.arguments[1]);
+                    auto* strlenTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getPtrTy()}, false);
+                    lenVal = builder.CreateCall(module->getOrInsertFunction("strlen", strlenTy), {dataPtr}, "tls.string.len");
+                } else {
+                    throw Error("Tls_Send expects Text or String data");
+                }
+                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt64Ty(), builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto callee = module->getOrInsertFunction("loom_tls_send", fnTy);
+                return builder.CreateCall(callee, {handle, dataPtr, lenVal}, "tls.sent_len");
+            }
+            if (e.text == "Tls_Send_Slice") {
+                llvm::Value* handle = emit(*e.arguments[0]);
+                if (handle->getType() != builder.getInt64Ty()) handle = builder.CreateZExtOrTrunc(handle, builder.getInt64Ty());
+                llvm::Value* bytes = emit(*e.arguments[1]);
+                llvm::Value* data = builder.CreateExtractValue(bytes, 0, "tls.slice.ptr");
+                llvm::Value* length = builder.CreateExtractValue(bytes, 1, "tls.slice.len");
+                if (length->getType() != builder.getInt64Ty()) length = builder.CreateZExtOrTrunc(length, builder.getInt64Ty());
+                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt64Ty(), builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto callee = module->getOrInsertFunction("loom_tls_send", fnTy);
+                return builder.CreateCall(callee, {handle, data, length}, "tls.slice.sent");
+            }
+            if (e.text == "Tls_Receive") {
+                llvm::Value* handle = emit(*e.arguments[0]);
+                if (handle->getType() != builder.getInt64Ty()) handle = builder.CreateZExtOrTrunc(handle, builder.getInt64Ty());
+                llvm::Value* maxLen = emit(*e.arguments[1]);
+                const bool signedMaxLen = analyzer.typeOf(*e.arguments[1]).kind == TypeKind::Signed;
+                if (maxLen->getType() != builder.getInt64Ty()) maxLen = builder.CreateIntCast(maxLen, builder.getInt64Ty(), signedMaxLen);
+                if (signedMaxLen) maxLen = builder.CreateSelect(builder.CreateICmpSLT(maxLen, builder.getInt64(0)), builder.getInt64(0), maxLen);
+                Type textType = Type::textType();
+                llvm::Value* textSlot = builder.CreateAlloca(loomType(textType), nullptr, "tls.recv.text");
+                auto* initFnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto initCallee = module->getOrInsertFunction("loom_text_init", initFnTy);
+                llvm::Value* capacity = builder.CreateAdd(maxLen, builder.getInt64(1), "tls.recv.capacity");
+                builder.CreateCall(initCallee, {textSlot, capacity});
+                auto* dField = builder.CreateStructGEP(loomType(textType), textSlot, 0);
+                llvm::Value* bufPtr = builder.CreateLoad(builder.getPtrTy(), dField);
+                auto* recvFnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt64Ty(), builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto recvCallee = module->getOrInsertFunction("loom_tls_receive", recvFnTy);
+                llvm::Value* recvdBytes = builder.CreateCall(recvCallee, {handle, bufPtr, maxLen}, "tls.recvd_len");
+                auto* isNeg = builder.CreateICmpSLT(recvdBytes, builder.getInt64(0));
+                auto* safeRecvd = builder.CreateSelect(isNeg, builder.getInt64(0), recvdBytes, "tls.safe_recvd");
+                auto* terminator = builder.CreateInBoundsGEP(builder.getInt8Ty(), bufPtr, safeRecvd, "tls.recv.terminator");
+                builder.CreateStore(builder.getInt8(0), terminator);
+                auto* lField = builder.CreateStructGEP(loomType(textType), textSlot, 1);
+                builder.CreateStore(safeRecvd, lField);
+                return builder.CreateLoad(loomType(textType), textSlot, "tls.text");
+            }
+            if (e.text == "Tls_Receive_Buffer") {
+                llvm::Value* handle = emit(*e.arguments[0]);
+                if (handle->getType() != builder.getInt64Ty()) handle = builder.CreateZExtOrTrunc(handle, builder.getInt64Ty());
+                llvm::Value* data = emit(*e.arguments[1]);
+                llvm::Value* length = emit(*e.arguments[2]);
+                const bool signedLength = analyzer.typeOf(*e.arguments[2]).kind == TypeKind::Signed;
+                if (length->getType() != builder.getInt64Ty()) length = builder.CreateIntCast(length, builder.getInt64Ty(), signedLength);
+                llvm::Value* invalidLength = signedLength ? builder.CreateICmpSLT(length, builder.getInt64(0)) : builder.getFalse();
+                llvm::Value* safeLength = builder.CreateSelect(invalidLength, builder.getInt64(0), length);
+                auto* fnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt64Ty(), builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto callee = module->getOrInsertFunction("loom_tls_receive", fnTy);
+                llvm::Value* received = builder.CreateCall(callee, {handle, data, safeLength}, "tls.bytes.received");
+                return builder.CreateSelect(invalidLength, builder.getInt64(-1), received);
+            }
+            if (e.text == "Tls_Close") {
+                llvm::Value* handle = emit(*e.arguments[0]);
+                if (handle->getType() != builder.getInt64Ty()) handle = builder.CreateZExtOrTrunc(handle, builder.getInt64Ty());
+                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt64Ty()}, false);
+                auto callee = module->getOrInsertFunction("loom_tls_close", fnTy);
+                return builder.CreateCall(callee, {handle}, "tls.close_status");
+            }
+            if (e.text == "Tls_Set_Alpn") {
+                llvm::Value* handle = emit(*e.arguments[0]);
+                if (handle->getType() != builder.getInt64Ty()) handle = builder.CreateZExtOrTrunc(handle, builder.getInt64Ty());
+                llvm::Value* proto = emit(*e.arguments[1]);
+                if (analyzer.typeOf(*e.arguments[1]).kind == TypeKind::Text) {
+                    auto* field = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[1])), address(*e.arguments[1]), 0);
+                    proto = builder.CreateLoad(builder.getPtrTy(), field);
+                }
+                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getInt64Ty(), builder.getPtrTy()}, false);
+                auto callee = module->getOrInsertFunction("loom_tls_set_alpn", fnTy);
+                return builder.CreateCall(callee, {handle, proto}, "tls.alpn_status");
+            }
+            if (e.text == "Tls_Get_Alpn") {
+                llvm::Value* handle = emit(*e.arguments[0]);
+                if (handle->getType() != builder.getInt64Ty()) handle = builder.CreateZExtOrTrunc(handle, builder.getInt64Ty());
+                Type textType = Type::textType();
+                llvm::Value* textSlot = builder.CreateAlloca(loomType(textType), nullptr, "tls.alpn.text");
+                auto* initFnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto initCallee = module->getOrInsertFunction("loom_text_init", initFnTy);
+                builder.CreateCall(initCallee, {textSlot, builder.getInt64(64)});
+                auto* dField = builder.CreateStructGEP(loomType(textType), textSlot, 0);
+                llvm::Value* bufPtr = builder.CreateLoad(builder.getPtrTy(), dField);
+                auto* alpnFnTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getInt64Ty(), builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto alpnCallee = module->getOrInsertFunction("loom_tls_get_alpn", alpnFnTy);
+                llvm::Value* lenVal = builder.CreateCall(alpnCallee, {handle, bufPtr, builder.getInt64(64)}, "tls.alpn_len");
+                auto* isNeg = builder.CreateICmpSLT(lenVal, builder.getInt64(0));
+                auto* safeLen = builder.CreateSelect(isNeg, builder.getInt64(0), lenVal, "tls.safe_alpn_len");
+                auto* terminator = builder.CreateInBoundsGEP(builder.getInt8Ty(), bufPtr, safeLen, "tls.alpn.terminator");
+                builder.CreateStore(builder.getInt8(0), terminator);
+                auto* lField = builder.CreateStructGEP(loomType(textType), textSlot, 1);
+                builder.CreateStore(safeLen, lField);
+                return builder.CreateLoad(loomType(textType), textSlot, "tls.alpn");
+            }
+            if (e.text == "Quic_Initial_Keys") {
+                llvm::Value* dcid = emit(*e.arguments[0]);
+                if (analyzer.typeOf(*e.arguments[0]).kind == TypeKind::Text) {
+                    auto* field = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[0])), address(*e.arguments[0]), 0);
+                    dcid = builder.CreateLoad(builder.getPtrTy(), field);
+                }
+                Type textType = Type::textType();
+                llvm::Value* textSlot = builder.CreateAlloca(loomType(textType), nullptr, "quic.keys.text");
+                auto* initFnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto initCallee = module->getOrInsertFunction("loom_text_init", initFnTy);
+                builder.CreateCall(initCallee, {textSlot, builder.getInt64(128)});
+                auto* dField = builder.CreateStructGEP(loomType(textType), textSlot, 0);
+                llvm::Value* bufPtr = builder.CreateLoad(builder.getPtrTy(), dField);
+                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy(), builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto callee = module->getOrInsertFunction("loom_quic_initial_keys", fnTy);
+                builder.CreateCall(callee, {dcid, bufPtr, builder.getInt64(128)});
+                auto* strlenTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getPtrTy()}, false);
+                llvm::Value* lenVal = builder.CreateCall(module->getOrInsertFunction("strlen", strlenTy), {bufPtr}, "quic.keys.len");
+                auto* lField = builder.CreateStructGEP(loomType(textType), textSlot, 1);
+                builder.CreateStore(lenVal, lField);
+                return builder.CreateLoad(loomType(textType), textSlot, "quic.keys");
+            }
+            if (e.text == "Quic_Hp_Mask") {
+                llvm::Value* hp = emit(*e.arguments[0]);
+                if (analyzer.typeOf(*e.arguments[0]).kind == TypeKind::Text) {
+                    auto* field = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[0])), address(*e.arguments[0]), 0);
+                    hp = builder.CreateLoad(builder.getPtrTy(), field);
+                }
+                llvm::Value* sample = emit(*e.arguments[1]);
+                if (analyzer.typeOf(*e.arguments[1]).kind == TypeKind::Text) {
+                    auto* field = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[1])), address(*e.arguments[1]), 0);
+                    sample = builder.CreateLoad(builder.getPtrTy(), field);
+                }
+                Type textType = Type::textType();
+                llvm::Value* textSlot = builder.CreateAlloca(loomType(textType), nullptr, "quic.mask.text");
+                auto* initFnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto initCallee = module->getOrInsertFunction("loom_text_init", initFnTy);
+                builder.CreateCall(initCallee, {textSlot, builder.getInt64(32)});
+                auto* dField = builder.CreateStructGEP(loomType(textType), textSlot, 0);
+                llvm::Value* bufPtr = builder.CreateLoad(builder.getPtrTy(), dField);
+                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy(), builder.getPtrTy(), builder.getPtrTy()}, false);
+                auto callee = module->getOrInsertFunction("loom_quic_hp", fnTy);
+                builder.CreateCall(callee, {hp, sample, bufPtr});
+                auto* strlenTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getPtrTy()}, false);
+                llvm::Value* lenVal = builder.CreateCall(module->getOrInsertFunction("strlen", strlenTy), {bufPtr}, "quic.mask.len");
+                auto* lField = builder.CreateStructGEP(loomType(textType), textSlot, 1);
+                builder.CreateStore(lenVal, lField);
+                return builder.CreateLoad(loomType(textType), textSlot, "quic.mask");
+            }
+            if (e.text == "Quic_Encrypt" || e.text == "Quic_Decrypt") {
+                llvm::Value* key = emit(*e.arguments[0]);
+                if (analyzer.typeOf(*e.arguments[0]).kind == TypeKind::Text) {
+                    auto* field = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[0])), address(*e.arguments[0]), 0);
+                    key = builder.CreateLoad(builder.getPtrTy(), field);
+                }
+                llvm::Value* iv = emit(*e.arguments[1]);
+                if (analyzer.typeOf(*e.arguments[1]).kind == TypeKind::Text) {
+                    auto* field = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[1])), address(*e.arguments[1]), 0);
+                    iv = builder.CreateLoad(builder.getPtrTy(), field);
+                }
+                llvm::Value* pktNum = emit(*e.arguments[2]);
+                if (pktNum->getType() != builder.getInt64Ty()) pktNum = builder.CreateZExtOrTrunc(pktNum, builder.getInt64Ty());
+                llvm::Value* ad = emit(*e.arguments[3]);
+                if (analyzer.typeOf(*e.arguments[3]).kind == TypeKind::Text) {
+                    auto* field = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[3])), address(*e.arguments[3]), 0);
+                    ad = builder.CreateLoad(builder.getPtrTy(), field);
+                }
+                llvm::Value* data = emit(*e.arguments[4]);
+                if (analyzer.typeOf(*e.arguments[4]).kind == TypeKind::Text) {
+                    auto* field = builder.CreateStructGEP(loomType(analyzer.typeOf(*e.arguments[4])), address(*e.arguments[4]), 0);
+                    data = builder.CreateLoad(builder.getPtrTy(), field);
+                }
+                Type textType = Type::textType();
+                llvm::Value* textSlot = builder.CreateAlloca(loomType(textType), nullptr, "quic.cipher.text");
+                auto* initFnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto initCallee = module->getOrInsertFunction("loom_text_init", initFnTy);
+                builder.CreateCall(initCallee, {textSlot, builder.getInt64(8192)});
+                auto* dField = builder.CreateStructGEP(loomType(textType), textSlot, 0);
+                llvm::Value* bufPtr = builder.CreateLoad(builder.getPtrTy(), dField);
+                auto* fnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy(), builder.getPtrTy(), builder.getInt64Ty(), builder.getPtrTy(), builder.getPtrTy(), builder.getPtrTy(), builder.getInt64Ty()}, false);
+                auto callee = module->getOrInsertFunction(e.text == "Quic_Encrypt" ? "loom_quic_encrypt" : "loom_quic_decrypt", fnTy);
+                builder.CreateCall(callee, {key, iv, pktNum, ad, data, bufPtr, builder.getInt64(8192)});
+                auto* strlenTy = llvm::FunctionType::get(builder.getInt64Ty(), {builder.getPtrTy()}, false);
+                llvm::Value* lenVal = builder.CreateCall(module->getOrInsertFunction("strlen", strlenTy), {bufPtr}, "quic.cipher.len");
+                auto* lField = builder.CreateStructGEP(loomType(textType), textSlot, 1);
+                builder.CreateStore(lenVal, lField);
+                return builder.CreateLoad(loomType(textType), textSlot, "quic.result");
+            }
+            const std::string callName = analyzer.resolvedCallName(e);
+            auto f = functions.find(callName);
             if (f == functions.end()) {
                 auto loc = storage.find(e.text);
-                auto glob = globalStorage.find(e.text);
-                if (loc != storage.end() || glob != globalStorage.end()) {
-                    llvm::Value* varSlot = loc != storage.end() ? loc->second : glob->second;
+                auto* gv = findGlobal(e.text);
+                if (loc != storage.end() || gv != nullptr) {
+                    llvm::Value* varSlot = loc != storage.end() ? loc->second : gv;
                     llvm::Value* fnPtr = builder.CreateLoad(builder.getPtrTy(), varSlot, e.text + ".fnptr");
                     Type retType = analyzer.typeOf(e);
                     llvm::Type* retLlvmType = retType.kind == TypeKind::NullType ? builder.getVoidTy() : loomType(retType);
@@ -1852,11 +3139,11 @@ class Generator {
                     auto* fnTy = llvm::FunctionType::get(retLlvmType, paramLlvmTypes, false);
                     return builder.CreateCall(fnTy, fnPtr, args, retLlvmType->isVoidTy() ? "" : "bp.call");
                 }
-                throw Error("internal error: missing function declaration '" + e.text + "'");
+                throw Error("internal error: missing function declaration '" + callName + "'");
             }
             const auto* sig = analyzer.signatureOf(e.text);
             if (sig && sig->isAsync) {
-                llvm::Function* tramp = getOrCreateTaskTrampoline(e.text, *sig);
+                llvm::Function* tramp = getOrCreateTaskTrampoline(callName, *sig);
                 const auto& dl = module->getDataLayout();
                 uint64_t argsSize = 0;
                 llvm::Value* argsPtr = llvm::ConstantPointerNull::get(builder.getPtrTy());
@@ -1881,7 +3168,7 @@ class Generator {
             for (std::size_t i = 0; i < e.arguments.size(); ++i) {
                 const auto& arg = e.arguments[i];
                 bool isRefOrMut = false;
-                auto fnIt = functionDecls.find(e.text);
+                auto fnIt = functionDecls.find(callName);
                 if (fnIt != functionDecls.end() && i < fnIt->second->params.size()) {
                     if (fnIt->second->params[i].isMut || fnIt->second->params[i].isRef) {
                         isRefOrMut = true;
@@ -1891,6 +3178,14 @@ class Generator {
                     args.push_back(address(*arg));
                 } else {
                     args.push_back(emit(*arg));
+                }
+            }
+            if (auto vinfo = analyzer.virtualDispatchInfo(e)) {
+                if (!args.empty()) {
+                    llvm::Value* vptr = builder.CreateLoad(builder.getPtrTy(), args[0], "obj.vptr");
+                    llvm::Value* slotPtr = builder.CreateGEP(builder.getPtrTy(), vptr, builder.getInt64(vinfo->second), "vtable.slot");
+                    llvm::Value* fnPtr = builder.CreateLoad(builder.getPtrTy(), slotPtr, "vtable.fn");
+                    return builder.CreateCall(f->second->getFunctionType(), fnPtr, args, f->second->getReturnType()->isVoidTy() ? "" : "vcall");
                 }
             }
             return builder.CreateCall(f->second, args, f->second->getReturnType()->isVoidTy() ? "" : "call");
@@ -2063,6 +3358,12 @@ class Generator {
                     auto* appendFnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy(), builder.getInt1Ty()}, false);
                     auto appendCallee = module->getOrInsertFunction("loom_text_append_bool", appendFnTy);
                     builder.CreateCall(appendCallee, {textSlot, b});
+                } else if (rType.kind == TypeKind::Text) {
+                    llvm::Value* rhsDataPtr = builder.CreateExtractValue(b, 0, "text.append.data");
+                    llvm::Value* rhsLen = builder.CreateExtractValue(b, 1, "text.append.len");
+                    auto* appendFnTy = llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy(), builder.getPtrTy(), builder.getInt64Ty()}, false);
+                    auto appendCallee = module->getOrInsertFunction("loom_text_append_buf", appendFnTy);
+                    builder.CreateCall(appendCallee, {textSlot, rhsDataPtr, rhsLen});
                 }
                 return builder.CreateLoad(loomType(t), textSlot);
             }
@@ -2156,6 +3457,37 @@ class Generator {
                     builder.SetInsertPoint(sdivOkBlock);
                 }
             }
+            if (baremetal && t.bits <= 32) {
+                if (t.kind == TypeKind::Unsigned) {
+                    llvm::Value* a32 = builder.CreateZExtOrTrunc(a, builder.getInt32Ty());
+                    llvm::Value* b32 = builder.CreateZExtOrTrunc(b, builder.getInt32Ty());
+                    llvm::Value* udivPtr = builder.CreateIntToPtr(builder.getInt32(0xD0000060), builder.getPtrTy());
+                    llvm::Value* udivsPtr = builder.CreateIntToPtr(builder.getInt32(0xD0000064), builder.getPtrTy());
+                    auto* st1 = builder.CreateStore(a32, udivPtr);
+                    st1->setVolatile(true);
+                    auto* st2 = builder.CreateStore(b32, udivsPtr);
+                    st2->setVolatile(true);
+                    uint32_t resAddr = (op == "/") ? 0xD0000070 : 0xD0000074;
+                    llvm::Value* resPtr = builder.CreateIntToPtr(builder.getInt32(resAddr), builder.getPtrTy());
+                    auto* resVal = builder.CreateLoad(builder.getInt32Ty(), resPtr, "sio_udiv_res");
+                    resVal->setVolatile(true);
+                    return builder.CreateTruncOrBitCast(resVal, a->getType());
+                } else {
+                    llvm::Value* a32 = builder.CreateSExtOrTrunc(a, builder.getInt32Ty());
+                    llvm::Value* b32 = builder.CreateSExtOrTrunc(b, builder.getInt32Ty());
+                    llvm::Value* sdivPtr = builder.CreateIntToPtr(builder.getInt32(0xD0000068), builder.getPtrTy());
+                    llvm::Value* sdivsPtr = builder.CreateIntToPtr(builder.getInt32(0xD000006C), builder.getPtrTy());
+                    auto* st1 = builder.CreateStore(a32, sdivPtr);
+                    st1->setVolatile(true);
+                    auto* st2 = builder.CreateStore(b32, sdivsPtr);
+                    st2->setVolatile(true);
+                    uint32_t resAddr = (op == "/") ? 0xD0000070 : 0xD0000074;
+                    llvm::Value* resPtr = builder.CreateIntToPtr(builder.getInt32(resAddr), builder.getPtrTy());
+                    auto* resVal = builder.CreateLoad(builder.getInt32Ty(), resPtr, "sio_sdiv_res");
+                    resVal->setVolatile(true);
+                    return builder.CreateTruncOrBitCast(resVal, a->getType());
+                }
+            }
             if (op == "/")
                 return t.kind == TypeKind::Unsigned ? builder.CreateUDiv(a, b, "divu") : builder.CreateSDiv(a, b, "divs");
             return t.kind == TypeKind::Unsigned ? builder.CreateURem(a, b, "urem") : builder.CreateSRem(a, b, "srem");
@@ -2195,10 +3527,29 @@ class Generator {
             return builder.CreateAnd(a, b, "and");
         if (op == "or")
             return builder.CreateOr(a, b, "or");
-        if (op == "==")
-            return builder.CreateICmpEQ(a, b, "eq");
-        if (op == "!=")
+        if (op == "==" || op == "!=") {
+            if (t.kind == TypeKind::Text) {
+                auto* aSlot = builder.CreateAlloca(loomType(t), nullptr, "text.a.slot");
+                builder.CreateStore(a, aSlot);
+                auto* bSlot = builder.CreateAlloca(loomType(t), nullptr, "text.b.slot");
+                builder.CreateStore(b, bSlot);
+                auto* eqFnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy(), builder.getPtrTy()}, false);
+                auto eqCallee = module->getOrInsertFunction("loom_text_equals", eqFnTy);
+                llvm::Value* res = builder.CreateCall(eqCallee, {aSlot, bSlot});
+                llvm::Value* isEq = builder.CreateICmpNE(res, builder.getInt32(0), "text.eq");
+                return op == "==" ? isEq : builder.CreateNot(isEq, "text.ne");
+            }
+            if (t.kind == TypeKind::String) {
+                auto* eqFnTy = llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy(), builder.getPtrTy()}, false);
+                auto eqCallee = module->getOrInsertFunction("loom_string_equals", eqFnTy);
+                llvm::Value* res = builder.CreateCall(eqCallee, {a, b}, "str.eq.res");
+                llvm::Value* isEq = builder.CreateICmpNE(res, builder.getInt32(0), "str.eq");
+                return op == "==" ? isEq : builder.CreateNot(isEq, "str.ne");
+            }
+            if (op == "==")
+                return builder.CreateICmpEQ(a, b, "eq");
             return builder.CreateICmpNE(a, b, "ne");
+        }
         if (t.kind == TypeKind::Unsigned || t.kind == TypeKind::Character) {
             if (op == "<")
                 return builder.CreateICmpULT(a, b, "lt");
@@ -2715,6 +4066,22 @@ class Generator {
         llvm::Value* nVal = emit(*e.arguments[3]);
         if (nVal->getType() != builder.getInt64Ty()) nVal = builder.CreateZExtOrTrunc(nVal, builder.getInt64Ty());
 
+        if (!baremetal) {
+            llvm::Value* rightPtr = opName == "Vector_Scale"
+                ? llvm::ConstantPointerNull::get(builder.getPtrTy()) : bOrFactor;
+            llvm::Value* factor = opName == "Vector_Scale"
+                ? bOrFactor : llvm::ConstantFP::get(builder.getFloatTy(), 0.0);
+            if (factor->getType() != builder.getFloatTy()) factor = builder.CreateFPCast(factor, builder.getFloatTy());
+            uint32_t operation = opName == "Vector_Add" ? 0 : opName == "Vector_Sub" ? 1 :
+                                 opName == "Vector_Mul" ? 2 : 3;
+            auto* fnTy = llvm::FunctionType::get(builder.getVoidTy(),
+                {builder.getInt32Ty(), builder.getPtrTy(), builder.getPtrTy(), builder.getPtrTy(),
+                 builder.getFloatTy(), builder.getInt64Ty()}, false);
+            auto callee = module->getOrInsertFunction("loom_vec_f32_apply", fnTy);
+            builder.CreateCall(callee, {builder.getInt32(operation), aPtr, rightPtr, outPtr, factor, nVal});
+            return;
+        }
+
         llvm::Function* currentFunc = builder.GetInsertBlock()->getParent();
         auto* header = llvm::BasicBlock::Create(context, "vec.header", currentFunc);
         auto* body = llvm::BasicBlock::Create(context, "vec.body", currentFunc);
@@ -2752,7 +4119,7 @@ class Generator {
         if (countVal->getType() != builder.getInt64Ty()) countVal = builder.CreateZExtOrTrunc(countVal, builder.getInt64Ty());
 
         llvm::Value* workerFunc = nullptr;
-        auto fit = functions.find(e.arguments[1]->text);
+        auto fit = functions.find(analyzer.resolvedCallName(*e.arguments[1]));
         if (fit != functions.end()) {
             workerFunc = fit->second;
         } else {
@@ -2796,11 +4163,21 @@ class Generator {
         }
     }
     llvm::FunctionCallee writePrintf() {
+        if (baremetal) {
+            auto* ptr = builder.getPtrTy();
+            auto* fnType = llvm::FunctionType::get(builder.getInt32Ty(), {ptr}, true);
+            return module->getOrInsertFunction("__loom_usb_printf", fnType);
+        }
         auto* ptr = builder.getPtrTy();
         auto* printfType = llvm::FunctionType::get(builder.getInt32Ty(), {ptr}, true);
         return module->getOrInsertFunction("printf", printfType);
     }
     llvm::FunctionCallee writePutchar() {
+        if (baremetal) {
+            auto* intTy = builder.getInt32Ty();
+            auto* putType = llvm::FunctionType::get(builder.getVoidTy(), {intTy}, false);
+            return module->getOrInsertFunction("__loom_usb_putchar", putType);
+        }
         auto* intTy = builder.getInt32Ty();
         auto* putType = llvm::FunctionType::get(intTy, {intTy}, false);
         return module->getOrInsertFunction("putchar", putType);
@@ -2813,6 +4190,54 @@ class Generator {
             {builder.getInt32(0), builder.getInt32(0)});
     }
     void printValue(llvm::Value* value, Type type, bool withNewline = false, const std::string& formatSpec = "") {
+        if (baremetal) {
+            auto writeStrFn = module->getOrInsertFunction("__loom_usb_write_str",
+                llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false));
+            auto writeU64Fn = module->getOrInsertFunction("__loom_usb_write_u64",
+                llvm::FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty()}, false));
+            auto writeI64Fn = module->getOrInsertFunction("__loom_usb_write_i64",
+                llvm::FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty()}, false));
+            auto writeHexFn = module->getOrInsertFunction("__loom_usb_write_hex",
+                llvm::FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty()}, false));
+            auto writeF64Fn = module->getOrInsertFunction("__loom_usb_write_f64",
+                llvm::FunctionType::get(builder.getVoidTy(), {builder.getDoubleTy()}, false));
+
+            if (type.kind == TypeKind::String) {
+                builder.CreateCall(writeStrFn, {value});
+            } else if (type.kind == TypeKind::Text) {
+                llvm::Value* dataPtr = builder.CreateExtractValue(value, 0);
+                builder.CreateCall(writeStrFn, {dataPtr});
+            } else if (type.kind == TypeKind::Character) {
+                builder.CreateCall(writePutchar(), {builder.CreateZExtOrTrunc(value, builder.getInt32Ty())});
+            } else if (type.kind == TypeKind::Boolean) {
+                builder.CreateCall(writeStrFn, {builder.CreateSelect(value, writeText("True"), writeText("False"))});
+            } else if (type.kind == TypeKind::Signed || (type.kind == TypeKind::Enum && type.enumSigned)) {
+                if (!formatSpec.empty() && (formatSpec.find('x') != std::string::npos || formatSpec.find('X') != std::string::npos)) {
+                    builder.CreateCall(writeHexFn, {builder.CreateZExtOrTrunc(value, builder.getInt64Ty())});
+                } else {
+                    builder.CreateCall(writeI64Fn, {builder.CreateSExtOrTrunc(value, builder.getInt64Ty())});
+                }
+            } else if (type.kind == TypeKind::Unsigned || type.kind == TypeKind::Enum) {
+                if (!formatSpec.empty() && (formatSpec.find('x') != std::string::npos || formatSpec.find('X') != std::string::npos)) {
+                    builder.CreateCall(writeHexFn, {builder.CreateZExtOrTrunc(value, builder.getInt64Ty())});
+                } else {
+                    builder.CreateCall(writeU64Fn, {builder.CreateZExtOrTrunc(value, builder.getInt64Ty())});
+                }
+            } else if (type.kind == TypeKind::Float) {
+                llvm::Value* dblVal = (type.bits == 32) ? builder.CreateFPExt(value, builder.getDoubleTy()) : value;
+                builder.CreateCall(writeF64Fn, {dblVal});
+            } else if (type.kind == TypeKind::Pointer) {
+                builder.CreateCall(writeStrFn, {writeText("0x")});
+                builder.CreateCall(writeHexFn, {builder.CreatePtrToInt(value, builder.getInt64Ty())});
+            } else {
+                builder.CreateCall(writeStrFn, {writeText("[baremetal val]")});
+            }
+            if (withNewline) {
+                builder.CreateCall(writePutchar(), {builder.getInt32(10)});
+            }
+            return;
+        }
+
         if (type.kind == TypeKind::Record) {
             auto* format = writeText("%s");
             builder.CreateCall(writePrintf(), {format, writeText(type.name + "{")});
@@ -3020,16 +4445,19 @@ class Generator {
                 printValue(emit(*s.expr), analyzer.typeOf(*s.expr), /*withNewline=*/true);
             }
         } else if (s.kind == Stmt::Kind::Assign) {
-            if (s.member.empty()) {
+            if (s.name == "_") {
+                // Explicit discard: evaluate for side-effects, drop the result.
+                emit(*s.expr);
+            } else if (s.member.empty()) {
                 if (auto local = storage.find(s.name); local != storage.end())
                     builder.CreateStore(emit(*s.expr), local->second);
                 else
-                    builder.CreateStore(emit(*s.expr), globalStorage.at(s.name));
+                    builder.CreateStore(emit(*s.expr), findGlobal(s.name));
             } else {
                 Type record = analyzer.fieldAssignmentRecord(s);
-                llvm::Value* base = storage.count(s.name) ? storage.at(s.name) : globalStorage.at(s.name);
+                llvm::Value* base = storage.count(s.name) ? storage.at(s.name) : findGlobal(s.name);
                 auto* field = builder.CreateStructGEP(loomType(record), base,
-                    analyzer.fieldIndex(record.name, s.member), s.member + ".addr");
+                    llvmFieldIndex(record.name, s.member), s.member + ".addr");
                 builder.CreateStore(emit(*s.expr), field);
             }
         } else if (s.kind == Stmt::Kind::DerefAssign || s.kind == Stmt::Kind::TargetAssign) {
@@ -3087,6 +4515,7 @@ class Generator {
             switch (s.kind) {
                 case Stmt::Kind::Assign: {
                     llvm::Value* val = emit(*s.expr);
+                    if (s.name == "_") break; // explicit discard — value already computed, just drop it
                     if (s.member.empty()) {
                         auto localIt = types.find(s.name);
                         if (localIt != types.end() && localIt->second.kind == TypeKind::SmartPointer) {
@@ -3109,12 +4538,12 @@ class Generator {
                         if (auto local = storage.find(s.name); local != storage.end())
                             builder.CreateStore(val, local->second);
                         else
-                            builder.CreateStore(val, globalStorage.at(s.name));
+                            builder.CreateStore(val, findGlobal(s.name));
                     } else {
                         Type record = analyzer.fieldAssignmentRecord(s);
-                        llvm::Value* base = storage.count(s.name) ? storage.at(s.name) : globalStorage.at(s.name);
+                        llvm::Value* base = storage.count(s.name) ? storage.at(s.name) : findGlobal(s.name);
                         auto* field = builder.CreateStructGEP(loomType(record), base,
-                            analyzer.fieldIndex(record.name, s.member), s.member + ".addr");
+                            llvmFieldIndex(record.name, s.member), s.member + ".addr");
                         builder.CreateStore(val, field);
                     }
                     break;
@@ -3196,10 +4625,21 @@ class Generator {
                     break;
                 case Stmt::Kind::Give: {
                     std::string returnedVar;
+                    // Text-as-String and To_String are zero-copy views. Transfer
+                    // the backing allocation out of the returning scope instead
+                    // of freeing it before the caller can use the view.
                     if (s.expr && s.expr->kind == Expr::Kind::Variable) {
                         returnedVar = s.expr->text;
                     } else if (s.expr && s.expr->kind == Expr::Kind::Move && s.expr->left && s.expr->left->kind == Expr::Kind::Variable) {
                         returnedVar = s.expr->left->text;
+                    } else if (s.expr && s.expr->kind == Expr::Kind::Cast && s.expr->left &&
+                               s.expr->left->kind == Expr::Kind::Variable &&
+                               analyzer.typeOf(*s.expr->left).kind == TypeKind::Text) {
+                        returnedVar = s.expr->left->text;
+                    } else if (s.expr && s.expr->kind == Expr::Kind::Call && s.expr->text == "To_String" &&
+                               !s.expr->arguments.empty() && s.expr->arguments.front()->kind == Expr::Kind::Variable &&
+                               analyzer.typeOf(*s.expr->arguments.front()).kind == TypeKind::Text) {
+                        returnedVar = s.expr->arguments.front()->text;
                     }
                     llvm::Value* retVal = emit(*s.expr);
                     if (s.expr->kind == Expr::Kind::Call && activeEnsures.empty()) {
@@ -3213,17 +4653,23 @@ class Generator {
                     emitScopeDrops(returnedVar);
                     if (currentFn && currentFn->errorResult) {
                         Type exprType = analyzer.typeOf(*s.expr);
-                        llvm::Value* unionRet = llvm::UndefValue::get(current->getReturnType());
-                        if (exprType == *currentFn->errorResult) {
+                        Type fullRetType = currentFn->result ? *currentFn->result : Type::nullType();
+                        fullRetType.errorType = std::make_shared<Type>(*currentFn->errorResult);
+                        if (currentFn->result && exprType == fullRetType) {
+                            builder.CreateRet(retVal);
+                        } else if (exprType == *currentFn->errorResult) {
+                            llvm::Value* unionRet = llvm::UndefValue::get(current->getReturnType());
                             unionRet = builder.CreateInsertValue(unionRet, retVal, 0);
+                            builder.CreateRet(unionRet);
                         } else {
+                            llvm::Value* unionRet = llvm::UndefValue::get(current->getReturnType());
                             llvm::Value* zeroErr = llvm::ConstantInt::get(loomType(*currentFn->errorResult), 0);
                             unionRet = builder.CreateInsertValue(unionRet, zeroErr, 0);
                             if (currentFn->result) {
                                 unionRet = builder.CreateInsertValue(unionRet, retVal, 1);
                             }
+                            builder.CreateRet(unionRet);
                         }
-                        builder.CreateRet(unionRet);
                     } else {
                         builder.CreateRet(retVal);
                     }
@@ -3309,11 +4755,7 @@ class Generator {
                 case Stmt::Kind::Loop: {
                     std::string iv;
                     if (optReport && isParallelSafeLoop(s, iv)) {
-                        if (baremetal) {
-                            optReport->autoParallelizations.push_back("line " + std::to_string(s.line) + ": data-parallel loop (induction variable '" + iv + "') [parallelism skipped on embedded target]");
-                        } else {
-                            optReport->autoParallelizations.push_back("line " + std::to_string(s.line) + ": auto-parallelized data-parallel loop (induction variable '" + iv + "') across native worker threads");
-                        }
+                        optReport->autoParallelizations.push_back("line " + std::to_string(s.line) + ": loop shape is a possible data-parallel candidate (induction variable '" + iv + "'); no automatic parallel transformation is implemented");
                     }
                     auto* header = llvm::BasicBlock::Create(context, "loop.header", current);
                     auto* exit = llvm::BasicBlock::Create(context, "loop.exit", current);
@@ -3362,6 +4804,10 @@ class Generator {
                     break;
                 }
                 case Stmt::Kind::ForIn: {
+                    if (emitAutoParallelArrayMapLoop(s) || emitAutoParallelArrayFill(s)) {
+                        reachable = true;
+                        break;
+                    }
                     if (s.isRange) {
                         llvm::Value* startVal = emit(*s.expr);
                         llvm::Value* endVal = emit(*s.rangeEnd);
@@ -3547,9 +4993,10 @@ class Generator {
                             } else if (collType.kind == TypeKind::Text) {
                                 auto* dataPtrField = builder.CreateStructGEP(loomType(collType), baseAddr, 0);
                                 llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(), dataPtrField);
-                                auto* charPtr = builder.CreateInBoundsGEP(builder.getInt8Ty(), dataPtr, {i0});
-                                llvm::Value* b = builder.CreateLoad(builder.getInt8Ty(), charPtr);
-                                elemVal = builder.CreateZExt(b, builder.getInt32Ty());
+                                auto* decodeTy = llvm::FunctionType::get(builder.getInt32Ty(),
+                                    {builder.getPtrTy(), builder.getInt64Ty(), builder.getInt64Ty()}, false);
+                                auto decode = module->getOrInsertFunction("loom_utf8_decode_at", decodeTy);
+                                elemVal = builder.CreateCall(decode, {dataPtr, lenVal, i0}, "text.scalar");
                             }
                             builder.CreateStore(elemVal, varSlot);
 
@@ -3560,7 +5007,18 @@ class Generator {
 
                             builder.SetInsertPoint(latch);
                             reachable = true;
-                            llvm::Value* nxt = builder.CreateAdd(curI, builder.getInt64(1));
+                            llvm::Value* step = builder.getInt64(1);
+                            if (collType.kind == TypeKind::Text) {
+                                auto* dataPtrField = builder.CreateStructGEP(loomType(collType), baseAddr, 0);
+                                llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(), dataPtrField);
+                                llvm::Value* byteOffset = builder.CreateSub(curI, builder.getInt64(1));
+                                auto* widthTy = llvm::FunctionType::get(builder.getInt32Ty(),
+                                    {builder.getPtrTy(), builder.getInt64Ty(), builder.getInt64Ty()}, false);
+                                auto width = module->getOrInsertFunction("loom_utf8_width_at", widthTy);
+                                llvm::Value* decodedWidth = builder.CreateCall(width, {dataPtr, lenVal, byteOffset}, "text.width");
+                                step = builder.CreateZExt(decodedWidth, builder.getInt64Ty());
+                            }
+                            llvm::Value* nxt = builder.CreateAdd(curI, step);
                             builder.CreateStore(nxt, iSlot);
                             builder.CreateBr(header);
 
@@ -3799,6 +5257,15 @@ class Generator {
                     }
                     break;
                 }
+                case Stmt::Kind::UnsafeBlock: {
+                    emitStatements(s.body);
+                    break;
+                }
+                case Stmt::Kind::AsmBlock: {
+                    auto* asmFn = llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), false), s.asmTemplate, "", true);
+                    builder.CreateCall(asmFn, {});
+                    break;
+                }
             }
         }
         if (reachable && !terminated()) {
@@ -3845,8 +5312,23 @@ class Generator {
             }
             return llvm::ConstantArray::get(arrTy, elements);
         }
-        if (e.kind == Expr::Kind::Integer)
+        if (e.kind == Expr::Kind::Integer) {
+            if (t.kind == TypeKind::Record) {
+                auto* recTy = llvm::cast<llvm::StructType>(loomType(t));
+                unsigned fIdx = analyzer.isTaggedRecord(t.name) ? 1 : 0;
+                llvm::Constant* vptr = (analyzer.isTaggedRecord(t.name) && vtableGlobals.count(t.name))
+                    ? static_cast<llvm::Constant*>(vtableGlobals.at(t.name))
+                    : static_cast<llvm::Constant*>(llvm::ConstantPointerNull::get(builder.getPtrTy()));
+                llvm::Type* fType = recTy->getElementType(fIdx);
+                llvm::Constant* intVal = llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(fType), e.magnitude);
+                if (analyzer.isTaggedRecord(t.name)) {
+                    return llvm::ConstantStruct::get(recTy, {vptr, intVal});
+                } else {
+                    return llvm::ConstantStruct::get(recTy, {intVal});
+                }
+            }
             return llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(loomType(t)), e.magnitude);
+        }
         if (e.kind == Expr::Kind::Unary && e.text == "-") {
             if (t.kind == TypeKind::Signed || t.kind == TypeKind::Unsigned) {
                 if (e.left && e.left->kind == Expr::Kind::Integer) {
@@ -3894,7 +5376,7 @@ class Generator {
             diCompileUnit = dibuilder->createCompileUnit(
                 llvm::dwarf::DW_LANG_C,
                 diFile,
-                "Loom Compiler 1.4.0",
+                "Loom Compiler 1.5.0",
                 release,
                 "",
                 0
@@ -3916,8 +5398,9 @@ class Generator {
         recordStorageTypes.clear();
         recordDecls.clear();
         functionDecls.clear();
+        vtableGlobals.clear();
         for (const auto& f : fs) {
-            functionDecls.emplace(f.name, &f);
+            functionDecls.emplace(analyzer.functionLLVMName(f), &f);
         }
         for (const auto& record : records) {
             recordDecls.emplace(record.name, &record);
@@ -3925,7 +5408,12 @@ class Generator {
         }
         for (const auto& record : records) {
             std::vector<llvm::Type*> fields;
-            for (const auto& field : record.fields) fields.push_back(loomType(field.type));
+            if (analyzer.isTaggedRecord(record.name)) {
+                fields.push_back(builder.getPtrTy());
+            }
+            for (const auto& fname : analyzer.fieldNames(record.name)) {
+                fields.push_back(loomType(analyzer.fieldType(record.name, fname)));
+            }
             recordStorageTypes.at(record.name)->setBody(fields, record.isPacked);
         }
         for (const auto& r : records) {
@@ -3945,7 +5433,7 @@ class Generator {
                 selfPtr->setName("self");
                 for (size_t fi = 0; fi < r.fields.size(); ++fi) {
                     const auto& fld = r.fields[fi];
-                    auto* fieldPtr = builder.CreateStructGEP(loomType(Type::recordType(r.name)), selfPtr, static_cast<unsigned>(fi), fld.name + ".addr");
+                    auto* fieldPtr = builder.CreateStructGEP(loomType(Type::recordType(r.name)), selfPtr, llvmFieldIndex(r.name, fld.name), fld.name + ".addr");
                     storage[fld.name] = fieldPtr;
                     types[fld.name] = fld.type;
                 }
@@ -3959,11 +5447,12 @@ class Generator {
         }
         globalStorage.clear();
         for (const auto& g : globals) {
+            std::string gName = analyzer.globalLLVMName(g);
             llvm::Constant* initial = g.initializer ? emitGlobalConstant(*g.initializer, g.type)
                                                    : llvm::Constant::getNullValue(loomType(g.type));
             auto* variable = new llvm::GlobalVariable(*module, loomType(g.type), g.constant,
-                llvm::GlobalValue::ExternalLinkage, initial, g.name);
-            globalStorage.emplace(g.name, variable);
+                llvm::GlobalValue::ExternalLinkage, initial, gName);
+            globalStorage.emplace(gName, variable);
         }
         // All signatures are declared first, so LLVM symbols remain stable and future calls can be added safely.
         functions.clear();
@@ -3988,17 +5477,41 @@ class Generator {
             } else if (f.result) {
                 retTy = loomType(*f.result);
             }
+            const std::string fnName = analyzer.functionLLVMName(f);
             auto* ft = llvm::FunctionType::get(retTy, args, false);
-            auto* fn = module->getFunction(f.name);
+            auto* fn = module->getFunction(fnName);
             if (!fn) {
-                fn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, f.name, *module);
+                fn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, fnName, *module);
                 fn->addFnAttr(llvm::Attribute::NoUnwind);
+                if (f.isInterrupt) {
+                    fn->addFnAttr("interrupt", "IRQ");
+                }
             }
-            functions.emplace(f.name, fn);
+            functions.emplace(fnName, fn);
+        }
+        for (const auto& record : records) {
+            if (!analyzer.isTaggedRecord(record.name)) continue;
+            const auto* vfuncs = analyzer.getVtableFunctions(record.name);
+            std::vector<llvm::Constant*> entries;
+            if (vfuncs) {
+                for (const auto& fnName : *vfuncs) {
+                    if (!fnName.empty() && functions.count(fnName)) {
+                        entries.push_back(functions.at(fnName));
+                    } else {
+                        entries.push_back(llvm::ConstantPointerNull::get(builder.getPtrTy()));
+                    }
+                }
+            }
+            if (entries.empty()) entries.push_back(llvm::ConstantPointerNull::get(builder.getPtrTy()));
+            auto* arrTy = llvm::ArrayType::get(builder.getPtrTy(), entries.size());
+            auto* initArr = llvm::ConstantArray::get(arrTy, entries);
+            auto* vtbl = new llvm::GlobalVariable(*module, arrTy, true, llvm::GlobalValue::InternalLinkage,
+                initArr, "__vtable_" + record.name);
+            vtableGlobals[record.name] = vtbl;
         }
         for (const auto& f : fs) {
             if (f.isExtern) continue;
-            current = functions.at(f.name);
+            current = functions.at(analyzer.functionLLVMName(f));
             currentFn = &f;
             if (emitDebug && dibuilder && diFile) {
                 llvm::DISubroutineType* diSubroutine = dibuilder->createSubroutineType(dibuilder->getOrCreateTypeArray({}));
@@ -4024,6 +5537,7 @@ class Generator {
             reachable = true;
             storage.clear();
             types.clear();
+            currentLocalArrays.clear();
             loops.clear();
             activeEnsures.clear();
             std::size_t index = 0;
@@ -4053,9 +5567,26 @@ class Generator {
             }
             for (const auto& d : f.locals) {
                 types.emplace(d.name, d.type);
+                if (d.type.kind == TypeKind::Array) currentLocalArrays.insert(d.name);
                 auto* slot = builder.CreateAlloca(loomType(d.type), nullptr, d.name + ".addr");
-                builder.CreateStore(llvm::Constant::getNullValue(loomType(d.type)), slot);
+                llvm::Type* localType = loomType(d.type);
+                if (d.type.kind == TypeKind::Array) {
+                    const auto& layout = module->getDataLayout();
+                    const auto bytes = layout.getTypeAllocSize(localType).getFixedValue();
+                    if (bytes >= 4096) {
+                        builder.CreateMemSet(slot, builder.getInt8(0), builder.getInt64(bytes),
+                                             layout.getABITypeAlign(localType));
+                    } else {
+                        builder.CreateStore(llvm::Constant::getNullValue(localType), slot);
+                    }
+                } else {
+                    builder.CreateStore(llvm::Constant::getNullValue(localType), slot);
+                }
                 storage.emplace(d.name, slot);
+                if (d.type.kind == TypeKind::Record && analyzer.isTaggedRecord(d.type.name) && vtableGlobals.count(d.type.name)) {
+                    auto* vptrSlot = builder.CreateStructGEP(localType, slot, 0, d.name + ".vptr");
+                    builder.CreateStore(vtableGlobals.at(d.type.name), vptrSlot);
+                }
                 if (d.type.kind == TypeKind::Text && !d.initializer) {
                     uint64_t cap = d.type.arraySize > 0 ? d.type.arraySize : 64;
                     auto initFn = module->getOrInsertFunction("loom_text_init",
@@ -4085,7 +5616,26 @@ class Generator {
             }
             for (const auto& d : f.locals)
                 if (d.initializer) builder.CreateStore(emit(*d.initializer), storage.at(d.name));
-            emitStatements(f.body);
+            if (f.isPeriodic) {
+                auto* loopBB = llvm::BasicBlock::Create(context, "periodic.loop", current);
+                builder.CreateBr(loopBB);
+                builder.SetInsertPoint(loopBB);
+                emitStatements(f.body);
+                if (f.periodicIntervalExpr) {
+                    llvm::Value* intervalVal = emit(*f.periodicIntervalExpr);
+                    if (intervalVal && intervalVal->getType()->isIntegerTy()) {
+                        if (intervalVal->getType()->getIntegerBitWidth() < 64) {
+                            intervalVal = builder.CreateZExt(intervalVal, builder.getInt64Ty());
+                        }
+                        auto sleepFn = module->getOrInsertFunction("time__Sleep_US",
+                            llvm::FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty()}, false));
+                        builder.CreateCall(sleepFn, {intervalVal});
+                    }
+                }
+                if (!terminated()) builder.CreateBr(loopBB);
+            } else {
+                emitStatements(f.body);
+            }
             if (reachable && !terminated()) {
                 if (f.result)
                     throw Error("line " + std::to_string(f.line) +
@@ -4125,12 +5675,31 @@ class Generator {
 };
 
 std::string diagnosticCode(const std::string& message) {
-    if (message.find("unsupported character") != std::string::npos || message.find("literal is too large") != std::string::npos ||
-        message.find("unterminated") != std::string::npos || message.find("escape") != std::string::npos ||
-        message.find("UTF-8") != std::string::npos || message.find("Unicode scalar") != std::string::npos ||
-        message.find("floating-point literal is out of range") != std::string::npos) return "E0001";
-    if (message.find("expected ") != std::string::npos || message.find("mismatched") != std::string::npos ||
-        message.find("unexpected End") != std::string::npos || message.find("unsupported keyword") != std::string::npos) return "E1001";
+    const std::string msg = message;
+    if (msg.find("unsupported character") != std::string::npos || msg.find("literal is too large") != std::string::npos ||
+        msg.find("unterminated") != std::string::npos || msg.find("escape") != std::string::npos ||
+        msg.find("UTF-8") != std::string::npos || msg.find("Unicode scalar") != std::string::npos ||
+        msg.find("newline in string") != std::string::npos || msg.find("newline in character") != std::string::npos ||
+        msg.find("floating-point literal is out of range") != std::string::npos) return "E0001";
+    if (msg.find("expected ") != std::string::npos || msg.find("unexpected End") != std::string::npos ||
+        msg.find("unsupported keyword") != std::string::npos || msg.find("malformed") != std::string::npos) return "E1001";
+    if (msg.find("undeclared variable") != std::string::npos || msg.find("unknown identifier") != std::string::npos ||
+        msg.find("unresolved identifier") != std::string::npos || msg.find("cannot find") != std::string::npos ||
+        msg.find("not found in") != std::string::npos || msg.find("Assignment to undeclared") != std::string::npos) return "E0425";
+    if (msg.find("already declared") != std::string::npos || msg.find("duplicate") != std::string::npos ||
+        msg.find("redefinition") != std::string::npos) return "E0428";
+    if (msg.find("requires compatible operands") != std::string::npos || msg.find("mismatched") != std::string::npos ||
+        msg.find("type mismatch") != std::string::npos || msg.find("cannot cast") != std::string::npos ||
+        msg.find("equality requires") != std::string::npos || msg.find("requires Boolean") != std::string::npos) return "E0308";
+    if (msg.find("requires an Array") != std::string::npos || msg.find("Indexing requires") != std::string::npos ||
+        msg.find("indexing requires") != std::string::npos) return "E0608";
+    if (msg.find("cannot mutate read-only") != std::string::npos) return "E0506";
+    if (msg.find("moved") != std::string::npos || msg.find("borrow") != std::string::npos ||
+        msg.find("use-after-free") != std::string::npos) return "E0382";
+    if (msg.find("requires numeric") != std::string::npos || msg.find("requires integer") != std::string::npos ||
+        (msg.find("operator") != std::string::npos && msg.find("requires") != std::string::npos)) return "E0277";
+    if (msg.find("argument") != std::string::npos && (msg.find("expects") != std::string::npos || msg.find("got") != std::string::npos)) return "E0061";
+    if (msg.find("Match") != std::string::npos && msg.find("exhaustive") != std::string::npos) return "E0004";
     return "E2001";
 }
 std::string diagnosticTitle(std::string message) {
@@ -4138,6 +5707,42 @@ std::string diagnosticTitle(std::string message) {
     message = std::regex_replace(message, prefix, "");
     if (!message.empty()) message[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(message[0])));
     return message;
+}
+std::string diagnosticJsonEscape(const std::string& value) {
+    std::ostringstream out;
+    for (unsigned char c : value) {
+        switch (c) {
+            case '"': out << "\\\""; break;
+            case '\\': out << "\\\\"; break;
+            case '\b': out << "\\b"; break;
+            case '\f': out << "\\f"; break;
+            case '\n': out << "\\n"; break;
+            case '\r': out << "\\r"; break;
+            case '\t': out << "\\t"; break;
+            default:
+                if (c < 0x20) out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<unsigned>(c) << std::dec;
+                else out << static_cast<char>(c);
+        }
+    }
+    return out.str();
+}
+void printDiagnosticJson(const Error& error, const std::vector<std::string>& paths) {
+    const std::string message = error.what();
+    int line = error.span.line;
+    if (line <= 0) {
+        std::smatch match;
+        if (std::regex_search(message, match, std::regex(R"((?:^|\b)line ([0-9]+):)"))) line = std::stoi(match[1]);
+    }
+    const bool hasSource = error.span.source < paths.size();
+    const std::string file = hasSource ? paths[error.span.source] : (paths.empty() ? "" : paths.front());
+    const int startLine = std::max(0, line > 0 ? line - 1 : 0);
+    const int startColumn = std::max(0, error.span.column > 0 ? error.span.column - 1 : 0);
+    const int endColumn = startColumn + std::max(1, error.span.length);
+    std::cerr << "{\"severity\":\"error\",\"code\":\"" << diagnosticCode(message)
+              << "\",\"message\":\"" << diagnosticJsonEscape(diagnosticTitle(message))
+              << "\",\"file\":\"" << diagnosticJsonEscape(file) << "\",\"range\":{\"start\":{\"line\":"
+              << startLine << ",\"character\":" << startColumn << "},\"end\":{\"line\":"
+              << startLine << ",\"character\":" << endColumn << "}}}\n";
 }
 void printDiagnostic(const Error& error, const std::vector<std::string>& paths,
                      const std::vector<std::string>& sourceTexts) {
@@ -4152,13 +5757,12 @@ void printDiagnostic(const Error& error, const std::vector<std::string>& paths,
     const std::string title = diagnosticTitle(message);
     bool useColor = false;
 #ifndef _WIN32
-    if ((isatty(STDERR_FILENO) || std::getenv("LOOM_COLOR") != nullptr) && std::getenv("NO_COLOR") == nullptr) useColor = true;
+    if ((isatty(STDERR_FILENO) || isatty(STDOUT_FILENO) || std::getenv("LOOM_COLOR") != nullptr) && std::getenv("NO_COLOR") == nullptr) useColor = true;
 #endif
     const std::string red = useColor ? "\033[1;31m" : "";
     const std::string bold = useColor ? "\033[1m" : "";
-    const std::string blue = useColor ? "\033[1;34m" : "";
+    const std::string blue = useColor ? "\033[1;36m" : "";
     const std::string cyan = useColor ? "\033[1;36m" : "";
-    const std::string yellow = useColor ? "\033[1;33m" : "";
     const std::string reset = useColor ? "\033[0m" : "";
 
     std::cerr << red << "error[" << diagnosticCode(message) << "]: " << reset << bold << title << reset << "\n";
@@ -4174,7 +5778,29 @@ void printDiagnostic(const Error& error, const std::vector<std::string>& paths,
     std::string sourceLine;
     if (static_cast<std::size_t>(line) <= lines.size()) sourceLine = lines[static_cast<std::size_t>(line - 1)];
     int column = std::max(1, error.span.column);
-    if (error.span.column == 0 && !sourceLine.empty()) {
+    if (error.span.column > 0 && !sourceLine.empty()) {
+        // Internal spans use LSP UTF-16 columns; render a terminal column with
+        // tab stops expanded so the caret still aligns with the displayed text.
+        const int wantedUnits = error.span.column - 1;
+        int units = 0;
+        column = 1;
+        for (std::size_t i = 0; i < sourceLine.size() && units < wantedUnits;) {
+            const unsigned char byte = static_cast<unsigned char>(sourceLine[i]);
+            if (sourceLine[i] == '\t') {
+                ++units;
+                column += 4 - ((column - 1) % 4);
+                ++i;
+            } else if ((byte & 0xC0) != 0x80) {
+                const int bytes = (byte & 0xF8) == 0xF0 ? 4 : (byte & 0xF0) == 0xE0 ? 3 : (byte & 0xE0) == 0xC0 ? 2 : 1;
+                const int utf16 = bytes == 4 ? 2 : 1;
+                units += utf16;
+                column += utf16;
+                i += static_cast<std::size_t>(bytes);
+            } else {
+                ++i;
+            }
+        }
+    } else if (!sourceLine.empty()) {
         std::smatch match;
         if (std::regex_search(message, match, std::regex("'([^']+)'"))) {
             const auto found = sourceLine.find(match[1].str());
@@ -4194,9 +5820,114 @@ void printDiagnostic(const Error& error, const std::vector<std::string>& paths,
     for (int i = 1; i < column; ++i) std::cerr << ' ';
     std::cerr << red << '^';
     for (int i = 1; i < std::max(1, error.span.length); ++i) std::cerr << '~';
-    std::cerr << " " << title << reset << "\n";
-    if (message.find("unsupported character") != std::string::npos)
+
+    std::string underlineLabel = "";
+    if (message.find("undeclared variable") != std::string::npos ||
+        message.find("unknown identifier") != std::string::npos ||
+        message.find("unresolved") != std::string::npos ||
+        message.find("Assignment to undeclared") != std::string::npos) {
+        underlineLabel = "not found in this scope";
+    } else if (message.find("requires compatible operands") != std::string::npos ||
+               message.find("equality requires") != std::string::npos ||
+               message.find("type mismatch") != std::string::npos) {
+        underlineLabel = "type mismatch";
+    } else if (message.find("Indexing requires") != std::string::npos ||
+               message.find("indexing requires") != std::string::npos) {
+        underlineLabel = "cannot be indexed";
+    } else if (message.find("cannot mutate read-only") != std::string::npos) {
+        underlineLabel = "cannot mutate read-only Ref";
+    } else if (message.find("cannot cast") != std::string::npos) {
+        underlineLabel = "invalid type cast";
+    } else if (message.find("already declared") != std::string::npos ||
+               message.find("duplicate") != std::string::npos) {
+        underlineLabel = "already declared in this scope";
+    } else if (message.find("unterminated string") != std::string::npos) {
+        underlineLabel = "unterminated string literal";
+    } else if (message.find("unterminated character") != std::string::npos) {
+        underlineLabel = "unterminated character literal";
+    } else if (title.size() <= 32) {
+        underlineLabel = title;
+    }
+
+    if (!underlineLabel.empty()) {
+        std::cerr << " " << red << underlineLabel << reset << "\n";
+    } else {
+        std::cerr << reset << "\n";
+    }
+
+    std::string varName;
+    std::smatch match;
+    if (std::regex_search(message, match, std::regex("'([^']+)'"))) {
+        varName = match[1].str();
+    }
+
+    std::cerr << "   " << blue << "|" << reset << "\n";
+
+    if (message.find("undeclared variable") != std::string::npos ||
+        message.find("unknown identifier") != std::string::npos ||
+        message.find("unresolved") != std::string::npos ||
+        message.find("Assignment to undeclared") != std::string::npos) {
+        std::cerr << "   " << cyan << "= help:" << reset << " consider declaring '" << (varName.empty() ? "variable" : varName)
+                  << "' in the 'Declares' section:\n"
+                  << "          " << cyan << "Declares\n"
+                  << "              " << (varName.empty() ? "Variable_Name" : varName) << " : <Type>" << reset << "\n";
+
+        if (!varName.empty() && hasSource) {
+            std::vector<std::string> similarNames;
+            std::regex idRegex(R"([A-Za-z_][A-Za-z0-9_]*)");
+            const std::string& srcText = sourceTexts[source];
+            auto words_begin = std::sregex_iterator(srcText.begin(), srcText.end(), idRegex);
+            static const std::unordered_set<std::string> reservedWords = {
+                "Module","Block","Global","Takes","Produces","Declares","Implements","End","Give","If","Else",
+                "Loop","While","while","Until","until","Exit","Skip","Ensure","Match","match","When","when","Import","Use","use",
+                "Default","default","Where","where","In","in","Move","move","Copy","copy","Borrow","borrow",
+                "Constant","Record","Enum","Extern","Packed","packed","Align","align","Address","Deref","Cast","Slice","Null",
+                "True","False","And","Or","or","Not","Mod","LSL","LSR","Spawn","Join","Cancel","Allocate",
+                "Resize","Release","Try","try","Test","As","as","Pow","pow","Volatile","volatile",
+                "Signed_8","Signed_16","Signed_32","Signed_64","Unsigned_8","Unsigned_16","Unsigned_32","Unsigned_64",
+                "Float_32","Float_64","Boolean","Character","String","Text","Task_Handle","Pointer","Array","Vector","HMap"
+            };
+            auto words_end = std::sregex_iterator();
+            std::set<std::string> seenIds;
+            std::string vLower = varName;
+            for (auto& c : vLower) c = std::tolower(c);
+
+            for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
+                std::string word = (*i).str();
+                if (word == varName || seenIds.count(word) || reservedWords.count(word)) continue;
+                seenIds.insert(word);
+                std::string wLower = word;
+                for (auto& c : wLower) c = std::tolower(c);
+                if (wLower == vLower ||
+                    (wLower.size() >= 5 && vLower.size() >= 5 &&
+                     (wLower.find(vLower.substr(0, 5)) != std::string::npos ||
+                      vLower.find(wLower.substr(0, 5)) != std::string::npos))) {
+                    similarNames.push_back(word);
+                    if (similarNames.size() >= 3) break;
+                }
+            }
+            if (!similarNames.empty()) {
+                std::cerr << "   " << cyan << "= note:" << reset << " similar names exist in scope: ";
+                for (size_t si = 0; si < similarNames.size(); ++si) {
+                    std::cerr << "'" << cyan << similarNames[si] << reset << "'" << (si + 1 < similarNames.size() ? ", " : "\n");
+                }
+            }
+        }
+    } else if (message.find("unsupported character") != std::string::npos) {
         std::cerr << "   " << cyan << "= help:" << reset << " check that the character is part of the currently supported Loom syntax\n";
+    } else if (message.find("indexing requires") != std::string::npos || message.find("Indexing requires") != std::string::npos) {
+        std::cerr << "   " << cyan << "= help:" << reset << " 1-based indexing [I] is supported on Array, Slice, Pointer, Vector, String, and Text\n";
+    } else if (message.find("requires compatible operands") != std::string::npos || message.find("equality requires") != std::string::npos) {
+        std::cerr << "   " << cyan << "= help:" << reset << " comparison operators require operands of the same type; use 'Name as String' to borrow a zero-cost view of Text\n";
+    } else if (message.find("unterminated string") != std::string::npos) {
+        std::cerr << "   " << cyan << "= help:" << reset << " string literal is missing a closing quote '\"' before the end of the line\n";
+    } else if (message.find("unterminated character") != std::string::npos) {
+        std::cerr << "   " << cyan << "= help:" << reset << " character literal is missing a closing quote '\'' before the end of the line\n";
+    } else if (message.find("cannot mutate read-only") != std::string::npos) {
+        std::cerr << "   " << cyan << "= help:" << reset << " parameter is marked 'Ref' (read-only); use 'Mut' if mutation is required\n";
+    } else if (message.find("cannot cast") != std::string::npos) {
+        std::cerr << "   " << cyan << "= help:" << reset << " verify that the cast conforms to Loom's explicit, zero-cost conversion rules\n";
+    }
 }
 std::string readFile(const std::string& path) {
     std::ifstream in(path);
@@ -4240,27 +5971,32 @@ void optimizeModule(llvm::Module& module, llvm::TargetMachine& machine, bool agg
 }
 
 extern "C" {
+#ifndef LOOM_TOOLCHAIN_RP2040_ONLY
     void LLVMInitializeAArch64TargetInfo();
     void LLVMInitializeAArch64Target();
     void LLVMInitializeAArch64TargetMC();
     void LLVMInitializeAArch64AsmPrinter();
     void LLVMInitializeAArch64AsmParser();
+#endif
     void LLVMInitializeARMTargetInfo();
     void LLVMInitializeARMTarget();
     void LLVMInitializeARMTargetMC();
     void LLVMInitializeARMAsmPrinter();
     void LLVMInitializeARMAsmParser();
+#ifndef LOOM_TOOLCHAIN_RP2040_ONLY
     void LLVMInitializeX86TargetInfo();
     void LLVMInitializeX86Target();
     void LLVMInitializeX86TargetMC();
     void LLVMInitializeX86AsmPrinter();
     void LLVMInitializeX86AsmParser();
+#endif
 }
 
 inline void initializeLoomTargets() {
     static bool initialized = false;
     if (initialized) return;
     initialized = true;
+#ifndef LOOM_TOOLCHAIN_RP2040_ONLY
     (void)llvm::InitializeNativeTarget();
     (void)llvm::InitializeNativeTargetAsmPrinter();
     (void)llvm::InitializeNativeTargetAsmParser();
@@ -4269,16 +6005,19 @@ inline void initializeLoomTargets() {
     LLVMInitializeAArch64TargetMC();
     LLVMInitializeAArch64AsmPrinter();
     LLVMInitializeAArch64AsmParser();
+#endif
     LLVMInitializeARMTargetInfo();
     LLVMInitializeARMTarget();
     LLVMInitializeARMTargetMC();
     LLVMInitializeARMAsmPrinter();
     LLVMInitializeARMAsmParser();
+#ifndef LOOM_TOOLCHAIN_RP2040_ONLY
     LLVMInitializeX86TargetInfo();
     LLVMInitializeX86Target();
     LLVMInitializeX86TargetMC();
     LLVMInitializeX86AsmPrinter();
     LLVMInitializeX86AsmParser();
+#endif
 }
 
 void writeObject(llvm::Module& module, const std::string& path, bool release,

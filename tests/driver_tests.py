@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix="loom-cli-suite-") as tmp:
     tc_nat = test_home / ".loom" / "toolchains" / "native"
     (tc_nat / "bin").mkdir(parents=True, exist_ok=True)
     (tc_nat / "bin" / "loomc").symlink_to(loomc)
-    (tc_nat / "toolchain.toml").write_text('name = "native"\nkind = "native"\nversion = "1.4.0"\ndescription = "Loom Native Desktop Toolchain"\n')
+    (tc_nat / "toolchain.toml").write_text('name = "native"\nkind = "native"\nversion = "1.5.0"\ndescription = "Loom Native Desktop Toolchain"\n')
 
     run(["new", "hello"], parent)
     project = parent / "hello"
@@ -144,7 +144,7 @@ End Add
     missing_config = run(["graph", "--config", "missing.toml"], project, check=False)
     assert missing_config.returncode != 0 and "missing.toml" in missing_config.stderr
     version = run(["--version"], project)
-    assert "1.4.0" in version.stdout
+    assert "1.5.0" in version.stdout
     help_text = run(["--help"], project)
     assert "loom graph" in help_text.stdout and "--verbose" in help_text.stdout
     unsupported_mode = run(["build", "--freestanding"], project, check=False)

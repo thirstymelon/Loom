@@ -1,0 +1,321 @@
+Module Qpack
+Import Hpack
+use Hpack
+
+Record Qpack_Context
+    Capacity : Unsigned_64
+End Qpack_Context
+
+Block Qpack_New Takes
+    Capacity : Unsigned_64
+Produces Qpack_Context
+Declares
+    Ctx : Qpack_Context
+Implements
+    Ctx.Capacity = Capacity
+    Give Ctx
+End Qpack_New
+
+Block Qpack_Static_Name Takes
+    Idx : Signed_32
+Produces Text
+Declares
+    Res : Text
+Implements
+    If Idx == 0
+        Res += ":authority"
+    Else If Idx == 1
+        Res += ":path"
+    Else If Idx == 2
+        Res += "age"
+    Else If Idx == 3
+        Res += "content-disposition"
+    Else If Idx == 4
+        Res += "content-length"
+    Else If Idx == 5
+        Res += "cookie"
+    Else If Idx == 6
+        Res += "date"
+    Else If Idx == 7
+        Res += "etag"
+    Else If Idx == 8
+        Res += "if-modified-since"
+    Else If Idx == 9
+        Res += "if-none-match"
+    Else If Idx == 10
+        Res += "last-modified"
+    Else If Idx == 11
+        Res += "link"
+    Else If Idx == 12
+        Res += "location"
+    Else If Idx == 13
+        Res += "referer"
+    Else If Idx == 14
+        Res += "set-cookie"
+    Else If Idx >= 15 And Idx <= 21
+        Res += ":method"
+    Else If Idx == 22 Or Idx == 23
+        Res += ":scheme"
+    Else If Idx >= 24 And Idx <= 28
+        Res += ":status"
+    Else If Idx == 29 Or Idx == 30
+        Res += "accept"
+    Else If Idx == 31
+        Res += "accept-encoding"
+    Else If Idx == 32
+        Res += "accept-ranges"
+    Else If Idx == 33
+        Res += "access-control-allow-headers"
+    Else If Idx == 34
+        Res += "access-control-allow-origin"
+    Else If Idx == 35
+        Res += "cache-control"
+    Else If Idx == 36
+        Res += "content-encoding"
+    Else If Idx == 37
+        Res += "content-type"
+    Else If Idx == 38
+        Res += "range"
+    Else If Idx == 39
+        Res += "strict-transport-security"
+    Else If Idx == 40
+        Res += "vary"
+    Else
+        Res += ":path"
+    End If
+    Give Res
+End Qpack_Static_Name
+
+Block Qpack_Static_Value Takes
+    Idx : Signed_32
+Produces Text
+Declares
+    Res : Text
+Implements
+    If Idx == 1
+        Res += "/"
+    Else If Idx == 2 Or Idx == 4
+        Res += "0"
+    Else If Idx == 15
+        Res += "CONNECT"
+    Else If Idx == 16
+        Res += "DELETE"
+    Else If Idx == 17
+        Res += "GET"
+    Else If Idx == 18
+        Res += "HEAD"
+    Else If Idx == 19
+        Res += "OPTIONS"
+    Else If Idx == 20
+        Res += "POST"
+    Else If Idx == 21
+        Res += "PUT"
+    Else If Idx == 22
+        Res += "http"
+    Else If Idx == 23
+        Res += "https"
+    Else If Idx == 24
+        Res += "103"
+    Else If Idx == 25
+        Res += "200"
+    Else If Idx == 26
+        Res += "304"
+    Else If Idx == 27
+        Res += "404"
+    Else If Idx == 28
+        Res += "503"
+    Else If Idx == 29
+        Res += "*/*"
+    Else If Idx == 31
+        Res += "gzip, deflate, br"
+    Else If Idx == 32
+        Res += "bytes"
+    Else If Idx == 34
+        Res += "*"
+    End If
+    Give Res
+End Qpack_Static_Value
+
+Block Qpack_Match_Static_Header Takes
+    Name : Text
+    Value : Text
+Produces Signed_32
+Declares
+    I : Signed_32 = 0
+    N : Text
+    V : Text
+    Partial_Match : Signed_32 = -1
+Implements
+    Loop while (I <= 40)
+        N = Qpack_Static_Name(I)
+        If N == Name
+            V = Qpack_Static_Value(I)
+            If V.Length > 0 And V == Value
+                Give I
+            End If
+            If Partial_Match < 0
+                Partial_Match = I
+            End If
+        End If
+        I = I + 1
+    End Loop
+    If Partial_Match >= 0
+        Give 0 - (Partial_Match + 1)
+    End If
+    Give -1000
+End Qpack_Match_Static_Header
+
+Block Qpack_Encode_Header_Field Takes
+    Name : Text
+    Value : Text
+Produces Text
+Declares
+    Out : Text
+    Match_Idx : Signed_32
+    Name_Idx : Signed_32
+Implements
+    Match_Idx = Qpack_Match_Static_Header(Name, Value)
+    If Match_Idx >= 0
+        # Indexed field line from static table: 11xxxxxx (6-bit prefix)
+        Out += Hpack.Encode_Int(Match_Idx as Unsigned_64, 6, 192)
+        Give Out
+    End If
+
+    If Match_Idx < -100
+        # Both name and value are literal: 00100000 (32) followed by name string and value string
+        Out += Hpack.Encode_Int(0, 3, 32)
+        Out += Hpack.Encode_String(Name)
+        Out += Hpack.Encode_String(Value)
+        Give Out
+    End If
+
+    # Name is indexed from static table, value is literal: 0101xxxx (80)
+    Name_Idx = (0 - Match_Idx) - 1
+    Out += Hpack.Encode_Int(Name_Idx as Unsigned_64, 4, 80)
+    Out += Hpack.Encode_String(Value)
+    Give Out
+End Qpack_Encode_Header_Field
+
+Block Qpack_Encode_Headers Takes
+    Ctx : Qpack_Context
+    Headers_Raw : Text
+Produces Text
+Declares
+    Out : Text
+    Len : Unsigned_64
+    I : Unsigned_64 = 1
+    Line_Start : Unsigned_64 = 1
+    Colon_Pos : Unsigned_64 = 0
+    Line_End : Unsigned_64 = 0
+    H_Name : Text
+    H_Val : Text
+    J : Unsigned_64
+    C : Unsigned_32
+    Zero_Byte : Character
+Implements
+    # Section prefix: Required Insert Count (0) + Delta Base (0)
+    Zero_Byte = 0 as Character
+    Out += Zero_Byte
+    Out += Zero_Byte
+
+    Len = Headers_Raw.Length
+    Loop while (I <= Len)
+        C = Headers_Raw[I] as Unsigned_32
+        If C == 58 And I > Line_Start And Colon_Pos == 0 # ':'
+            Colon_Pos = I
+        End If
+        If C == 10 # '\n'
+            Line_End = I - 1
+            If Line_End >= Line_Start And (Headers_Raw[Line_End] as Unsigned_32) == 13 # '\r'
+                Line_End = Line_End - 1
+            End If
+            If Colon_Pos > Line_Start And Colon_Pos <= Line_End
+                H_Name = Empty_Text()
+                J = Line_Start
+                Loop while (J < Colon_Pos)
+                    H_Name += Headers_Raw[J .. J]
+                    J = J + 1
+                End Loop
+
+                H_Val = Empty_Text()
+                J = Colon_Pos + 1
+                Loop while (J <= Line_End And (Headers_Raw[J] as Unsigned_32) == 32)
+                    J = J + 1
+                End Loop
+                Loop while (J <= Line_End)
+                    H_Val += Headers_Raw[J .. J]
+                    J = J + 1
+                End Loop
+
+                Out += Qpack_Encode_Header_Field(H_Name, H_Val)
+            End If
+            Line_Start = I + 1
+            Colon_Pos = 0
+        End If
+        I = I + 1
+    End Loop
+
+    Give Out
+End Qpack_Encode_Headers
+
+Block Qpack_Decode_Headers Takes
+    Ctx : Qpack_Context
+    Data : Text
+Produces Text
+Declares
+    Out : Text
+    Pos : Unsigned_64 = 3 # Skip 2-byte Section Prefix
+    Len : Unsigned_64
+    B : Unsigned_32
+    Di : Decoded_Int
+    Ds : Decoded_String
+    Idx : Signed_32
+    H_Name : Text
+    H_Val : Text
+Implements
+    Len = Data.Length
+    Loop while (Pos <= Len)
+        B = Data[Pos] as Unsigned_32
+        If (B / 128) == 1
+            # 1xxxxxxx: Indexed Field Line
+            Di = Hpack.Decode_Int(Data, Pos, 6)
+            Pos = Di.Next_Pos
+            Idx = Di.Value as Signed_32
+            H_Name = Qpack_Static_Name(Idx)
+            H_Val = Qpack_Static_Value(Idx)
+            Out += H_Name
+            Out += ": "
+            Out += H_Val
+            Out += "\r\n"
+        Else If (B / 64) == 1
+            # 01xxxxxx: Literal with Name Reference
+            Di = Hpack.Decode_Int(Data, Pos, 4)
+            Pos = Di.Next_Pos
+            Idx = Di.Value as Signed_32
+            H_Name = Qpack_Static_Name(Idx)
+            Ds = Hpack.Decode_String(Data, Pos)
+            H_Val = Ds.Str
+            Pos = Ds.Next_Pos
+            Out += H_Name
+            Out += ": "
+            Out += H_Val
+            Out += "\r\n"
+        Else
+            # Literal Field Line with Literal Name (0010xxxx)
+            Di = Hpack.Decode_Int(Data, Pos, 3)
+            Pos = Di.Next_Pos
+            Ds = Hpack.Decode_String(Data, Pos)
+            H_Name = Ds.Str
+            Pos = Ds.Next_Pos
+            Ds = Hpack.Decode_String(Data, Pos)
+            H_Val = Ds.Str
+            Pos = Ds.Next_Pos
+            Out += H_Name
+            Out += ": "
+            Out += H_Val
+            Out += "\r\n"
+        End If
+    End Loop
+
+    Give Out
+End Qpack_Decode_Headers

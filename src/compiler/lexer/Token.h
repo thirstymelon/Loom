@@ -151,11 +151,16 @@ enum class K {
     Async,
     Await,
     Lock,
+    Interrupt,
+    Unsafe,
     Move,
     Copy,
     Borrow,
     Ref,
     Mut,
+    Generic,
+    Tagged,
+    Inherits,
     Unsupported
 };
 struct Token {

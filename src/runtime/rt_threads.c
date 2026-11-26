@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
+#include <stdatomic.h>
 
 #if defined(__APPLE__)
 #include <sys/types.h>
@@ -30,6 +31,7 @@ struct LoomTask {
     pthread_cond_t cond;
     struct LoomTask* next;
     bool worker_done;
+    bool counted_as_user_task;
 };
 
 #define TASK_QUEUE_CAPACITY 1024
@@ -53,12 +55,102 @@ static LoomThreadPool g_pool = {
     .worker_count = 0
 };
 
+static _Thread_local int g_inside_loom_worker = 0;
+static void loom_init_thread_pool(void);
+static _Atomic(uint32_t) g_user_tasks_outstanding = 0;
+
+static struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool active;
+    uint64_t count;
+    uint64_t grain;
+    _Atomic(uint64_t) next;
+    uint32_t active_workers;
+    LoomParallelFn fn;
+    LoomParallelChunkFn chunk_fn;
+    void* context;
+} g_parallel = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .cond = PTHREAD_COND_INITIALIZER,
+    .active = false,
+    .count = 0,
+    .grain = 1,
+    .next = 0,
+    .active_workers = 0,
+    .fn = NULL,
+    .context = NULL
+};
+
+static uint64_t loom_parallel_claim(uint64_t count, uint64_t grain) {
+    uint64_t begin = atomic_load_explicit(&g_parallel.next, memory_order_relaxed);
+    for (;;) {
+        if (begin >= count) return count;
+        const uint64_t remaining = count - begin;
+        const uint64_t end = remaining < grain ? count : begin + grain;
+        if (atomic_compare_exchange_weak_explicit(&g_parallel.next, &begin, end,
+                memory_order_relaxed, memory_order_relaxed)) return begin;
+    }
+}
+
+static void loom_parallel_run_claimed(uint64_t begin, LoomParallelFn fn, void* context,
+                                      LoomParallelChunkFn chunk_fn, uint64_t count, uint64_t grain) {
+    uint64_t remaining = count - begin;
+    uint64_t end = remaining < grain ? count : begin + grain;
+    if (chunk_fn) chunk_fn(context, begin, end);
+    else for (uint64_t i = begin; i < end; ++i) fn(context, i);
+}
+
+static bool loom_parallel_worker_run(void) {
+    pthread_mutex_lock(&g_parallel.mutex);
+    if (!g_parallel.active) {
+        pthread_mutex_unlock(&g_parallel.mutex);
+        return false;
+    }
+    const uint64_t count = g_parallel.count, grain = g_parallel.grain;
+    uint64_t begin = loom_parallel_claim(count, grain);
+    if (begin >= g_parallel.count) {
+        pthread_mutex_unlock(&g_parallel.mutex);
+        return false;
+    }
+    ++g_parallel.active_workers;
+    LoomParallelFn fn = g_parallel.fn;
+    LoomParallelChunkFn chunk_fn = g_parallel.chunk_fn;
+    void* context = g_parallel.context;
+    pthread_mutex_unlock(&g_parallel.mutex);
+
+    g_inside_loom_worker = 1;
+    do {
+        loom_parallel_run_claimed(begin, fn, context, chunk_fn, count, grain);
+        begin = loom_parallel_claim(count, grain);
+    } while (begin < count);
+    g_inside_loom_worker = 0;
+
+    pthread_mutex_lock(&g_parallel.mutex);
+    --g_parallel.active_workers;
+    pthread_cond_broadcast(&g_parallel.cond);
+    pthread_mutex_unlock(&g_parallel.mutex);
+    return true;
+}
+
 static void* loom_worker_thread(void* arg) {
     (void)arg;
     while (1) {
+        if (loom_parallel_worker_run()) continue;
         pthread_mutex_lock(&g_pool.queue_mutex);
         while (!g_pool.queue_head && !g_pool.shutdown) {
             pthread_cond_wait(&g_pool.queue_cond, &g_pool.queue_mutex);
+            pthread_mutex_unlock(&g_pool.queue_mutex);
+            if (loom_parallel_worker_run()) {
+                pthread_mutex_lock(&g_pool.queue_mutex);
+                break;
+            }
+            pthread_mutex_lock(&g_pool.queue_mutex);
+        }
+
+        if (!g_pool.queue_head && !g_pool.shutdown) {
+            pthread_mutex_unlock(&g_pool.queue_mutex);
+            continue;
         }
 
         if (g_pool.shutdown && !g_pool.queue_head) {
@@ -77,6 +169,10 @@ static void* loom_worker_thread(void* arg) {
         if (task) {
             pthread_mutex_lock(&task->lock);
             if (task->state == LOOM_TASK_CANCELLED) {
+                if (task->counted_as_user_task) {
+                    atomic_fetch_sub_explicit(&g_user_tasks_outstanding, 1, memory_order_release);
+                    task->counted_as_user_task = false;
+                }
                 task->worker_done = true;
                 pthread_cond_broadcast(&task->cond);
                 pthread_mutex_unlock(&task->lock);
@@ -86,11 +182,17 @@ static void* loom_worker_thread(void* arg) {
             pthread_mutex_unlock(&task->lock);
 
             /* Execute target task procedure */
+            g_inside_loom_worker = 1;
             task->entry(task->args, task->result);
+            g_inside_loom_worker = 0;
 
             pthread_mutex_lock(&task->lock);
             if (task->state != LOOM_TASK_CANCELLED) {
                 task->state = LOOM_TASK_COMPLETED;
+            }
+            if (task->counted_as_user_task) {
+                atomic_fetch_sub_explicit(&g_user_tasks_outstanding, 1, memory_order_release);
+                task->counted_as_user_task = false;
             }
             task->worker_done = true;
             pthread_cond_broadcast(&task->cond);
@@ -98,6 +200,111 @@ static void* loom_worker_thread(void* arg) {
         }
     }
     return NULL;
+}
+
+static void loom_parallel_dispatch(uint64_t count, uint64_t minimum_grain, LoomParallelFn fn,
+                                   LoomParallelChunkFn chunk_fn, void* context) {
+    if ((!fn && !chunk_fn) || count == 0) return;
+    if (minimum_grain == 0) minimum_grain = 1;
+    if (count < minimum_grain || g_inside_loom_worker ||
+        atomic_load_explicit(&g_user_tasks_outstanding, memory_order_acquire) != 0) {
+        if (chunk_fn) chunk_fn(context, 0, count);
+        else for (uint64_t i = 0; i < count; ++i) fn(context, i);
+        return;
+    }
+
+    loom_init_thread_pool();
+    uint64_t needed = count / minimum_grain + (count % minimum_grain != 0);
+    /* Fewer than eight chunks rarely amortize pool wakeups and synchronization. */
+    if (g_pool.worker_count < 2 || needed < 8) {
+        if (chunk_fn) chunk_fn(context, 0, count);
+        else for (uint64_t i = 0; i < count; ++i) fn(context, i);
+        return;
+    }
+
+    pthread_mutex_lock(&g_parallel.mutex);
+    while (g_parallel.active) pthread_cond_wait(&g_parallel.cond, &g_parallel.mutex);
+    g_parallel.active = true;
+    g_parallel.count = count;
+    g_parallel.grain = minimum_grain;
+    g_parallel.active_workers = 0;
+    g_parallel.fn = fn;
+    g_parallel.chunk_fn = chunk_fn;
+    g_parallel.context = context;
+    atomic_store_explicit(&g_parallel.next, 0, memory_order_relaxed);
+    pthread_mutex_unlock(&g_parallel.mutex);
+
+    pthread_mutex_lock(&g_pool.queue_mutex);
+    pthread_cond_broadcast(&g_pool.queue_cond);
+    pthread_mutex_unlock(&g_pool.queue_mutex);
+
+    uint64_t begin;
+    while ((begin = loom_parallel_claim(count, minimum_grain)) < count)
+        loom_parallel_run_claimed(begin, fn, context, chunk_fn, count, minimum_grain);
+
+    pthread_mutex_lock(&g_parallel.mutex);
+    while (g_parallel.active_workers != 0)
+        pthread_cond_wait(&g_parallel.cond, &g_parallel.mutex);
+    g_parallel.active = false;
+    g_parallel.fn = NULL;
+    g_parallel.chunk_fn = NULL;
+    g_parallel.context = NULL;
+    pthread_cond_broadcast(&g_parallel.cond);
+    pthread_mutex_unlock(&g_parallel.mutex);
+}
+
+void loom_parallel_for(uint64_t count, uint64_t minimum_grain, LoomParallelFn fn, void* context) {
+    loom_parallel_dispatch(count, minimum_grain, fn, NULL, context);
+}
+
+void loom_parallel_for_chunks(uint64_t count, uint64_t minimum_grain, LoomParallelChunkFn fn, void* context) {
+    loom_parallel_dispatch(count, minimum_grain, NULL, fn, context);
+}
+
+typedef struct {
+    uint32_t operation;
+    const float* left;
+    const float* right;
+    float* output;
+    float factor;
+} LoomF32ApplyContext;
+
+static void loom_f32_apply_chunk(void* opaque, uint64_t begin, uint64_t end) {
+    const LoomF32ApplyContext* c = (const LoomF32ApplyContext*)opaque;
+    if (c->operation == 3) {
+        for (uint64_t i = begin; i < end; ++i) c->output[i] = c->left[i] * c->factor;
+    } else if (c->operation == 0) {
+        for (uint64_t i = begin; i < end; ++i) c->output[i] = c->left[i] + c->right[i];
+    } else if (c->operation == 1) {
+        for (uint64_t i = begin; i < end; ++i) c->output[i] = c->left[i] - c->right[i];
+    } else {
+        for (uint64_t i = begin; i < end; ++i) c->output[i] = c->left[i] * c->right[i];
+    }
+}
+
+static int loom_ranges_partially_overlap(const void* a, const void* b, uint64_t bytes) {
+    if (a == b) return 0; /* Exact in-place operation is element-independent. */
+    uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
+    if (bytes > UINTPTR_MAX - x || bytes > UINTPTR_MAX - y) return 1;
+    return x < y + bytes && y < x + bytes;
+}
+
+void loom_vec_f32_apply(uint32_t operation, const float* left, const float* right,
+                        float* output, float factor, uint64_t count) {
+    if (count == 0) return;
+    if (operation > 3) loom_runtime_abort("invalid Vector operation");
+    if (!left || !output || (operation != 3 && !right))
+        loom_runtime_abort("null pointer in Vector operation");
+    if (count > SIZE_MAX / sizeof(float)) loom_runtime_abort("Vector operation size overflow");
+    const uint64_t bytes = count * sizeof(float);
+    if (loom_ranges_partially_overlap(left, output, bytes) ||
+        (operation != 3 && loom_ranges_partially_overlap(right, output, bytes))) {
+        LoomF32ApplyContext context = {operation, left, right, output, factor};
+        loom_f32_apply_chunk(&context, 0, count);
+        return;
+    }
+    LoomF32ApplyContext context = {operation, left, right, output, factor};
+    loom_parallel_for_chunks(count, 32768, loom_f32_apply_chunk, &context);
 }
 
 static void loom_init_thread_pool_once(void) {
@@ -143,6 +350,8 @@ LoomTask* loom_task_spawn(LoomTaskFn entry, void* args, size_t args_size, size_t
     task->result_size = result_size;
     task->next = NULL;
     task->worker_done = false;
+    task->counted_as_user_task = true;
+    atomic_fetch_add_explicit(&g_user_tasks_outstanding, 1, memory_order_release);
 
     if (args_size > 0 && args) {
         task->args = malloc(args_size);

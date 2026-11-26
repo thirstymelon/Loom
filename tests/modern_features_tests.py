@@ -8,14 +8,23 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if len(sys.argv) > 1 and Path(sys.argv[1]).is_file():
     LOOMC = Path(sys.argv[1]).resolve()
-elif (REPO_ROOT / "build" / "loomc").is_file():
-    LOOMC = (REPO_ROOT / "build" / "loomc").resolve()
 elif (REPO_ROOT / ".build" / "loomc").is_file():
     LOOMC = (REPO_ROOT / ".build" / "loomc").resolve()
+elif (REPO_ROOT / "build" / "loomc").is_file():
+    LOOMC = (REPO_ROOT / "build" / "loomc").resolve()
 elif (REPO_ROOT / "bin" / "loomc").is_file():
     LOOMC = (REPO_ROOT / "bin" / "loomc").resolve()
 else:
     LOOMC = Path("/usr/local/bin/loomc")
+
+if (REPO_ROOT / ".build" / "loom").is_file():
+    LOOM = (REPO_ROOT / ".build" / "loom").resolve()
+elif (REPO_ROOT / "build" / "loom").is_file():
+    LOOM = (REPO_ROOT / "build" / "loom").resolve()
+elif (REPO_ROOT / "bin" / "loom").is_file():
+    LOOM = (REPO_ROOT / "bin" / "loom").resolve()
+else:
+    LOOM = Path("/usr/local/bin/loom")
 
 LOOM_RT = None
 for cand in [LOOMC.parent / "libloom_rt.a", LOOMC.parent.parent / "lib" / "libloom_rt.a", REPO_ROOT / "build" / "libloom_rt.a", REPO_ROOT / ".build" / "libloom_rt.a"]:
@@ -657,13 +666,14 @@ End Main
         # Native opt-report
         r = subprocess.run([str(LOOMC), "--opt-report", str(src), str(out_ll)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
-        assert "auto-parallelized data-parallel loop (induction variable 'I') across native worker threads" in r.stdout
+        assert "possible data-parallel candidate (induction variable 'I')" in r.stdout
+        assert "no automatic parallel transformation is implemented" in r.stdout
 
         # Bare-metal opt-report skips parallelism
         r_bm = subprocess.run([str(LOOMC), "--baremetal", "--opt-report", str(src), str(out_ll)], capture_output=True, text=True)
         assert r_bm.returncode == 0, r_bm.stderr
-        assert "[parallelism skipped on embedded target]" in r_bm.stdout
-    print("[PASS] Safe implicit multi-threading loop detection in opt-report (Native vs Embedded)")
+        assert "no automatic parallel transformation is implemented" in r_bm.stdout
+    print("[PASS] Opt-report labels parallel-loop candidates without claiming threading")
 
 def test_tooling_features():
     with tempfile.TemporaryDirectory() as tmp:
@@ -1533,10 +1543,16 @@ Implements
         TxtLen += 1
     End Loop
     Print(TxtLen) # 4
+    Txt += "é"
+    TxtLen = 0
+    Loop Ch in Txt
+        TxtLen += 1
+    End Loop
+    Print(TxtLen) # UTF-8 scalar iteration counts é once
 End Main
 """
     out = compile_and_run(code)
-    assert out.strip().splitlines() == ["15", "60", "300", "4"], out
+    assert out.strip().splitlines() == ["15", "60", "300", "4", "5"], out
     print("[PASS] v1.4 For-In Loops over ranges, Arrays, Vectors, and Text")
 
 def test_v14_closures():
@@ -2162,6 +2178,320 @@ targets = [
         assert "arm64-apple-darwin" in res2.stdout
     print("[PASS] v1.5 Multi-Target Cross-Compilation (config.toml & CLI --target)")
 
+def test_text_indexing_equality_and_formatting():
+    src = """Module Main
+
+Block Make_Text
+Takes
+    S : String
+Produces Text
+Declares
+    T : Text
+Implements
+    T += S
+    Give T
+End Make_Text
+
+Block Main
+Declares
+    Password               : String = "SecretPass"
+    Password_Hash          : Text
+    Password_Hash_Worker   : Text Task_Handle = Spawn Make_Text(Password)
+
+    User_Input             : String = "SecretPass"
+    User_Input_Hash        : Text
+    User_Input_Hash_Worker : Text Task_Handle = Spawn Make_Text(User_Input)
+
+Implements
+    Password_Hash += Join Password_Hash_Worker
+    User_Input_Hash += Join User_Input_Hash_Worker
+
+    If Password_Hash == User_Input_Hash
+        Print("Hashes Match Equal")
+    End If
+
+    Loop I in 1 .. 4
+        If Password_Hash[I] as Character == User_Input_Hash[I] as Character
+            Print(Password_Hash[I] as Character)
+        End If
+    End Loop
+
+    # Borrow view as string
+    Print(Password_Hash as String)
+End Main
+"""
+    out = compile_and_run(src)
+    assert "Hashes Match Equal" in out
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_file = Path(tmpdir) / "test.loom"
+        test_file.write_text("Block Double Takes Num : Signed_32 Produces Num*2 End Double\n")
+        res = subprocess.run([str(LOOM), "fmt", str(test_file)], capture_output=True, text=True)
+        assert res.returncode == 0
+        formatted = test_file.read_text()
+        assert "Block Double\nTakes\n    Num : Signed_32\nProduces Num * 2\nEnd Double" in formatted
+        test_file.write_text("Block AtLeast Takes Value : Signed_32 Produces Boolean Implements Give Value >= 1 End AtLeast\n")
+        res = subprocess.run([str(LOOM), "fmt", str(test_file)], capture_output=True, text=True)
+        assert res.returncode == 0, res.stderr
+        formatted = test_file.read_text()
+        assert "Value >= 1" in formatted and "Value > = 1" not in formatted, formatted
+    print("[PASS] Text Indexing, Deep Equality, 'as String' View, and Single-Line Formatter Expansion")
+
+def test_explicit_wrapping_arithmetic():
+    source = """Module WrappingArithmetic
+
+Block Main
+Declares
+    A : Signed_8 = 127
+    B : Signed_8
+Implements
+    B = Wrapping_Add(A, 1)
+    Print(B)
+    Print(Wrapping_Mul(A, 2))
+End Main
+"""
+    out = compile_and_run(source)
+    assert out.strip().splitlines() == ["-128", "-2"], out
+    print("[PASS] Explicit fixed-width wrapping arithmetic")
+
+def test_implicit_vector_parallelism():
+    source = """Module ImplicitVectorParallelism
+
+Block Main
+Declares
+    A : Float_32 Pointer
+    B : Float_32 Pointer
+    C : Float_32 Pointer
+    I : Signed_64 = 1
+    N : Signed_64 = 65536
+Implements
+    A = Allocate(N)
+    B = Allocate(N)
+    C = Allocate(N)
+    Loop Until I > N
+        A[I] = 1.0
+        B[I] = 2.0
+        I = Wrapping_Add(I, 1)
+    End Loop
+    Vector_Add(A, B, C, N)
+    Print(C[1])
+    Print(C[N])
+    Vector_Add(A, B, A, N)
+    Print(A[N])
+    Vector_Sub(A, B, C, N)
+    Print(C[N])
+    Vector_Mul(A, B, C, N)
+    Print(C[N])
+    Vector_Scale(B, 3.0, C, N)
+    Print(C[N])
+    Vector_Scale(B, 3.0, C, 16)
+    Print(C[16])
+    Release(A)
+    Release(B)
+    Release(C)
+End Main
+"""
+    out = compile_and_run(source)
+    assert out.strip().splitlines() == ["3", "3", "3", "1", "6", "6", "6"], out
+    print("[PASS] Automatic Float32 vector parallelism, aliasing, and small-input fallback")
+
+def test_proven_automatic_parallel_array_fill():
+    source = """Module AutomaticParallelArrayFill
+
+Block Main Declares
+    Values : Signed_32 Array[1048576]
+Implements
+    Loop I in 1..1048576
+        Values[I] = 16909060
+    End Loop
+    Print(Values[1])
+    Print(Values[524288])
+    Print(Values[1048576])
+End Main
+"""
+    out = compile_and_run(source)
+    assert out.strip().splitlines() == ["16909060", "16909060", "16909060"], out
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "fill.loom"
+        ir = Path(tmp) / "fill.ll"
+        src.write_text(source)
+        result = subprocess.run([str(LOOMC), "--opt-report", str(src), str(ir)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert "parallelized proven independent fixed-array fill" in result.stdout, result.stdout
+        assert "loom_parallel_for_chunks" in ir.read_text(), "expected the proven loop to lower to the parallel runtime"
+        unsafe_source = source.replace("1..1048576", "1..1048577")
+        src.write_text(unsafe_source)
+        unsafe_ir = Path(tmp) / "unsafe.ll"
+        result = subprocess.run([str(LOOMC), str(src), str(unsafe_ir)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert "loom_parallel_for_chunks" not in unsafe_ir.read_text(), "out-of-range loop must retain checked sequential lowering"
+        baremetal_ir = Path(tmp) / "baremetal.ll"
+        result = subprocess.run([str(LOOMC), "--baremetal", str(src), str(baremetal_ir)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert "loom_parallel_for_chunks" not in baremetal_ir.read_text(), "bare-metal loop must retain sequential lowering"
+        memset_source = source.replace("16909060", "286331153")
+        src.write_text(memset_source)
+        memset_ir = Path(tmp) / "memset.ll"
+        result = subprocess.run([str(LOOMC), "--opt-report", str(src), str(memset_ir)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert "byte-pattern memset" in result.stdout, result.stdout
+        assert "loom_parallel_for_chunks" not in memset_ir.read_text(), "uniform-byte fill should avoid parallel dispatch"
+    print("[PASS] Compiler-proven large fixed-array fill loop is automatically parallelized")
+
+def test_proven_automatic_parallel_array_map():
+    source = """Module AutomaticParallelArrayMap
+
+Block Main Declares
+    Left : Signed_32 Array[524288]
+    Right : Signed_32 Array[524288]
+    Output : Signed_32 Array[524288]
+Implements
+    Loop I in 1..524288
+        Left[I] = I
+        Right[I] = 2
+    End Loop
+    Loop I in 1..524288
+        Left[I] = Wrapping_Add(Left[I], 1)
+        Output[I] = Wrapping_Add(Wrapping_Mul(Left[I], Right[I]), 1)
+    End Loop
+    Print(Output[1])
+    Print(Output[262144])
+    Print(Output[524288])
+End Main
+"""
+    out = compile_and_run(source)
+    assert out.strip().splitlines() == ["5", "524291", "1048579"], out
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "map.loom"
+        ir = Path(tmp) / "map.ll"
+        src.write_text(source)
+        result = subprocess.run([str(LOOMC), "--opt-report", str(src), str(ir)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert "parallelized independent fixed-array element loop" in result.stdout, result.stdout
+        assert "loom_parallel_for_chunks" in ir.read_text(), "expected map loop to use the parallel runtime"
+        unsafe_src = Path(tmp) / "cross-index.loom"
+        unsafe_ir = Path(tmp) / "cross-index.ll"
+        unsafe_src.write_text(source.replace(
+            "Left[I] = Wrapping_Add(Left[I], 1)",
+            "Left[I] = Wrapping_Add(Left[I - 1], 1)"))
+        unsafe_result = subprocess.run([str(LOOMC), "--opt-report", str(unsafe_src), str(unsafe_ir)],
+                                       capture_output=True, text=True)
+        assert unsafe_result.returncode == 0, unsafe_result.stderr
+        assert "parallelized independent fixed-array element loop" not in unsafe_result.stdout, unsafe_result.stdout
+        assert "loom_parallel_for_chunks" not in unsafe_ir.read_text(), "cross-index dependence must stay sequential"
+    print("[PASS] Compiler-proven multi-statement same-index fixed-array loop is automatically parallelized")
+
+def test_ada_style_modules_generics_and_tagged_records():
+    # 1. Deep dotted module + flat dotted filename + As alias + parameterless calls + BlockPointer
+    with tempfile.TemporaryDirectory() as tmp:
+        loom_bin = Path(__file__).resolve().parent.parent / "build" / "loom"
+        subprocess.run([str(loom_bin), "new", "AdaApp"], cwd=tmp, check=True, capture_output=True)
+        ws = Path(tmp) / "AdaApp"
+        (ws / "src" / "glyph.display.ssd1306.mono.loom").write_text(
+"""Module Glyph.Display.SSD1306.Mono
+
+Enum Color : Unsigned_8
+    Black = 0
+    White = 1
+End Color
+
+Block Global
+    Declares
+        WIDTH : Constant Unsigned_32 = 128
+End Global
+
+Block Get_Width Produces Unsigned_32
+Implements
+    Give WIDTH
+End Get_Width
+
+Block Pixel_Count Takes Scale : Unsigned_32 Produces Unsigned_32
+Implements
+    Give WIDTH * 64 * Scale
+End Pixel_Count
+""")
+        (ws / "src" / "glyph.display.loom").write_text(
+"""Generic Module Glyph.Display[P] Takes W : Unsigned_32, H : Unsigned_32
+Block Get_Area Produces Unsigned_32
+Implements
+    Give W * H
+End Get_Area
+
+Block Zero_Pixel Produces P
+Declares
+    Z : P = 0
+Implements
+    Give Z
+End Zero_Pixel
+End Display
+""")
+        (ws / "src" / "main.loom").write_text(
+"""Module Main
+Import Glyph.Display.SSD1306.Mono As OLED
+Import Glyph.Display.PanelA = Glyph.Display[Unsigned_8](128, 64)
+Import Glyph.Display.PanelB = Glyph.Display[Unsigned_16](132, 32)
+
+Tagged Record Shape
+    X : Signed_32
+End Shape
+
+Block Area Takes Self : Shape Pointer Produces Signed_32
+Implements
+    Give 0
+End Area
+
+Record Rect Inherits Shape
+    W : Signed_32
+    H : Signed_32
+End Rect
+
+Block Area Takes Self : Rect Pointer Produces Signed_32
+Implements
+    Give Self.W * Self.H
+End Area
+
+Block Eval_Shape Takes S : Shape Pointer Produces Signed_32
+Implements
+    Give S.Area()
+End Eval_Shape
+
+Block Local_Tick Produces Unsigned_32
+Implements
+    Give 77
+End Local_Tick
+
+Block Main
+Declares
+    W : Unsigned_32
+    Px : Unsigned_32
+    A1 : Unsigned_32
+    A2 : Unsigned_32
+    P0 : Unsigned_8
+    C : Color
+    R : Rect = Rect{ X: 1, W: 6, H: 7 }
+    S_Area : Signed_32
+    D_Area : Signed_32
+    T : Unsigned_32
+    Fn : Unsigned_32 Block_Pointer
+Implements
+    W = Glyph.Display.SSD1306.Mono.Get_Width
+    Px = OLED.Pixel_Count(2)
+    C = Glyph.Display.SSD1306.Mono.Color.White
+    A1 = Glyph.Display.PanelA.Get_Area
+    A2 = Glyph.Display.PanelB.Get_Area
+    P0 = Glyph.Display.PanelA.Zero_Pixel
+    S_Area = R.Area()
+    D_Area = Eval_Shape(Address(R))
+    T = Local_Tick
+    Fn = Local_Tick
+    Print("<W> <Px> <C> <A1> <A2> <P0> <S_Area> <D_Area> <T> <Fn()>")
+End Main
+""")
+        loom_bin = Path(__file__).resolve().parent.parent / "build" / "loom"
+        res = subprocess.run([str(loom_bin), "run"], cwd=str(ws), capture_output=True, text=True)
+        assert res.returncode == 0, f"Ada-style test failed:\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+        assert "128 16384 1 8192 4224 0 42 42 77 77" in res.stdout, f"Unexpected output:\n{res.stdout}"
+    print("[PASS] Ada-style dotted modules, flat dotted files, As aliases, generic modules, parameterless calls, and tagged record virtual dispatch")
+
 if __name__ == "__main__":
     test_compound_assignments()
     test_concise_routine_signatures()
@@ -2213,6 +2543,12 @@ if __name__ == "__main__":
     test_v15_async_block_and_await()
     test_v15_native_networking_tcp_udp()
     test_v15_multi_target_cross_compilation()
+    test_text_indexing_equality_and_formatting()
+    test_explicit_wrapping_arithmetic()
+    test_implicit_vector_parallelism()
+    test_proven_automatic_parallel_array_fill()
+    test_proven_automatic_parallel_array_map()
+    test_ada_style_modules_generics_and_tagged_records()
     print("\n========================================================")
-    print(" ALL 50 MODERN LANGUAGE FEATURE TESTS PASSED PERFECTLY! ")
+    print(" ALL 51 MODERN LANGUAGE FEATURE TESTS PASSED PERFECTLY! ")
     print("========================================================")

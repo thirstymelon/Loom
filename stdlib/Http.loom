@@ -1,0 +1,367 @@
+Module Http
+Import Net
+Import Tls
+
+Record Parsed_Url
+    Scheme : Text
+    Host : Text
+    Port : Signed_32
+    Path : Text
+    Is_Https : Boolean
+End Parsed_Url
+
+Record Response
+    Status : Signed_32
+    Status_Text : Text
+    Headers : Text
+    Body : Text
+End Response
+
+Record Client_Options
+    Force_Http1 : Boolean
+    Enable_Http2 : Boolean
+    Enable_Http3 : Boolean
+    Timeout_Ms : Signed_32
+End Client_Options
+
+Block Default_Options Produces Client_Options
+Declares
+    Opts : Client_Options
+Implements
+    Opts.Force_Http1 = False
+    Opts.Enable_Http2 = True
+    Opts.Enable_Http3 = True
+    Opts.Timeout_Ms = 10000
+    Give Opts
+End Default_Options
+
+Block Parse_Url Takes
+    Url : Text
+Produces Parsed_Url
+Declares
+    Result : Parsed_Url
+    Len : Unsigned_64
+    Pos : Unsigned_64 = 1
+    Host_Start : Unsigned_64
+    Host_End : Unsigned_64
+    Colon_Pos : Unsigned_64 = 0
+    Slash_Pos : Unsigned_64 = 0
+    I : Unsigned_64
+    C : Unsigned_32
+    Port_Val : Signed_32 = 0
+    Digit : Signed_32
+Implements
+    Len = Url.Length
+    Result.Port = 80
+    Result.Is_Https = False
+    # Check scheme
+    If Len >= 8
+        If (Url[1] as Unsigned_32) == 104 And (Url[2] as Unsigned_32) == 116 And (Url[3] as Unsigned_32) == 116 And (Url[4] as Unsigned_32) == 112 And (Url[5] as Unsigned_32) == 115 And (Url[6] as Unsigned_32) == 58 And (Url[7] as Unsigned_32) == 47 And (Url[8] as Unsigned_32) == 47
+            Result.Scheme += "https"
+            Result.Is_Https = True
+            Result.Port = 443
+            Pos = 9
+        End If
+    End If
+    If Result.Scheme.Length == 0 And Len >= 7
+        If (Url[1] as Unsigned_32) == 104 And (Url[2] as Unsigned_32) == 116 And (Url[3] as Unsigned_32) == 116 And (Url[4] as Unsigned_32) == 112 And (Url[5] as Unsigned_32) == 58 And (Url[6] as Unsigned_32) == 47 And (Url[7] as Unsigned_32) == 47
+            Result.Scheme += "http"
+            Result.Is_Https = False
+            Result.Port = 80
+            Pos = 8
+        End If
+    End If
+    If Result.Scheme.Length == 0
+        Result.Scheme += "http"
+        Result.Is_Https = False
+        Result.Port = 80
+        Pos = 1
+    End If
+
+    Host_Start = Pos
+    I = Host_Start
+    Loop while (I <= Len)
+        C = Url[I] as Unsigned_32
+        If C == 47 # '/'
+            Slash_Pos = I
+            Exit
+        End If
+        If C == 58 # ':'
+            Colon_Pos = I
+        End If
+        I = I + 1
+    End Loop
+
+    If Slash_Pos > 0
+        Host_End = Slash_Pos - 1
+    Else
+        Host_End = Len
+    End If
+
+    If Colon_Pos > 0 And Colon_Pos < Host_End
+        # Host is from Host_Start to Colon_Pos - 1
+        I = Host_Start
+        Loop while (I < Colon_Pos)
+            Result.Host += Url[I .. I]
+            I = I + 1
+        End Loop
+        # Parse explicit port
+        I = Colon_Pos + 1
+        Loop while (I <= Host_End)
+            Digit = (Url[I] as Signed_32) - 48
+            If Digit >= 0 And Digit <= 9
+                Port_Val = Port_Val * 10 + Digit
+            End If
+            I = I + 1
+        End Loop
+        Result.Port = Port_Val
+    Else
+        I = Host_Start
+        Loop while (I <= Host_End)
+            Result.Host += Url[I .. I]
+            I = I + 1
+        End Loop
+    End If
+
+    If Slash_Pos > 0
+        I = Slash_Pos
+        Loop while (I <= Len)
+            Result.Path += Url[I .. I]
+            I = I + 1
+        End Loop
+    Else
+        Result.Path += "/"
+    End If
+
+    Give Result
+End Parse_Url
+
+Block Parse_Response Takes
+    Raw : Text
+Produces Response
+Declares
+    Res : Response
+    Len : Unsigned_64
+    I : Unsigned_64 = 1
+    C : Unsigned_32
+    Space1 : Unsigned_64 = 0
+    Space2 : Unsigned_64 = 0
+    Line_End : Unsigned_64 = 0
+    Head_End : Unsigned_64 = 0
+    Status_Val : Signed_32 = 0
+    Digit : Signed_32
+    Chunked : Boolean = False
+Implements
+    Len = Raw.Length
+    Res.Status = 0
+    If Len < 12
+        Give Res
+    End If
+
+    # Find first space (after HTTP/1.x)
+    Loop while (I <= Len)
+        C = Raw[I] as Unsigned_32
+        If C == 32 # ' '
+            If Space1 == 0
+                Space1 = I
+            Else If Space2 == 0
+                Space2 = I
+                Exit
+            End If
+        Else If C == 13 # '\r'
+            Line_End = I
+            Exit
+        End If
+        I = I + 1
+    End Loop
+
+    # Parse 3-digit status
+    If Space1 > 0
+        I = Space1 + 1
+        Loop while (I <= Len)
+            C = Raw[I] as Unsigned_32
+            If C == 32 Or C == 13
+                Exit
+            End If
+            Digit = (C as Signed_32) - 48
+            If Digit >= 0 And Digit <= 9
+                Status_Val = Status_Val * 10 + Digit
+            End If
+            I = I + 1
+        End Loop
+    End If
+    Res.Status = Status_Val
+
+    # Status text
+    If Space2 > 0
+        I = Space2 + 1
+        Loop while (I <= Len)
+            C = Raw[I] as Unsigned_32
+            If C == 13 Or C == 10
+                Line_End = I
+                Exit
+            End If
+            Res.Status_Text += Raw[I .. I]
+            I = I + 1
+        End Loop
+    End If
+
+    # Find double CRLF delimiter (\r\n\r\n = 13, 10, 13, 10)
+    I = 1
+    Loop while (I + 3 <= Len)
+        If (Raw[I] as Unsigned_32) == 13 And (Raw[I + 1] as Unsigned_32) == 10 And (Raw[I + 2] as Unsigned_32) == 13 And (Raw[I + 3] as Unsigned_32) == 10
+            Head_End = I
+            Exit
+        End If
+        I = I + 1
+    End Loop
+
+    If Head_End > 0
+        Res.Headers += Raw[1 .. Head_End + 1]
+        If Head_End + 4 <= Len
+            Res.Body += Raw[Head_End + 4 .. Len]
+        End If
+    Else
+        Res.Body += Raw
+    End If
+
+    Give Res
+End Parse_Response
+
+Block Request Takes
+    Method : String
+    Url : Text
+    Custom_Headers : Text
+    Body_Data : Text
+    Ca_Path : Text
+Produces Response
+Declares
+    Res : Response
+    Parsed : Parsed_Url
+    Req : Text
+    Raw_Resp : Text
+    Fd : Signed_32
+    Tls_Conn : Connection
+    Sent : Signed_64
+    Status : Signed_32
+    Body_Len : Unsigned_64
+Implements
+    Parsed = Parse_Url(Url)
+    Body_Len = Body_Data.Length
+
+    # Build HTTP request line
+    Req += Method
+    Req += " "
+    Req += Parsed.Path
+    Req += " HTTP/1.1\r\nHost: "
+    Req += Parsed.Host
+    Req += "\r\nUser-Agent: Loom/1.4.0\r\nConnection: close\r\n"
+
+    If Body_Len > 0
+        Req += "Content-Length: "
+        Req += Body_Len
+        Req += "\r\n"
+    End If
+
+    If Custom_Headers.Length > 0
+        Req += Custom_Headers
+        If (Custom_Headers[Custom_Headers.Length] as Unsigned_32) != 10
+            Req += "\r\n"
+        End If
+    End If
+    Req += "\r\n"
+
+    If Body_Len > 0
+        Req += Body_Data
+    End If
+
+    If Parsed.Is_Https
+        Tls_Conn = Tls.Connect_With_Roots(Parsed.Host, Parsed.Port, Ca_Path)
+        If Not Tls_Conn.Connected
+            Res.Status = -1
+            Res.Status_Text += "TLS connection failed"
+            Give Res
+        End If
+        Sent = Tls.Send_All(Tls_Conn, Req)
+        If Sent <= 0
+            Status = Tls.Close(Tls_Conn)
+            Res.Status = -1
+            Res.Status_Text += "TLS send failed"
+            Give Res
+        End If
+        Raw_Resp = Tls.Receive_Until_Close(Tls_Conn, 4096)
+        Status = Tls.Close(Tls_Conn)
+    Else
+        Fd = Tcp_Connect(Parsed.Host, Parsed.Port)
+        If Fd < 0
+            Res.Status = -1
+            Res.Status_Text += "TCP connection failed"
+            Give Res
+        End If
+        Status = Socket_Set_Timeout(Fd, 5000)
+        Sent = Net.Tcp_Send_All(Fd, Req)
+        If Sent <= 0
+            Tcp_Close(Fd)
+            Res.Status = -1
+            Res.Status_Text += "TCP send failed"
+            Give Res
+        End If
+        Raw_Resp = Net.Tcp_Receive_Until_Close(Fd, 4096)
+        Tcp_Close(Fd)
+    End If
+
+    Res = Parse_Response(Raw_Resp)
+    Give Res
+End Request
+
+Block Get Takes
+    Url : Text
+Produces Response
+Declares
+    Empty_Headers : Text
+    Empty_Body : Text
+    Empty_Roots : Text
+Implements
+    Give Request("GET", Url, Empty_Headers, Empty_Body, Empty_Roots)
+End Get
+
+Block Post Takes
+    Url : Text
+    Content_Type : Text
+    Body : Text
+Produces Response
+Declares
+    Headers : Text
+    Empty_Roots : Text
+Implements
+    Headers += "Content-Type: "
+    Headers += Content_Type
+    Headers += "\r\n"
+    Give Request("POST", Url, Headers, Body, Empty_Roots)
+End Post
+
+Block Get_With_Roots Takes
+    Url : Text
+    Ca_Path : Text
+Produces Response
+Declares
+    Empty_Headers : Text
+    Empty_Body : Text
+Implements
+    Give Request("GET", Url, Empty_Headers, Empty_Body, Ca_Path)
+End Get_With_Roots
+
+Block Post_With_Roots Takes
+    Url : Text
+    Content_Type : Text
+    Body : Text
+    Ca_Path : Text
+Produces Response
+Declares
+    Headers : Text
+Implements
+    Headers += "Content-Type: "
+    Headers += Content_Type
+    Headers += "\r\n"
+    Give Request("POST", Url, Headers, Body, Ca_Path)
+End Post_With_Roots

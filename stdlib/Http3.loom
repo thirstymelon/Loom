@@ -1,0 +1,174 @@
+Module Http3
+Import Net
+Import NetAsync
+Import Hpack
+Import Qpack
+Import Quic
+Import Http
+
+Record Http3_Client
+    Quic_Conn : Quic_Connection
+    Qpack_Ctx : Qpack_Context
+    Next_Stream_Id : Unsigned_64
+    Is_Ready : Boolean
+End Http3_Client
+
+Block Format_H3_Frame Takes
+    Type_Id : Unsigned_64
+    Payload : Text
+Produces Text
+Declares
+    Out : Text
+Implements
+    Out += Quic.Varint_Encode(Type_Id)
+    Out += Quic.Varint_Encode(Payload.Length)
+    Out += Payload
+    Give Out
+End Format_H3_Frame
+
+Block Connect_H3 Takes
+    Host : Text
+    Port : Signed_32
+Produces Http3_Client
+Declares
+    Cli : Http3_Client
+    Conn : Quic_Connection
+    Settings_Payload : Text
+    Control_Payload : Text
+    Send_Res : Signed_32
+    Ctrl_Stream_Id : Unsigned_64 = 2 # Client-initiated unidirectional stream
+Implements
+    Cli.Next_Stream_Id = 0 # Client-initiated bidirectional stream (0, 4, 8...)
+    Cli.Qpack_Ctx = Qpack.Qpack_New(4096)
+    Cli.Is_Ready = False
+
+    Conn = Quic.Connect_Quic(Host, Port)
+    If Not Conn.Is_Connected
+        Give Cli
+    End If
+
+    Cli.Quic_Conn = Conn
+
+    # Send Control Stream Type 0x00 + SETTINGS frame (Type 0x04)
+    Control_Payload += Quic.Varint_Encode(0) # Unidirectional stream type: Control
+    Settings_Payload = Format_H3_Frame(4, Hpack.Empty_Text()) # Empty SETTINGS frame
+    Control_Payload += Settings_Payload
+
+    Send_Res = Quic.Stream_Write(Cli.Quic_Conn, Ctrl_Stream_Id, Control_Payload, False)
+
+    Cli.Is_Ready = True
+    Give Cli
+End Connect_H3
+
+Block Request_H3 Takes
+    Cli : Http3_Client
+    Method : String
+    Path : Text
+    Headers : Text
+    Body : Text
+Produces Response
+Declares
+    Resp : Response
+    Stream_Id : Unsigned_64
+    Raw_Hdr_Block : Text
+    Qpack_Enc : Text
+    Headers_Frame : Text
+    Data_Frame : Text
+    Send_Res : Signed_32
+    Recvd_Payload : Text
+    Decoded_Headers : Text
+    I : Unsigned_64
+    Status_Digit : Signed_32
+    Frame_Type : Unsigned_64
+    Frame_Len : Unsigned_64
+    Di : Decoded_Varint
+    Pos : Unsigned_64
+    Hdr_Fragment : Text
+Implements
+    Resp.Status = 0
+    Resp.Status_Text = Hpack.Empty_Text()
+    Resp.Headers = Hpack.Empty_Text()
+    Resp.Body = Hpack.Empty_Text()
+
+    If Not Cli.Is_Ready
+        Give Resp
+    End If
+
+    Stream_Id = Cli.Next_Stream_Id
+    Cli.Next_Stream_Id = Cli.Next_Stream_Id + 4
+
+    # Build HTTP/3 pseudo-headers + headers
+    Raw_Hdr_Block += ":method: "
+    Raw_Hdr_Block += Method
+    Raw_Hdr_Block += "\r\n:path: "
+    Raw_Hdr_Block += Path
+    Raw_Hdr_Block += "\r\n:scheme: https\r\n:authority: "
+    Raw_Hdr_Block += Cli.Quic_Conn.Host
+    Raw_Hdr_Block += "\r\n"
+    Raw_Hdr_Block += Headers
+
+    Qpack_Enc = Qpack.Qpack_Encode_Headers(Cli.Qpack_Ctx, Raw_Hdr_Block)
+    Headers_Frame = Format_H3_Frame(1, Qpack_Enc) # HEADERS frame (0x01)
+
+    If Body.Length == 0
+        Send_Res = Quic.Stream_Write(Cli.Quic_Conn, Stream_Id, Headers_Frame, True)
+    Else
+        Send_Res = Quic.Stream_Write(Cli.Quic_Conn, Stream_Id, Headers_Frame, False)
+        Data_Frame = Format_H3_Frame(0, Body) # DATA frame (0x00)
+        Send_Res = Quic.Stream_Write(Cli.Quic_Conn, Stream_Id, Data_Frame, True)
+    End If
+
+    # Read response stream from QUIC transport
+    Recvd_Payload = Quic.Stream_Read(Cli.Quic_Conn, Stream_Id)
+    If Recvd_Payload.Length > 0
+        Pos = 1
+        Loop while (Pos <= Recvd_Payload.Length)
+            Di = Quic.Varint_Decode(Recvd_Payload, Pos)
+            Frame_Type = Di.Value
+            Di = Quic.Varint_Decode(Recvd_Payload, Di.Next_Pos)
+            Frame_Len = Di.Value
+            Pos = Di.Next_Pos
+
+            If Frame_Type == 1 # HEADERS frame
+                If Pos + Frame_Len - 1 <= Recvd_Payload.Length
+                    Hdr_Fragment = Hpack.Empty_Text()
+                    Hdr_Fragment += Recvd_Payload[Pos .. Pos + Frame_Len - 1]
+                    Decoded_Headers = Qpack.Qpack_Decode_Headers(Cli.Qpack_Ctx, Hdr_Fragment)
+                    Resp.Headers += Decoded_Headers
+
+                    # Extract :status:
+                    I = 1
+                    Loop while (I + 8 <= Decoded_Headers.Length)
+                        If (Decoded_Headers[I] as Unsigned_32) == 58 And (Decoded_Headers[I+1] as Unsigned_32) == 115 And (Decoded_Headers[I+2] as Unsigned_32) == 116 And (Decoded_Headers[I+3] as Unsigned_32) == 97 And (Decoded_Headers[I+4] as Unsigned_32) == 116 And (Decoded_Headers[I+5] as Unsigned_32) == 117 And (Decoded_Headers[I+6] as Unsigned_32) == 115 And (Decoded_Headers[I+7] as Unsigned_32) == 58
+                            Status_Digit = ((Decoded_Headers[I+9] as Signed_32) - 48) * 100 + ((Decoded_Headers[I+10] as Signed_32) - 48) * 10 + ((Decoded_Headers[I+11] as Signed_32) - 48)
+                            Resp.Status = Status_Digit
+                            Exit
+                        End If
+                        I = I + 1
+                    End Loop
+                End If
+            Else If Frame_Type == 0 # DATA frame
+                If Pos + Frame_Len - 1 <= Recvd_Payload.Length
+                    Resp.Body += Recvd_Payload[Pos .. Pos + Frame_Len - 1]
+                End If
+            End If
+
+            Pos = Pos + Frame_Len
+        End Loop
+    End If
+
+    Give Resp
+End Request_H3
+
+Block Close_H3 Takes
+    Cli : Http3_Client
+Produces Signed_32
+Declares
+    Status : Signed_32
+Implements
+    If Cli.Is_Ready
+        Status = Quic.Close_Quic(Cli.Quic_Conn)
+        Cli.Is_Ready = False
+    End If
+    Give 0
+End Close_H3

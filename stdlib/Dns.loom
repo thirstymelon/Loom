@@ -1,0 +1,335 @@
+# DNS wire-format helpers And a bounded IPv4 A-record resolver.
+# Packet serialization And parsing are implemented in Loom source.
+Module Dns
+
+Record IPv4_Result
+    Status : Signed_32
+    IPv4 : Unsigned_32
+    TTL : Unsigned_32
+End IPv4_Result
+
+Block Read_U16 Takes
+    Packet : Unsigned_8 Slice
+    Offset : Unsigned_64
+Produces Unsigned_32
+Declares
+    High : Unsigned_32
+    Low : Unsigned_32
+Implements
+    High = Packet[Offset] as Unsigned_32
+    Low = Packet[Offset + 1] as Unsigned_32
+    Give (High LSL 8) | Low
+End Read_U16
+
+Block Read_U32 Takes
+    Packet : Unsigned_8 Slice
+    Offset : Unsigned_64
+Produces Unsigned_32
+Declares
+    A : Unsigned_32
+    B : Unsigned_32
+    C : Unsigned_32
+    D : Unsigned_32
+Implements
+    A = Packet[Offset] as Unsigned_32
+    B = Packet[Offset + 1] as Unsigned_32
+    C = Packet[Offset + 2] as Unsigned_32
+    D = Packet[Offset + 3] as Unsigned_32
+    Give ((A LSL 24) | (B LSL 16)) | ((C LSL 8) | D)
+End Read_U32
+
+Block Skip_Name Takes
+    Packet : Unsigned_8 Slice
+    Offset : Unsigned_64
+    Packet_Length : Unsigned_64
+Produces Unsigned_64
+Declares
+    Position : Unsigned_64
+    Label_Length : Unsigned_32
+    Pointer_Target : Unsigned_32
+Implements
+    Position = Offset
+    Loop while (Position <= Packet_Length)
+        Label_Length = Packet[Position] as Unsigned_32
+        If Label_Length == 0
+            Give Position + 1
+        End If
+        If (Label_Length & 192) == 192
+            If Position + 1 > Packet_Length
+                Give 0
+            End If
+            Pointer_Target = ((Label_Length & 63) LSL 8) | (Packet[Position + 1] as Unsigned_32)
+            If (Pointer_Target < 12 or (Pointer_Target as Unsigned_64) >= Packet_Length)
+                Give 0
+            End If
+            Give Position + 2
+        End If
+        If (Label_Length & 192) != 0
+            Give 0
+        End If
+        If (Label_Length > 63 or Position + (Label_Length as Unsigned_64) > Packet_Length)
+            Give 0
+        End If
+        Position = Position + (Label_Length as Unsigned_64) + 1
+    End Loop
+    Give 0
+End Skip_Name
+
+Block Encode_A_Query Takes
+    Host : Text
+    Output : Unsigned_8 Pointer
+    Capacity : Unsigned_64
+    Query_ID : Unsigned_16
+Produces Signed_64
+Declares
+    Position : Unsigned_64 = 1
+    Host_Position : Unsigned_64 = 1
+    Label_Start : Unsigned_64 = 1
+    Label_Length : Unsigned_64 = 0
+    Copy_Position : Unsigned_64
+    Character_Value : Unsigned_32
+    Host_Length : Unsigned_64
+Implements
+    Host_Length = Host.Length
+    If (Host_Length == 0 or Host_Length > 253 or Capacity < Host_Length + 17)
+        Give -1
+    End If
+    Output[1] = (Query_ID LSR 8) as Unsigned_8
+    Output[2] = Query_ID as Unsigned_8
+    Output[3] = 1
+    Output[4] = 0
+    Output[5] = 0
+    Output[6] = 1
+    Output[7] = 0
+    Output[8] = 0
+    Output[9] = 0
+    Output[10] = 0
+    Output[11] = 0
+    Output[12] = 0
+    Position = 13
+    Loop while (Host_Position <= Host_Length)
+        Character_Value = Host[Host_Position] as Unsigned_32
+        If Character_Value < 33 or Character_Value > 126
+            Give -1
+        End If
+        If Character_Value == 46
+            If (Label_Length == 0 or Label_Length > 63)
+                Give -1
+            End If
+            If Position > Capacity
+                Give -1
+            End If
+            Output[Position] = Label_Length as Unsigned_8
+            Position = Position + 1
+            Copy_Position = Label_Start
+            Loop while (Copy_Position < Host_Position)
+                If Position > Capacity
+                    Give -1
+                End If
+                Output[Position] = Host[Copy_Position] as Unsigned_8
+                Position = Position + 1
+                Copy_Position = Copy_Position + 1
+            End Loop
+            Label_Start = Host_Position + 1
+            Label_Length = 0
+        Else
+            Label_Length = Label_Length + 1
+            If Label_Length > 63
+                Give -1
+            End If
+        End If
+        Host_Position = Host_Position + 1
+    End Loop
+    If Label_Length == 0
+        If (Host[Host_Length] as Unsigned_32) != 46
+            Give -1
+        End If
+    Else
+        If Label_Length > 63
+            Give -1
+        End If
+        If Position > Capacity
+            Give -1
+        End If
+        Output[Position] = Label_Length as Unsigned_8
+        Position = Position + 1
+        Copy_Position = Label_Start
+        Loop while (Copy_Position <= Host_Length)
+            If Position > Capacity
+                Give -1
+            End If
+            Output[Position] = Host[Copy_Position] as Unsigned_8
+            Position = Position + 1
+            Copy_Position = Copy_Position + 1
+        End Loop
+    End If
+    If Position > Capacity
+        Give -1
+    End If
+    Output[Position] = 0
+    Position = Position + 1
+    If Position + 3 > Capacity
+        Give -1
+    End If
+    Output[Position] = 0
+    Output[Position + 1] = 1
+    Output[Position + 2] = 0
+    Output[Position + 3] = 1
+    Position = Position + 4
+    If Position - 1 > Capacity
+        Give -1
+    End If
+    Give (Position - 1) as Signed_64
+End Encode_A_Query
+
+Block Parse_A_Response Takes
+    Packet : Unsigned_8 Slice
+    Packet_Length : Unsigned_64
+    Query_ID : Unsigned_16
+Produces IPv4_Result
+Declares
+    Result : IPv4_Result
+    Flags : Unsigned_32
+    Question_Count : Unsigned_32
+    Answer_Count : Unsigned_32
+    Position : Unsigned_64 = 13
+    Next_Position : Unsigned_64
+    I : Unsigned_32
+    Record_Type : Unsigned_32
+    Record_Class : Unsigned_32
+    Record_Length : Unsigned_32
+    Data_Position : Unsigned_64
+    TTL_Value : Unsigned_32
+Implements
+    Result.Status = -1
+    If (Packet_Length < 12 or Packet_Length > Packet.Length)
+        Give Result
+    End If
+    If Read_U16(Packet, 1) != (Query_ID as Unsigned_32)
+        Give Result
+    End If
+    Flags = Read_U16(Packet, 3)
+    If (Flags & 32768) == 0
+        Give Result
+    End If
+    If (Flags & 15) != 0
+        Result.Status = (Flags & 15) as Signed_32
+        Give Result
+    End If
+    Question_Count = Read_U16(Packet, 5)
+    Answer_Count = Read_U16(Packet, 7)
+    If (Question_Count > 16 or Answer_Count > 128)
+        Give Result
+    End If
+    I = 1
+    Loop while (I <= Question_Count)
+        Next_Position = Skip_Name(Packet, Position, Packet_Length)
+        If (Next_Position == 0 or Next_Position + 3 > Packet_Length)
+            Give Result
+        End If
+        Position = Next_Position + 4
+        I = I + 1
+    End Loop
+    I = 1
+    Loop while (I <= Answer_Count)
+        Next_Position = Skip_Name(Packet, Position, Packet_Length)
+        If (Next_Position == 0 or Next_Position + 9 > Packet_Length)
+            Give Result
+        End If
+        Position = Next_Position
+        Record_Type = Read_U16(Packet, Position)
+        Record_Class = Read_U16(Packet, Position + 2)
+        TTL_Value = Read_U32(Packet, Position + 4)
+        Record_Length = Read_U16(Packet, Position + 8)
+        Data_Position = Position + 10
+        If (Data_Position > Packet_Length + 1 or (Record_Length as Unsigned_64) > Packet_Length - Data_Position + 1)
+            Give Result
+        End If
+        If (Record_Type == 1 And Record_Class == 1 And Record_Length == 4)
+            Result.IPv4 = Read_U32(Packet, Data_Position)
+            Result.TTL = TTL_Value
+            Result.Status = 0
+            Give Result
+        End If
+        Position = Data_Position + (Record_Length as Unsigned_64)
+        I = I + 1
+    End Loop
+    Result.Status = 2
+    Give Result
+End Parse_A_Response
+
+Block Resolve_A_Using Takes
+    Host : Text
+    Name_Server : Text
+    Port : Unsigned_16
+    Timeout_Milliseconds : Signed_32
+    Server_Is_V6 : Boolean
+Produces IPv4_Result
+Declares
+    Result : IPv4_Result
+    Packet : Unsigned_8 Array[512]
+    Random_ID : Unsigned_8 Array[2]
+    Socket : Signed_32
+    Query_Length : Signed_64
+    Random_Length : Signed_64
+    Query_ID : Unsigned_16
+    Bytes_Sent : Signed_64
+    Bytes_Received : Signed_64
+    Socket_Status : Signed_32
+Implements
+    Result.Status = -1
+    Random_Length = System_Random(Address(Random_ID[1]), 2)
+    If Random_Length != 2
+        Give Result
+    End If
+    Query_ID = (((Random_ID[1] as Unsigned_16) LSL 8) | (Random_ID[2] as Unsigned_16))
+    Query_Length = Encode_A_Query(Host, Address(Packet[1]), 512, Query_ID)
+    If Query_Length < 0
+        Give Result
+    End If
+    If Server_Is_V6
+        Socket = Udp_Connect_V6(Name_Server, Port)
+    Else
+        Socket = Udp_Connect(Name_Server, Port)
+    End If
+    If Socket < 0
+        Give Result
+    End If
+    Socket_Status = Socket_Set_Timeout(Socket, Timeout_Milliseconds)
+    If Socket_Status != 0
+        Udp_Close(Socket)
+        Give Result
+    End If
+    Bytes_Sent = Udp_Send_Slice(Socket, Packet[1 .. Query_Length])
+    If Bytes_Sent != Query_Length
+        Udp_Close(Socket)
+        Give Result
+    End If
+    Bytes_Received = Udp_Receive_Buffer(Socket, Address(Packet[1]), 512)
+    Udp_Close(Socket)
+    If Bytes_Received < 0
+        Give Result
+    End If
+    Result = Parse_A_Response(Packet[1 .. 512], Bytes_Received as Unsigned_64, Query_ID)
+    Give Result
+End Resolve_A_Using
+
+Block Resolve_A Takes
+    Host : Text
+    Name_Server : Text
+    Port : Unsigned_16
+    Timeout_Milliseconds : Signed_32
+Produces IPv4_Result
+Implements
+    Give Resolve_A_Using(Host, Name_Server, Port, Timeout_Milliseconds, False)
+End Resolve_A
+
+Block Resolve_A_V6 Takes
+    Host : Text
+    Name_Server : Text
+    Port : Unsigned_16
+    Timeout_Milliseconds : Signed_32
+Produces IPv4_Result
+Implements
+    Give Resolve_A_Using(Host, Name_Server, Port, Timeout_Milliseconds, True)
+End Resolve_A_V6
