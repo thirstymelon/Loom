@@ -1309,6 +1309,34 @@ void installArchive(const RegistryPackage& package) {
                         }
                     }
                 }
+            } else if (package.kind == "toolchain") {
+                auto toLower = [](std::string s) {
+                    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    return s;
+                };
+                std::string lowerPkg = toLower(package.name);
+                std::vector<fs::path> localTcRoots;
+                if (const char* h = std::getenv("HOME")) {
+                    localTcRoots.push_back(fs::path(h) / "Desktop" / "loom-libraries" / "toolchains");
+                    localTcRoots.push_back(fs::path(h) / "loom-libraries" / "toolchains");
+                }
+                try { localTcRoots.push_back(fs::current_path() / "toolchains"); } catch (...) {}
+                for (const auto& tcRoot : localTcRoots) {
+                    if (fs::is_directory(tcRoot, ec)) {
+                        for (const auto& entry : fs::directory_iterator(tcRoot, ec)) {
+                            if (entry.is_directory(ec) && toLower(entry.path().filename().string()) == lowerPkg) {
+                                const fs::path dest = home / "toolchains" / entry.path().filename().string();
+                                fs::remove_all(dest, ec);
+                                fs::create_directories(dest);
+                                fs::copy(entry.path(), dest, fs::copy_options::recursive);
+                                std::cout << "Installed toolchain '" << entry.path().filename().string() << "' " << package.version
+                                          << " to " << dest.string() << "\n";
+                                fs::remove_all(temp, ec);
+                                return;
+                            }
+                        }
+                    }
+                }
             }
             throw Error("download failed for " + package.name + " " + package.version);
         }
@@ -1452,8 +1480,9 @@ void installFromRegistry(const std::string& kind, const std::string& name, const
                         }
                         if (!version.empty() && version != ver) continue;
                         const fs::path dest = loomHome() / "toolchains" / entry.path().filename().string();
+                        fs::remove_all(dest, ec);
                         fs::create_directories(dest);
-                        fs::copy(entry.path(), dest, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+                        fs::copy(entry.path(), dest, fs::copy_options::recursive);
                         std::cout << "Installed toolchain '" << entry.path().filename().string() << "' " << ver
                                   << " to " << dest.string() << "\n";
                         return;
