@@ -1,0 +1,476 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RP2040 Beginner Tutorials · Loom</title><link rel="stylesheet" href="theme.css"></head><body><nav class="side"><a class="brand" href="index.html">Loom<span>v1.5.0</span></a><input id="q" placeholder="Filter topics…" aria-label="Filter"><h6>Docs</h6><a href="index.html">Overview</a><a href="start.html">Getting started</a><a href="learn.html">Learn Loom</a><a href="rp2040.html" class="on">RP2040 Tutorials</a><a class="sub" href="#overview">Architecture & Zero-Imports</a><a class="sub" href="#gpio">1 · GPIO Pin Control</a><a class="sub" href="#time">2 · Timers & Sleep</a><a class="sub" href="#usb-cdc">3 · USB-CDC Serial</a><a class="sub" href="#uart">4 · Hardware UART</a><a class="sub" href="#spi">5 · SPI Bus</a><a class="sub" href="#i2c">6 · I2C Bus</a><a class="sub" href="#pwm">7 · PWM Outputs</a><a class="sub" href="#adc">8 · ADC & Temp Sensor</a><a class="sub" href="#dma">9 · DMA Transfers</a><a class="sub" href="#watchdog">10 · Hardware Watchdog</a><a class="sub" href="#rtc">11 · Real-Time Clock (RTC)</a><a class="sub" href="#multicore">12 · Dual-Core Launch</a><a class="sub" href="#sync">13 · Hardware Mutex & Spinlocks</a><a class="sub" href="#sio">14 · SIO & 8-Cycle Division</a><a class="sub" href="#pio">15 · Programmable I/O (PIO)</a><a class="sub" href="#system">16 · System & Bootsel Reset</a><a class="sub" href="#flashing">17 · Building & Flashing</a><a href="reference.html">Language reference</a><a href="internals.html">Compiler & targets</a></nav><main><div class="top"><span>Loom</span><button id="mb">Menu</button></div><article><h1>RP2040 Beginner Tutorials</h1><p class="lead">A complete, beginner-friendly guide to bare-metal embedded programming on the Raspberry Pi Pico with Loom. Every hardware peripheral, function, and operation explained with runnable code examples.</p>
+
+<h2 id="overview">Architecture & Zero-Imports Standard Library</h2>
+<p>Loom's RP2040 toolchain compiles directly to bare-metal ARM Cortex-M0+ (Thumbv6-M) machine code with zero operating system overhead. In the RP2040 toolchain, all core hardware modules are <b>built into the standard library and available with zero imports</b>: <code>Gpio</code>, <code>Time</code>, <code>Usb_Cdc</code>, <code>Uart</code>, <code>Spi</code>, <code>I2c</code>, <code>Pwm</code>, <code>Adc</code>, <code>Dma</code>, <code>Watchdog</code>, <code>Rtc</code>, <code>Multicore</code>, <code>Sync</code>, <code>Sio</code>, <code>Pio</code>, and <code>System</code>. You never need to write <code>Import Gpio</code> or <code>Import Time</code>.</p>
+
+<h2 id="gpio">1 · GPIO Pin Control</h2>
+<p>The <code>Gpio</code> module controls the 30 multi-function General Purpose I/O pins of the RP2040 (GPIO 0 through 29). The onboard Raspberry Pi Pico LED is pin 25 (<code>Gpio.PICO_LED_PIN</code>).</p>
+
+<h3>1.1 Configuring Outputs & Blinking (Toggle)</h3>
+<p>Initialize a pin as an output using <code>Gpio.Init_Output(Pin)</code>. You can toggle the output level with <code>Pin.Toggle</code> or <code>Gpio.Toggle(Pin)</code>:</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    LED : Constant Gpio.Pin = Gpio.PICO_LED_PIN
+Implements
+    Gpio.Init_Output(LED)
+    Loop
+        LED.Toggle
+        Time.Sleep_MS(500)
+    End Loop
+End Main</code></pre>
+
+<h3>1.2 Driving Output State (High, Low, Write)</h3>
+<p>Set a pin's state explicitly with <code>Gpio.High(Pin)</code>, <code>Gpio.Low(Pin)</code>, or <code>Gpio.Write(Pin, Boolean)</code>:</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Pin16 : Constant Gpio.Pin = Gpio.Pin_16
+Implements
+    Gpio.Init_Output(Pin16)
+    Gpio.High(Pin16)
+    Time.Sleep_MS(250)
+    Gpio.Low(Pin16)
+    Time.Sleep_MS(250)
+    Gpio.Write(Pin16, True)
+End Main</code></pre>
+
+<h3>1.3 Reading Inputs with Pull-Up / Pull-Down</h3>
+<p>Initialize inputs with internal bias resistors using <code>Gpio.Init_Input(Pin, Pull)</code> where pull mode is <code>Gpio.Pull.Up</code>, <code>Gpio.Pull.Down</code>, or <code>Gpio.Pull.None</code>. Read the digital pin state with <code>Gpio.Read(Pin)</code>:</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Button : Constant Gpio.Pin = Gpio.Pin_15
+    State : Boolean
+Implements
+    Gpio.Init_Input(Button, Gpio.Pull.Up)
+    Loop
+        State = Gpio.Read(Button)
+        If Not State
+            Print("Button Pressed (Active Low)!\n")
+        End If
+        Time.Sleep_MS(100)
+    End Loop
+End Main</code></pre>
+
+<h3>1.4 De-initializing Pins</h3>
+<p>Release a pin back to high-impedance reset state using <code>Gpio.Deinit(Pin)</code>:</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Pin2 : Constant Gpio.Pin = Gpio.Pin_2
+Implements
+    Gpio.Init_Output(Pin2)
+    Gpio.High(Pin2)
+    Time.Sleep_MS(100)
+    Gpio.Deinit(Pin2)
+End Main</code></pre>
+
+<h2 id="time">2 · Timers, Sleep & Elapsed Time</h2>
+<p>The RP2040 includes a 64-bit hardware microsecond timer. The <code>Time</code> module provides microsecond and millisecond blocking delays, high-resolution timestamps, and hardware alarm scheduling.</p>
+
+<h3>2.1 Millisecond & Microsecond Delays</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Implements
+    # Sleep for 100 milliseconds
+    Time.Sleep_MS(100)
+    # Sleep for 50 microseconds
+    Time.Sleep_US(50)
+End Main</code></pre>
+
+<h3>2.2 Measuring Elapsed Time (Now_MS & Now_US)</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    T_Start : Unsigned_64
+    T_Elapsed : Unsigned_64
+Implements
+    T_Start = Time.Now_US()
+    Time.Sleep_MS(10)
+    T_Elapsed = Time.Now_US() - T_Start
+    Print("Elapsed microseconds: <T_Elapsed>\n")
+End Main</code></pre>
+
+<h3>2.3 Hardware Timer Alarms</h3>
+<p>Arm hardware timer alarms with <code>Time.Alarm_Set(Index, Target_Us_Low)</code> and clear them with <code>Time.Alarm_Clear(Index)</code>:</p>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Target : Unsigned_32
+Implements
+    Target = Time.Now_US_32() + 1000000
+    Time.Alarm_Set(0, Target)
+    # Clear after handling
+    Time.Alarm_Clear(0)
+End Main</code></pre>
+
+<h2 id="usb-cdc">3 · USB-CDC Serial Console & Print</h2>
+<p>The RP2040 hardware runtime includes built-in TinyUSB-compatible CDC serial support. <code>Print(...)</code> automatically routes through USB-CDC serial out of the box when connected to your computer.</p>
+
+<h3>3.1 Checking USB Connection & Writing Text</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Count : Unsigned_32 = 0
+Implements
+    Loop
+        If Usb_Cdc.Is_Configured()
+            Print("USB connected! Iteration=<Count>\n")
+        End If
+        Count = Count + 1
+        Time.Sleep_MS(1000)
+    End Loop
+End Main</code></pre>
+
+<h3>3.2 Reading Incoming Bytes over USB</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Byte_In : Signed_32
+Implements
+    Loop
+        If Usb_Cdc.Available() > 0
+            Byte_In = Usb_Cdc.Read_Byte()
+            If Byte_In >= 0
+                Usb_Cdc.Write_Byte(Byte_In as Unsigned_8)
+            End If
+        End If
+        Time.Sleep_MS(10)
+    End Loop
+End Main</code></pre>
+
+<h3>3.3 Routing Print Output (USB vs UART)</h3>
+<p>Control where standard output goes using <code>Usb_Cdc.Set_Output_Sink(Sink)</code> with <code>Output_Sink.USB</code>, <code>Output_Sink.UART0</code>, <code>Output_Sink.UART1</code>, or <code>Output_Sink.None</code>:</p>
+<pre><code class="l">Module Main
+
+Block Main
+Implements
+    Usb_Cdc.Set_Output_Sink(Usb_Cdc.Output_Sink.UART0)
+    Print("This line goes to hardware UART0\n")
+    Usb_Cdc.Set_Output_Sink(Usb_Cdc.Output_Sink.USB)
+    Print("This line goes to USB CDC\n")
+End Main</code></pre>
+
+<h2 id="uart">4 · Hardware UART Serial</h2>
+<p>RP2040 features two independent hardware UART controllers (<code>Uart0</code> and <code>Uart1</code>). Standard pins are GPIO 0 (TX) and GPIO 1 (RX) for UART0.</p>
+
+<h3>4.1 Initializing UART & Sending Strings</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Cfg : Uart.Config
+    Status : Signed_32 or Uart.Uart_Error
+Implements
+    Cfg.Baud_Rate = 115200
+    Cfg.Data_Bits = 8
+    Cfg.Stop_Bits = 1
+    Cfg.Parity = Uart.Parity.None
+    Cfg.Tx_Pin = Gpio.Pin_0
+    Cfg.Rx_Pin = Gpio.Pin_1
+
+    Status = Uart.Init(0, Cfg)
+    Uart.Write_Str(0, "Loom Hardware UART0 Ready\r\n")
+End Main</code></pre>
+
+<h3>4.2 Polling for Incoming Data</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Ch : Signed_32
+Implements
+    Loop
+        If Uart.Is_Readable(0)
+            Ch = Uart.Read_Byte(0)
+            If Ch >= 0
+                Uart.Write_Byte(0, Ch as Unsigned_8)
+            End If
+        End If
+        Time.Sleep_MS(5)
+    End Loop
+End Main</code></pre>
+
+<h2 id="spi">5 · SPI Serial Peripheral Interface</h2>
+<p>Communicate with fast display controllers, SD cards, and external sensors using the two hardware SPI controllers (<code>Spi0</code> and <code>Spi1</code>).</p>
+
+<h3>5.1 Initializing SPI</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Cfg : Spi.Config
+    Status : Signed_32 or Spi.Spi_Error
+Implements
+    Cfg.Baud_Rate = 1000000
+    Cfg.Data_Bits = 8
+    Cfg.Cpol = 0
+    Cfg.Cpha = 0
+    Cfg.Mosi_Pin = Gpio.Pin_19
+    Cfg.Miso_Pin = Gpio.Pin_16
+    Cfg.Sclk_Pin = Gpio.Pin_18
+    Cfg.Cs_Pin = Gpio.Pin_17
+
+    Status = Spi.Init(0, Cfg)
+    If (Ok == 0)
+        Spi.Write_Byte(0, 0x9F)
+    End If
+End Main</code></pre>
+
+<h2 id="i2c">6 · I2C Two-Wire Interface</h2>
+<p>Connect OLED screens (SSD1306), accelerometers (MPU6050), and temperature sensors over the two hardware I2C peripherals.</p>
+
+<h3>6.1 Initializing I2C & Register Reading</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Cfg : I2c.Config
+    Status : Signed_32 or I2c.I2c_Error
+    Dev_Addr : Unsigned_16 = 0x68
+    WhoAmI : Signed_32
+Implements
+    Cfg.Baud_Rate = 400000
+    Cfg.Sda_Pin = Gpio.Pin_4
+    Cfg.Scl_Pin = Gpio.Pin_5
+
+    Status = I2c.Init(0, Cfg)
+    If (Ok == 0)
+        WhoAmI = I2c.Read_Reg(0, Dev_Addr, 0x75)
+    End If
+    Print("Device ID: <WhoAmI>\n")
+End Main</code></pre>
+
+<h2 id="pwm">7 · PWM Outputs (Pulse Width Modulation)</h2>
+<p>RP2040 has 8 PWM slices, each with two output channels (A and B), driving LEDs, buzzers, and servos.</p>
+
+<h3>7.1 Generating a 1 kHz PWM Signal</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Slice : Unsigned_32
+    Pin0 : Constant Gpio.Pin = Gpio.Pin_0
+Implements
+    Gpio.Set_Function(Pin0, Gpio.Function.PWM)
+    Slice = Pwm.Gpio_To_Slice(Pin0)
+    Pwm.Set_ClkDiv(Slice, 125, 0)
+    Pwm.Set_Wrap(Slice, 1000)
+    # Set 50% duty cycle (level 500)
+    Pwm.Set_Level(Slice, Pwm.Channel.A, 500)
+    Pwm.Set_Enabled(Slice, True)
+End Main</code></pre>
+
+<h2 id="adc">8 · ADC (Analog to Digital Converter) & Temperature</h2>
+<p>RP2040 features a 12-bit 500 kS/s ADC across 5 channels (GPIO 26-29 for channels 0-3, and channel 4 connected to an onboard silicon temperature diode).</p>
+
+<h3>8.1 Reading Analog Voltage (0 - 3.3V)</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Raw : Unsigned_16
+    MilliVolts : Unsigned_32
+Implements
+    Adc.Init()
+    Adc.Init_Pin(Gpio.Pin_26)
+    Raw = Adc.Read_Raw(0)
+    MilliVolts = Adc.Read_MV(0)
+    Print("ADC0: <MilliVolts> mV\n")
+End Main</code></pre>
+
+<h3>8.2 Reading Internal Silicon Temperature</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Temp : Float_32
+Implements
+    Adc.Init()
+    Temp = Adc.Read_Temp_C()
+    Print("Onboard Temperature: <Temp> C\n")
+End Main</code></pre>
+
+<h2 id="dma">9 · Direct Memory Access (DMA)</h2>
+<p>Perform memory-to-memory and peripheral transfers without CPU intervention across 12 independent channels.</p>
+
+<h3>9.1 Fast 32-bit Array Transfer</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Src : Unsigned_32 Array[16]
+    Dst : Unsigned_32 Array[16]
+    Channel : Unsigned_32 = 0
+Implements
+    Dma.Init()
+    Dma.Transfer_32(Channel, Address(Src[1]), Address(Dst[1]), 16)
+    Dma.Wait(Channel)
+    Print("DMA transfer completed!\n")
+End Main</code></pre>
+
+<h2 id="watchdog">10 · Hardware Watchdog Timer</h2>
+<p>Automatically reset the microcontroller if software hangs or locks up in an unexpected state.</p>
+
+<h3>10.1 Enabling and Feeding the Watchdog</h3>
+<pre><code class="l">Module Main
+
+Block Main
+Implements
+    If Watchdog.Caused_Reboot()
+        Print("Reboot was triggered by Watchdog!\n")
+    End If
+
+    # Enable watchdog with 2000 ms timeout
+    Watchdog.Enable(2000, False)
+
+    Loop
+        # Do periodic work
+        Time.Sleep_MS(500)
+        # Feed watchdog to reset timer
+        Watchdog.Feed()
+    End Loop
+End Main</code></pre>
+
+<h2 id="rtc">11 · Real-Time Clock (RTC)</h2>
+<p>Maintain accurate calendar dates and times across seconds, minutes, hours, days, months, and years.</p>
+
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    T : Rtc.Datetime
+Implements
+    T.Year = 2026
+    T.Month = 11
+    T.Day = 26
+    T.Hour = 12
+    T.Min = 0
+    T.Sec = 0
+    Rtc.Set_Datetime(T)
+    T = Rtc.Get_Datetime()
+    Print("Current Year: <T.Year>\n")
+End Main</code></pre>
+
+<h2 id="multicore">12 · Dual-Core Multicore Launch</h2>
+<p>RP2040 features dual ARM Cortex-M0+ cores. Launch Core 1 with a single procedure reference and communicate via hardware SIO FIFOs.</p>
+
+<pre><code class="l">Module Main
+
+Block Core1_Worker Implements
+    Declares
+        Msg : Unsigned_32
+    Implements
+        Loop
+            Msg = Multicore.Fifo_Pop()
+            Print("Core 1 received msg: <Msg>\n")
+        End Loop
+End Core1_Worker
+
+Block Main Implements
+    Multicore.Launch_Core1(Core1_Worker)
+    Multicore.Fifo_Push(100)
+    Multicore.Fifo_Push(200)
+End Main</code></pre>
+
+<h2 id="sync">13 · Hardware Mutex & Spinlocks</h2>
+<p>Coordinate access between Core 0, Core 1, and hardware interrupts with 32 hardware spinlocks.</p>
+
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Lock : Sync.Mutex
+Implements
+    Lock.Init()
+    Lock.Acquire()
+    # Critical section safe across both cores
+    Lock.Unlock()
+End Main</code></pre>
+
+<h2 id="sio">14 · Single-Cycle I/O & 8-Cycle Hardware Division</h2>
+<p>RP2040 includes a dedicated hardware divider in the SIO block that computes 32-bit quotients and remainders in only 8 clock cycles.</p>
+
+<pre><code class="l">Module Main
+
+Block Main
+Declares
+    Quot : Unsigned_32
+    Rem : Unsigned_32
+Implements
+    Sio.Hw_Divide_Unsigned(100000, 37)
+    Quot = Sio.Hw_Divide_Quotient()
+    Rem = Sio.Hw_Divide_Remainder()
+    Print("100000 / 37 = <Quot> rem <Rem>\n")
+End Main</code></pre>
+
+<h2 id="pio">15 · Programmable I/O (PIO) DSL</h2>
+<p>Loom provides a native DSL for writing custom hardware protocols (I2S, WS2812B LEDs, VGA, UART) using the RP2040's 8 independent state machines.</p>
+
+<pre><code class="l">Pio_Program SquareWave
+    Wrap_Target
+        Set(Pins, 1) [1]
+        Set(Pins, 0) [1]
+    Wrap
+End Pio_Program
+
+Block Main
+Declares
+    Sm : Pio.State_Machine
+Implements
+    Pio.Sm_Init(Sm, SquareWave)
+    Pio.Sm_Set_Enabled(Sm, True)
+End Main</code></pre>
+
+<h2 id="system">16 · System Control & BOOTSEL Reset</h2>
+<p>Reboot the microcontroller programmatically into application code or into USB mass-storage bootloader mode for firmware updates:</p>
+
+<pre><code class="l">Module Main
+
+Block Main
+Implements
+    # Reboot into USB BOOTSEL mode
+    System.Reboot_Bootsel()
+End Main</code></pre>
+
+<h2 id="flashing">17 · Building & Flashing</h2>
+<pre><code class=""># Create new project
+loom new --rp2040 my_firmware
+cd my_firmware
+
+# Compile Thumbv6-M binary and generate UF2
+loom build
+
+# Flash directly to Pico and open serial monitor
+loom flash --monitor</code></pre>
+
+<div class="pn"><a href="learn.html"><small>Previous</small>Learn Loom</a><a href="reference.html" style="text-align:right"><small>Next</small>Language reference</a></div></article></main><script>
+const K=/\b(Module|Import|use|Block|Takes|Produces|Declares|Implements|End|Give|If|Else|Default|Loop|while|until|Exit|Skip|Match|When|Ensure|Record|Enum|Constant|Address|Deref|Cast|as|try|or|Print|Spawn|Join|Allocate|Resize|Release|Packed|Align|Volatile|And|Or|Not|Mod|LSL|LSR|True|False|Null|Pointer|Array|Slice|Vector|Text|HMap|Block_Pointer|Task_Handle|Move|Copy|Borrow|Async|Await|Future|Drop|Pio_Program|Set|Wrap_Target|Wrap|Pull|Push|Out|In|Mov|Jmp|Wait|Irq|Side)\b/g;
+const T=/\b(Signed_(?:8|16|32|64)|Unsigned_(?:8|16|32|64)|Float_(?:32|64)|Boolean|Character|String|No_Type|Pin|State_Machine|Pio_State_Machine)\b/g;
+document.querySelectorAll('code.l').forEach(el=>{let s=el.textContent,o=[],re=/(#.*)|("(?:[^"\\]|\\.)*")|(\b0x[0-9A-Fa-f_]+\b|\b\d[\d_]*(?:\.\d+)?\b)|([A-Za-z_][A-Za-z_0-9]*)|([\s\S])/g,m;
+const E=x=>x.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+while(m=re.exec(s)){let x=m[0],e=E(x);
+if(m[1])o.push('<span class="c">'+e+'</span>');
+else if(m[2])o.push('<span class="s">'+e+'</span>');
+else if(m[3])o.push('<span class="n">'+e+'</span>');
+else if(m[4]){if(x.match(K))o.push('<span class="k">'+e+'</span>');
+else if(x.match(T))o.push('<span class="t">'+e+'</span>');
+else o.push(e);}else o.push(e);}
+el.innerHTML=o.join('');
+let b=document.createElement('button');b.className='cp';b.textContent='Copy';
+b.onclick=()=>{navigator.clipboard.writeText(s);b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1200)};
+el.parentNode.appendChild(b);});
+let q=document.getElementById('q');
+if(q){q.oninput=()=>{let v=q.value.toLowerCase();document.querySelectorAll('.side a.sub').forEach(a=>{a.style.display=a.textContent.toLowerCase().includes(v)?'block':'none'})};}
+let mb=document.getElementById('mb');if(mb)mb.onclick=()=>document.body.classList.toggle('o');
+</script></body></html>

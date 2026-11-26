@@ -1,36 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Getting started · Loom</title><style>
-:root{--bg:#fff;--fg:#16181d;--mut:#6a6f7a;--line:#e7e9ee;--acc:#3451d1;--code:#f5f6f8;--k:#c2255c;--t:#0b7285;--s:#2b8a3e;--n:#d9480f;--c:#868e96}
-@media(prefers-color-scheme:dark){:root{--bg:#0e0f12;--fg:#e6e8ec;--mut:#8b919c;--line:#22252b;--acc:#8fa6ff;--code:#15171b;--k:#ff8fab;--t:#66d9e8;--s:#8ce99a;--n:#ffa94d;--c:#6b7280}}
-*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.7 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
-a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline;text-underline-offset:3px}
-.side{position:fixed;inset:0 auto 0 0;width:248px;padding:28px 22px;border-right:1px solid var(--line);overflow:auto;background:var(--bg)}
-.brand{font-weight:650;font-size:17px;letter-spacing:-.01em;color:var(--fg);display:block;margin-bottom:22px}.brand span{color:var(--mut);font-weight:400;font-size:12px;margin-left:6px}
-.side input{width:100%;font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);margin-bottom:18px}
-.side input:focus{outline:2px solid var(--acc);outline-offset:1px}
-.side h6{margin:20px 0 6px;font:600 11px/1 inherit;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
-.side a{display:block;padding:4px 0;font-size:14px;color:var(--mut)}.side a:hover{color:var(--fg);text-decoration:none}.side a.on{color:var(--fg);font-weight:600}.side a.sub{padding-left:12px;font-size:13px}
-main{margin-left:248px;padding:64px 32px 120px}article{max-width:700px;margin:0 auto}
-.top{display:none}
-h1{font-size:2.35rem;line-height:1.15;letter-spacing:-.03em;margin:0 0 14px;font-weight:650}
-h2{font-size:1.45rem;letter-spacing:-.02em;margin:3.2rem 0 .6rem;font-weight:650;padding-top:1.6rem;border-top:1px solid var(--line)}
-h3{font-size:1.05rem;margin:2rem 0 .3rem;font-weight:650}
-.lead{font-size:1.15rem;color:var(--mut);margin:0 0 2rem}
-p,li{color:var(--fg)}li{margin:.3rem 0}
-code{font:.86em ui-monospace,"SF Mono",Menlo,Consolas,monospace;background:var(--code);padding:.15em .4em;border-radius:5px}
-pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;margin:1.2rem 0;line-height:1.6}
-pre code{background:none;padding:0;font-size:13.5px;white-space:pre}
-.cp{position:absolute;top:8px;right:8px;font:12px inherit;color:var(--mut);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer;opacity:0;transition:.15s}pre:hover .cp,.cp:focus{opacity:1}
-.k{color:var(--k)}.t{color:var(--t)}.s{color:var(--s)}.n{color:var(--n)}.c{color:var(--c);font-style:italic}
-table{width:100%;border-collapse:collapse;margin:1.2rem 0;font-size:14.5px}th{text-align:left;font-weight:600;color:var(--mut);font-size:12px;letter-spacing:.05em;text-transform:uppercase}
-th,td{padding:9px 12px 9px 0;border-bottom:1px solid var(--line);vertical-align:top}
-.note{border-left:2px solid var(--acc);padding:2px 0 2px 16px;margin:1.4rem 0;color:var(--mut)}.note p{color:var(--mut);margin:.4rem 0}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:1.6rem 0}
-.cards a{border:1px solid var(--line);border-radius:12px;padding:16px;color:var(--fg);display:block}.cards a:hover{border-color:var(--acc);text-decoration:none}
-.cards b{display:block;margin-bottom:2px}.cards span{color:var(--mut);font-size:14px}
-.pn{display:flex;justify-content:space-between;gap:12px;margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-size:14px}.pn small{display:block;color:var(--mut)}
-@media(max-width:860px){.side{transform:translateX(-100%);transition:.2s;z-index:5;width:270px}body.o .side{transform:none;box-shadow:0 0 40px rgba(0,0,0,.25)}main{margin:0;padding:24px 20px 80px}.top{display:flex;align-items:center;justify-content:space-between;margin:-8px 0 24px;font-weight:650}.top button{font:inherit;background:none;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:4px 12px}h1{font-size:1.9rem}}
-</style></head><body><nav class="side"><a class="brand" href="index.html">Loom<span>v1.5.0</span></a><input id="q" placeholder="Filter pages…" aria-label="Filter"><h6>Docs</h6><a href="index.html" class="">Overview</a><a href="start.html" class="on">Getting started</a><a class="sub" href="#install">Install</a><a class="sub" href="#first">First project</a><a class="sub" href="#rp2040-project">RP2040 hardware project</a><a class="sub" href="#cli">Commands</a><a class="sub" href="#editor">Editor</a><a href="learn.html" class="">Learn Loom</a><a href="reference.html" class="">Language reference</a><a href="internals.html" class="">Compiler & targets</a></nav><main><div class="top"><span>Loom</span><button id="mb">Menu</button></div><article><h1>Getting started</h1><p class="lead">From install to a running program in a few minutes.</p><h2 id="install">Install</h2><p>Loom ships with pre-built macOS Apple Silicon installer packages (<code>.pkg</code>):</p>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Getting started · Loom</title><link rel="stylesheet" href="theme.css"></head><body><nav class="side"><a class="brand" href="index.html">Loom<span>v1.5.0</span></a><input id="q" placeholder="Filter pages…" aria-label="Filter"><h6>Docs</h6><a href="index.html">Overview</a><a href="start.html" class="on">Getting started</a><a class="sub" href="#install">Install</a><a class="sub" href="#first">First project</a><a class="sub" href="#rp2040-project">RP2040 hardware project</a><a class="sub" href="#cli">Commands</a><a class="sub" href="#editor">Editor</a><a href="learn.html">Learn Loom</a><a href="rp2040.html">RP2040 Tutorials</a><a href="reference.html">Language reference</a><a href="internals.html">Compiler & targets</a></nav><main><div class="top"><span>Loom</span><button id="mb">Menu</button></div><article><h1>Getting started</h1><p class="lead">From install to a running program in a few minutes.</p><h2 id="install">Install</h2><p>Loom ships with pre-built macOS Apple Silicon installer packages (<code>.pkg</code>):</p>
 <ul>
 <li><code>Loom-1.5.0-macos-arm64-native.pkg</code>: Loom Native Desktop Toolchain (CLI, compiler, standard library, runtime).</li>
 <li><code>Loom-1.5.0-macos-arm64-rp2040.pkg</code>: Loom RP2040 Embedded Bare-Metal Toolchain (ARM Cortex-M0+ compiler, SDK, UF2 generator).</li>
